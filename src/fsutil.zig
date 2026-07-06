@@ -348,6 +348,8 @@ test "rmdirIfEmpty: removes an empty dir, leaves a non-empty one, no-ops on a mi
 /// Recursively copies `from` (a file, directory, or symlink) to `to`. `to`
 /// must not already exist. Symlinks are recreated (not followed).
 pub fn copyTree(alloc: std.mem.Allocator, from: []const u8, to: []const u8) !void {
+    if (exists(to)) return error.PathAlreadyExists;
+
     const cwd = std.Io.Dir.cwd();
 
     switch (try linkState(alloc, from)) {
@@ -408,10 +410,70 @@ test "copyTree: copies a file and a nested directory tree" {
     const dst = try std.fs.path.join(arena, &.{ root, "dst" });
     try copyTree(arena, src, dst);
 
-    try testing.expect(exists(try std.fs.path.join(arena, &.{ dst, "a.txt" })));
-    try testing.expect(exists(try std.fs.path.join(arena, &.{ dst, "sub", "b.txt" })));
+    const got_a = try std.Io.Dir.cwd().readFileAlloc(io(), try std.fs.path.join(arena, &.{ dst, "a.txt" }), arena, .limited(1 << 20));
+    try testing.expectEqualStrings("a\n", got_a);
+    const got_b = try std.Io.Dir.cwd().readFileAlloc(io(), try std.fs.path.join(arena, &.{ dst, "sub", "b.txt" }), arena, .limited(1 << 20));
+    try testing.expectEqualStrings("b\n", got_b);
     // Original still there (copy, not move).
     try testing.expect(exists(try std.fs.path.join(arena, &.{ src, "a.txt" })));
+}
+
+test "copyTree: refuses a destination that already exists" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const src_file = try std.fs.path.join(arena, &.{ root, "src.txt" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = src_file, .data = "src\n" });
+
+    // Existing dest file: must not be silently overwritten.
+    const dst_file = try std.fs.path.join(arena, &.{ root, "dst-file.txt" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = dst_file, .data = "pre-existing\n" });
+    try testing.expectError(error.PathAlreadyExists, copyTree(arena, src_file, dst_file));
+    const dst_file_contents = try std.Io.Dir.cwd().readFileAlloc(io(), dst_file, arena, .limited(1 << 20));
+    try testing.expectEqualStrings("pre-existing\n", dst_file_contents);
+
+    // Existing dest dir: must not be silently merged into.
+    const src_dir = try std.fs.path.join(arena, &.{ root, "src-dir" });
+    try ensureDir(src_dir);
+    const dst_dir = try std.fs.path.join(arena, &.{ root, "dst-dir" });
+    try ensureDir(dst_dir);
+    try testing.expectError(error.PathAlreadyExists, copyTree(arena, src_dir, dst_dir));
+}
+
+test "copyTree: recreates a symlink rather than following it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const target_dir = try std.fs.path.join(arena, &.{ root, "target-dir" });
+    try ensureDir(target_dir);
+
+    const link_path = try std.fs.path.join(arena, &.{ root, "link" });
+    try std.Io.Dir.cwd().symLink(io(), "target-dir", link_path, .{});
+
+    const copy_path = try std.fs.path.join(arena, &.{ root, "link-copy" });
+    try copyTree(arena, link_path, copy_path);
+
+    const orig_state = try linkState(arena, link_path);
+    const copy_state = try linkState(arena, copy_path);
+    switch (copy_state) {
+        .symlink => |copy_target| switch (orig_state) {
+            .symlink => |orig_target| try testing.expectEqualStrings(orig_target, copy_target),
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "moveTree: same-filesystem move removes the source" {
