@@ -197,8 +197,13 @@ test "run: a hub conflict is reported and exits nonzero" {
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
 
-    // A real directory where the `docs` hub symlink must go: reconcile can
-    // neither create nor retarget it, so it is an unresolvable conflict.
+    // A real "docs" content entry makes `docs` a desired hub link. A real
+    // directory already sitting at that hub path blocks reconcile from
+    // creating or retargeting it, so it is an unresolvable conflict - unlike
+    // a loose file with no matching desired link, which the hub-root sweep
+    // now leaves alone for `holt status` to surface instead.
+    const content_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ content_path, "docs" }));
     const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "widget" });
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ hub_path, "docs" }));
 

@@ -140,13 +140,19 @@ fn isDesired(links: []const Link, rel: []const u8) bool {
 /// Removes stale entries under `dir_path` (whose desired rel-path carries
 /// `prefix`, e.g. "" for the hub root or "code/" for the code subdir). Only
 /// this one directory level is inspected - subdirectories of `code/` are
-/// never descended into. A symlink not in `links` is stale and removed; a
-/// real file or directory not in `links` is a conflict and is never touched.
+/// never descended into. Under `code/` a symlink not in `links` is stale and
+/// removed, and a real file or directory not in `links` is a conflict. At the
+/// hub root a non-desired symlink is only pruned when its target is holt-
+/// owned (under `content_root` or `code_root`) - a foreign symlink is left
+/// alone - and a non-desired real entry is a loose local file, left for
+/// `holt status` to surface rather than flagged as a conflict.
 fn sweepDir(
     alloc: std.mem.Allocator,
     dir_path: []const u8,
     prefix: []const u8,
     links: []const Link,
+    content_root: []const u8,
+    code_root: []const u8,
     dry_run: bool,
     report: *ReconcileReport,
     conflicts: *std.ArrayList([]u8),
@@ -170,10 +176,27 @@ fn sweepDir(
         const full_path = try std.fs.path.join(alloc, &.{ dir_path, entry.name });
         switch (entry.kind) {
             .sym_link => {
-                report.removed += 1;
-                if (!dry_run) try std.Io.Dir.cwd().deleteFile(fsutil.io(), full_path);
+                // At the hub root only prune links holt owns (targets under
+                // content or code_root); leave the user's own symlinks. Under
+                // code/ every non-desired symlink is ours to sweep.
+                var prune = true;
+                if (prefix.len == 0) {
+                    switch (try fsutil.linkState(alloc, full_path)) {
+                        .symlink => |target| prune = fsutil.pathIsInside(target, content_root) or fsutil.pathIsInside(target, code_root),
+                        else => prune = false,
+                    }
+                }
+                if (prune) {
+                    report.removed += 1;
+                    if (!dry_run) try std.Io.Dir.cwd().deleteFile(fsutil.io(), full_path);
+                }
             },
-            else => try conflicts.append(alloc, full_path),
+            else => {
+                // A real (non-symlink) entry. Under code/ it is a conflict; at
+                // the hub root it is a loose local file - leave it for `holt
+                // status` to surface, do not flag it.
+                if (prefix.len != 0) try conflicts.append(alloc, full_path);
+            },
         }
     }
 }
@@ -226,8 +249,8 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
         }
     }
 
-    try sweepDir(alloc, p.hub_path, "", links, dry_run, &report, &conflicts);
-    try sweepDir(alloc, code_dir_path, "code/", links, dry_run, &report, &conflicts);
+    try sweepDir(alloc, p.hub_path, "", links, p.content_path, ws.cfg.code_root, dry_run, &report, &conflicts);
+    try sweepDir(alloc, code_dir_path, "code/", links, p.content_path, ws.cfg.code_root, dry_run, &report, &conflicts);
 
     report.conflicts = try conflicts.toOwnedSlice(alloc);
     return report;
@@ -704,6 +727,50 @@ test "reconcile: collision case links both members owner-qualified, third stays 
     try testing.expect(try symlinkExists(arena, acme_docs));
     const bare_docs = try std.fs.path.join(arena, &.{ p.hub_path, "code", "docs" });
     try testing.expect(!try symlinkExists(arena, bare_docs));
+}
+
+test "sweepDir: hub root leaves loose files and foreign symlinks, prunes stale mirror links" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    const p = try testProject(arena, &ws, "acme", "proj", repos);
+
+    try fsutil.ensureDir(p.hub_path);
+
+    // A loose local real file at the hub root.
+    const loose = try std.fs.path.join(arena, &.{ p.hub_path, "notes.md" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = loose, .data = "x\n" });
+
+    // A stale mirror symlink (target under content) whose content entry is gone.
+    const stale = try std.fs.path.join(arena, &.{ p.hub_path, "gone" });
+    try fsutil.replaceSymlink(try std.fs.path.join(arena, &.{ p.content_path, "gone" }), stale);
+
+    // A foreign symlink (target outside content and code_root).
+    const foreign = try std.fs.path.join(arena, &.{ p.hub_path, "external" });
+    try fsutil.replaceSymlink("/tmp", foreign);
+
+    const report = try reconcile(arena, &ws, &p, false);
+
+    // Loose file survives, is not a conflict.
+    try testing.expect(fsutil.exists(loose));
+    for (report.conflicts) |c| try testing.expect(std.mem.indexOf(u8, c, "notes.md") == null);
+    // Foreign symlink survives.
+    switch (try fsutil.linkState(arena, foreign)) {
+        .symlink => {},
+        else => return error.TestUnexpectedResult,
+    }
+    // Stale mirror link is pruned.
+    switch (try fsutil.linkState(arena, stale)) {
+        .missing => {},
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "removeHub: removes links and then-empty dirs" {
