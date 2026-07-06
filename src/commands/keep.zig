@@ -115,6 +115,50 @@ test "run: moves a loose hub file into content and leaves a symlink" {
     }
 }
 
+test "run: keeping an already-kept entry is an idempotent no-op success" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    try fsutil.ensureDir(content);
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+
+    const loose = try std.fs.path.join(arena, &.{ hub, "notes.md" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = loose, .data = "hello\n" });
+
+    var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
+    defer testing.allocator.free(orig_cwd);
+
+    try std.process.setCurrentPath(fsutil.io(), hub);
+    defer std.process.setCurrentPath(fsutil.io(), orig_cwd) catch {};
+
+    const first = try testutil.runCmd(arena, command.run, ws, &.{"notes.md"});
+    try testing.expectEqual(@as(u8, 0), first.code);
+
+    // notes.md is now a symlink into content; keeping it again is a no-op,
+    // not a re-move or an error.
+    const again = try testutil.runCmd(arena, command.run, ws, &.{"notes.md"});
+    try testing.expectEqual(@as(u8, 0), again.code);
+    try testing.expect(std.mem.indexOf(u8, again.out, "already kept") != null);
+
+    switch (try fsutil.linkState(arena, loose)) {
+        .symlink => |t| try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ content, "notes.md" }), t),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "run: refuses when content already has that name" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
