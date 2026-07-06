@@ -216,7 +216,11 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
 
     if (!dry_run) {
         try fsutil.ensureDir(p.hub_path);
-        try fsutil.ensureDir(code_dir_path);
+        if (p.marker.repos.keys().len > 0) {
+            try fsutil.ensureDir(code_dir_path);
+        } else {
+            fsutil.rmdirIfEmpty(code_dir_path);
+        }
     }
 
     for (links, 0..) |link, i| {
@@ -524,6 +528,32 @@ test "desiredLinks: aliasing one of two colliding members frees the other to sta
     }
     try testing.expect(saw_alias);
     try testing.expect(saw_flat_docs);
+}
+
+test "reconcile: code dir exists only when the project has repos" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // Repo-less project: no code/ dir after reconcile.
+    const empty_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    const p0 = try testProject(arena, &ws, "acme", "docsonly", empty_repos);
+    _ = try reconcile(arena, &ws, &p0, false);
+    const code0 = try std.fs.path.join(arena, &.{ p0.hub_path, "code" });
+    try testing.expect(!fsutil.exists(code0));
+
+    // Project with a repo: code/ dir present.
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    const p1 = try testProject(arena, &ws, "acme", "withcode", repos);
+    _ = try reconcile(arena, &ws, &p1, false);
+    const code1 = try std.fs.path.join(arena, &.{ p1.hub_path, "code" });
+    try testing.expect(fsutil.exists(code1));
 }
 
 test "reconcile: fresh build creates all links with correct targets" {
