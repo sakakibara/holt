@@ -66,6 +66,35 @@ pub fn resolveOne(ctx: *cli.Ctx, query: []const u8) !?project_mod.Project {
     }
 }
 
+/// If the current working directory is inside a project's hub
+/// (<hub_root>/<org>/<name>/...), resolves and returns that project. Returns
+/// null when the cwd is not under any hub.
+pub fn projectFromCwd(ctx: *cli.Ctx) !?project_mod.Project {
+    const alloc = ctx.alloc;
+    const ws = ctx.ws.?;
+
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const cwd = buf[0..try std.process.currentPath(fsutil.io(), &buf)];
+    const cwd_real = try fsutil.realPathOrSelf(alloc, cwd);
+    const hub_real = try fsutil.realPathOrSelf(alloc, ws.cfg.hub_root);
+
+    if (!fsutil.pathIsInside(cwd_real, hub_real)) return null;
+    if (cwd_real.len == hub_real.len) return null;
+
+    const rel = cwd_real[hub_real.len + 1 ..];
+    var parts = std.mem.splitScalar(u8, rel, std.fs.path.sep);
+    const org = parts.next() orelse return null;
+    const name = parts.next() orelse return null;
+    if (org.len == 0 or name.len == 0) return null;
+
+    const query = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ org, name });
+    const found = try ws.find(alloc, query);
+    switch (found) {
+        .one => |p| return p,
+        .none, .ambiguous => return null,
+    }
+}
+
 pub const OrgName = struct { org: []const u8, name: []const u8 };
 
 /// Reserved as an ORG only: these are the structural siblings of - or the
@@ -478,6 +507,44 @@ test "cloneIfAbsent: a failed clone prunes the empty owner and host scaffold it 
     const host_dir = try std.fs.path.join(arena, &.{ root, "127.0.0.1" });
     try testing.expect(!fsutil.exists(owner_dir));
     try testing.expect(!fsutil.exists(host_dir));
+}
+
+test "projectFromCwd: resolves the project when cwd is inside its hub" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const hub_dir = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub_dir);
+
+    var args = try cli.Args.init(arena, &.{});
+    var out: std.Io.Writer.Allocating = .init(arena);
+    defer out.deinit();
+    var err_w: std.Io.Writer.Allocating = .init(arena);
+    defer err_w.deinit();
+    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &args, .out = &out.writer, .err_w = &err_w.writer };
+
+    var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
+    defer testing.allocator.free(orig_cwd);
+
+    // cwd is process-global and shared by every test in this binary, so a
+    // missing restore here would corrupt every test that runs afterward.
+    try std.process.setCurrentPath(fsutil.io(), hub_dir);
+    defer std.process.setCurrentPath(fsutil.io(), orig_cwd) catch {};
+
+    const p = (try projectFromCwd(&ctx)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("acme", p.org);
+    try testing.expectEqualStrings("proj", p.name);
 }
 
 test "cloneIfAbsent: a failed clone leaves a shared owner directory holding another clone in place" {
