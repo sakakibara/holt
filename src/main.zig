@@ -25,6 +25,7 @@ const backends_cmd = @import("commands/backends.zig");
 const backend_cmd = @import("commands/backend.zig");
 const recent_cmd = @import("commands/recent.zig");
 const adopt_cmd = @import("commands/adopt.zig");
+const keep_cmd = @import("commands/keep.zig");
 const edit_cmd = @import("commands/edit.zig");
 const config_cmd = @import("commands/config.zig");
 const run_cmd = @import("commands/run.zig");
@@ -42,6 +43,7 @@ pub const command_table = [_]cli.Command{
     rm_cmd.command,
     alias_cmd.command,
     adopt_cmd.command,
+    keep_cmd.command,
     info_cmd.command,
     status_cmd.command,
     backends_cmd.command,
@@ -117,6 +119,7 @@ test {
     _ = @import("commands/backend.zig");
     _ = @import("commands/recent.zig");
     _ = @import("commands/adopt.zig");
+    _ = @import("commands/keep.zig");
     _ = @import("commands/edit.zig");
     _ = @import("commands/config.zig");
     _ = @import("commands/run.zig");
