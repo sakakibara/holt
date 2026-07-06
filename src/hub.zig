@@ -216,11 +216,7 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
 
     if (!dry_run) {
         try fsutil.ensureDir(p.hub_path);
-        if (p.marker.repos.keys().len > 0) {
-            try fsutil.ensureDir(code_dir_path);
-        } else {
-            fsutil.rmdirIfEmpty(code_dir_path);
-        }
+        if (p.marker.repos.keys().len > 0) try fsutil.ensureDir(code_dir_path);
     }
 
     for (links, 0..) |link, i| {
@@ -255,6 +251,8 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
 
     try sweepDir(alloc, p.hub_path, "", links, p.content_path, ws.cfg.code_root, dry_run, &report, &conflicts);
     try sweepDir(alloc, code_dir_path, "code/", links, p.content_path, ws.cfg.code_root, dry_run, &report, &conflicts);
+
+    if (!dry_run and p.marker.repos.keys().len == 0) fsutil.rmdirIfEmpty(code_dir_path);
 
     report.conflicts = try conflicts.toOwnedSlice(alloc);
     return report;
@@ -554,6 +552,29 @@ test "reconcile: code dir exists only when the project has repos" {
     _ = try reconcile(arena, &ws, &p1, false);
     const code1 = try std.fs.path.join(arena, &.{ p1.hub_path, "code" });
     try testing.expect(fsutil.exists(code1));
+}
+
+test "reconcile: an emptied code dir is pruned when the last repo is removed" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    var p = try testProject(arena, &ws, "acme", "proj", repos);
+    _ = try reconcile(arena, &ws, &p, false);
+
+    const code_dir = try std.fs.path.join(arena, &.{ p.hub_path, "code" });
+    try testing.expect(fsutil.exists(code_dir));
+
+    p.marker.repos = .empty;
+    _ = try reconcile(arena, &ws, &p, false);
+
+    try testing.expect(!fsutil.exists(code_dir));
 }
 
 test "reconcile: fresh build creates all links with correct targets" {
