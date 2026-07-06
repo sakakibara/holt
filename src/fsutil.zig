@@ -345,6 +345,94 @@ test "rmdirIfEmpty: removes an empty dir, leaves a non-empty one, no-ops on a mi
     rmdirIfEmpty(missing_dir);
 }
 
+/// Recursively copies `from` (a file, directory, or symlink) to `to`. `to`
+/// must not already exist. Symlinks are recreated (not followed).
+pub fn copyTree(alloc: std.mem.Allocator, from: []const u8, to: []const u8) !void {
+    const cwd = std.Io.Dir.cwd();
+
+    switch (try linkState(alloc, from)) {
+        .symlink => |target| {
+            try cwd.symLink(io(), target, to, .{});
+            return;
+        },
+        else => {},
+    }
+
+    const stat = try cwd.statFile(io(), from, .{});
+    if (stat.kind == .directory) {
+        try ensureDir(to);
+        var dir = try std.Io.Dir.openDirAbsolute(io(), from, .{ .iterate = true });
+        defer dir.close(io());
+        var it = dir.iterate();
+        while (try it.next(io())) |entry| {
+            const child_from = try std.fs.path.join(alloc, &.{ from, entry.name });
+            const child_to = try std.fs.path.join(alloc, &.{ to, entry.name });
+            try copyTree(alloc, child_from, child_to);
+        }
+        return;
+    }
+
+    try cwd.copyFile(from, cwd, to, io(), .{});
+}
+
+/// Moves `from` to `to`, falling back to copy+delete when the two paths live
+/// on different filesystems (the hub is local disk, content is a cloud
+/// mount, so a plain rename(2) across them fails with `error.CrossDevice`).
+pub fn moveTree(alloc: std.mem.Allocator, from: []const u8, to: []const u8) !void {
+    if (std.fs.path.dirname(to)) |parent| try ensureDir(parent);
+    std.Io.Dir.renameAbsolute(from, to, io()) catch |err| switch (err) {
+        error.CrossDevice => {
+            try copyTree(alloc, from, to);
+            try std.Io.Dir.cwd().deleteTree(io(), from);
+        },
+        else => return err,
+    };
+}
+
+test "copyTree: copies a file and a nested directory tree" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    // Source: a dir with a file and a subdir with a file.
+    const src = try std.fs.path.join(arena, &.{ root, "src" });
+    try ensureDir(try std.fs.path.join(arena, &.{ src, "sub" }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "a.txt" }), .data = "a\n" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "sub", "b.txt" }), .data = "b\n" });
+
+    const dst = try std.fs.path.join(arena, &.{ root, "dst" });
+    try copyTree(arena, src, dst);
+
+    try testing.expect(exists(try std.fs.path.join(arena, &.{ dst, "a.txt" })));
+    try testing.expect(exists(try std.fs.path.join(arena, &.{ dst, "sub", "b.txt" })));
+    // Original still there (copy, not move).
+    try testing.expect(exists(try std.fs.path.join(arena, &.{ src, "a.txt" })));
+}
+
+test "moveTree: same-filesystem move removes the source" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const src = try std.fs.path.join(arena, &.{ root, "f.txt" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = src, .data = "hi\n" });
+    const dst = try std.fs.path.join(arena, &.{ root, "moved.txt" });
+
+    try moveTree(arena, src, dst);
+    try testing.expect(exists(dst));
+    try testing.expect(!exists(src));
+}
+
 test "replaceSymlink: overwrites an existing link pointing elsewhere" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
