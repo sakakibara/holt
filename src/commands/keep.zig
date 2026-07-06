@@ -7,6 +7,7 @@ const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const common = @import("common.zig");
 const fsutil = @import("../fsutil.zig");
+const marker = @import("../marker.zig");
 const projectlock = @import("../projectlock.zig");
 const testutil = @import("../testutil.zig");
 const testing = std.testing;
@@ -38,8 +39,15 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const abs = try fsutil.toAbsolute(alloc, a.path);
     const base = std.fs.path.basename(abs);
 
-    if (std.mem.eql(u8, base, "code") or std.mem.eql(u8, base, ".holt.json")) {
+    if (std.mem.eql(u8, base, "code") or std.mem.eql(u8, base, marker.marker_basename)) {
         try ctx.err_w.print("holt: {s} is reserved and cannot be kept\n", .{base});
+        return 1;
+    }
+
+    const parent_real = try fsutil.realPathOrSelf(alloc, std.fs.path.dirname(abs) orelse abs);
+    const hub_real = try fsutil.realPathOrSelf(alloc, p.hub_path);
+    if (!std.mem.eql(u8, parent_real, hub_real)) {
+        try ctx.err_w.print("holt: keep only accepts an entry at the project root ({s})\n", .{p.hub_path});
         return 1;
     }
 
@@ -216,4 +224,158 @@ test "run: errors clearly when not inside a hub" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{"whatever"});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "from inside a project hub") != null);
+}
+
+test "run: refuses a path that is not directly at the hub root" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    try fsutil.ensureDir(content);
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+
+    // A file that lives outside the hub entirely, elsewhere under the tmp root.
+    const outside_dir = try std.fs.path.join(arena, &.{ root, "elsewhere" });
+    try fsutil.ensureDir(outside_dir);
+    const outside = try std.fs.path.join(arena, &.{ outside_dir, "secret.txt" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = outside, .data = "do not move me\n" });
+
+    var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
+    defer testing.allocator.free(orig_cwd);
+
+    try std.process.setCurrentPath(fsutil.io(), hub);
+    defer std.process.setCurrentPath(fsutil.io(), orig_cwd) catch {};
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{outside});
+    try testing.expectEqual(@as(u8, 1), got.code);
+
+    // The outside file must still exist untouched at its original location,
+    // and must not have been moved into content.
+    try testing.expect(fsutil.exists(outside));
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ content, "secret.txt" })));
+}
+
+test "run: refuses to keep a reserved name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    try fsutil.ensureDir(content);
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+
+    var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
+    defer testing.allocator.free(orig_cwd);
+
+    try std.process.setCurrentPath(fsutil.io(), hub);
+    defer std.process.setCurrentPath(fsutil.io(), orig_cwd) catch {};
+
+    const got_code = try testutil.runCmd(arena, command.run, ws, &.{"code"});
+    try testing.expectEqual(@as(u8, 1), got_code.code);
+    try testing.expect(std.mem.indexOf(u8, got_code.err, "reserved") != null);
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ content, "code" })));
+
+    const got_marker = try testutil.runCmd(arena, command.run, ws, &.{marker.marker_basename});
+    try testing.expectEqual(@as(u8, 1), got_marker.code);
+    try testing.expect(std.mem.indexOf(u8, got_marker.err, "reserved") != null);
+}
+
+test "run: errors clearly when the given path does not exist" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    try fsutil.ensureDir(content);
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+
+    var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
+    defer testing.allocator.free(orig_cwd);
+
+    try std.process.setCurrentPath(fsutil.io(), hub);
+    defer std.process.setCurrentPath(fsutil.io(), orig_cwd) catch {};
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"does-not-exist.md"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "no such entry") != null);
+}
+
+test "run: keeps a loose directory, moving its contents and leaving a symlink" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    try fsutil.ensureDir(content);
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+
+    // A loose local directory (with a file inside) at the hub root.
+    const loose = try std.fs.path.join(arena, &.{ hub, "assets" });
+    try fsutil.ensureDir(loose);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ loose, "logo.png" }), .data = "binary\n" });
+
+    var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
+    defer testing.allocator.free(orig_cwd);
+
+    try std.process.setCurrentPath(fsutil.io(), hub);
+    defer std.process.setCurrentPath(fsutil.io(), orig_cwd) catch {};
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"assets"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    // The directory (and its contents) moved into content.
+    const dest = try std.fs.path.join(arena, &.{ content, "assets" });
+    try testing.expect(fsutil.exists(dest));
+    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ dest, "logo.png" })));
+
+    // Hub entry is now a symlink into content.
+    switch (try fsutil.linkState(arena, loose)) {
+        .symlink => |t| try testing.expectEqualStrings(dest, t),
+        else => return error.TestUnexpectedResult,
+    }
 }
