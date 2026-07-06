@@ -547,6 +547,38 @@ test "projectFromCwd: resolves the project when cwd is inside its hub" {
     try testing.expectEqualStrings("proj", p.name);
 }
 
+test "projectFromCwd: returns null when cwd is exactly hub_root, not just inside it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    try fsutil.ensureDir(ws.cfg.hub_root);
+
+    var args = try cli.Args.init(arena, &.{});
+    var out: std.Io.Writer.Allocating = .init(arena);
+    defer out.deinit();
+    var err_w: std.Io.Writer.Allocating = .init(arena);
+    defer err_w.deinit();
+    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &args, .out = &out.writer, .err_w = &err_w.writer };
+
+    var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
+    defer testing.allocator.free(orig_cwd);
+
+    // cwd is process-global and shared by every test in this binary, so a
+    // missing restore here would corrupt every test that runs afterward.
+    try std.process.setCurrentPath(fsutil.io(), ws.cfg.hub_root);
+    defer std.process.setCurrentPath(fsutil.io(), orig_cwd) catch {};
+
+    try testing.expect((try projectFromCwd(&ctx)) == null);
+}
+
 test "cloneIfAbsent: a failed clone leaves a shared owner directory holding another clone in place" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
