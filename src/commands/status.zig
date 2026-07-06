@@ -22,6 +22,35 @@ const color_red = "31";
 const color_green = "32";
 const color_yellow = "33";
 
+const ignore_exact = [_][]const u8{ ".claude", ".DS_Store", ".git" };
+
+fn isIgnored(name: []const u8) bool {
+    for (ignore_exact) |n| if (std.mem.eql(u8, name, n)) return true;
+    if (std.mem.endsWith(u8, name, ".swp")) return true; // vim swap
+    if (std.mem.endsWith(u8, name, "~")) return true; // editor backup
+    if (std.mem.startsWith(u8, name, ".#")) return true; // emacs lock
+    return false;
+}
+
+/// Real (non-symlink) hub-root entries that are not `code` and not ignored -
+/// the loose local files that do not sync.
+fn localOnlyEntries(alloc: std.mem.Allocator, p: project_mod.Project) ![][]const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), p.hub_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return names.toOwnedSlice(alloc),
+        else => return err,
+    };
+    defer dir.close(fsutil.io());
+    var it = dir.iterate();
+    while (try it.next(fsutil.io())) |entry| {
+        if (entry.kind == .sym_link) continue; // a managed mirror/code link
+        if (std.mem.eql(u8, entry.name, "code")) continue;
+        if (isIgnored(entry.name)) continue;
+        try names.append(alloc, try alloc.dupe(u8, entry.name));
+    }
+    return names.toOwnedSlice(alloc);
+}
+
 const Spec = struct {
     // org/jobs are options and must be parsed before the positional below: a
     // bare positional scan would otherwise mistake either's value token for
@@ -128,7 +157,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     if (project_query) |q| {
         const p = (try common.resolveOne(ctx, q)) orelse return 1;
-        if (p.marker.repos.keys().len == 0) {
+        if (p.marker.repos.keys().len == 0 and (try localOnlyEntries(alloc, p)).len == 0) {
             const qualified = try p.qualified(alloc);
             try ctx.err_w.print("{s} has no member repos\n", .{qualified});
             return 0;
@@ -292,12 +321,45 @@ fn report(ctx: *cli.Ctx, ws: *const workspace.Workspace, targets: []const projec
         }
         start = end;
 
-        if (lines.items.len == 0) continue;
+        const locals = try localOnlyEntries(alloc, p);
+        if (lines.items.len == 0 and locals.len == 0) continue;
         const qualified = try p.qualified(alloc);
         try ctx.out.print("{s}\n", .{qualified});
         for (lines.items) |line| try ctx.out.writeAll(line);
+        if (locals.len > 0) {
+            try ctx.out.writeAll("  local-only (not synced):\n");
+            for (locals) |name| try ctx.out.print("    {s} (run: holt keep {s})\n", .{ name, name });
+        }
     }
     return 0;
+}
+
+test "run: lists loose local files and skips the ignore-list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ hub, ".claude" })); // ignored
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, ".DS_Store" }), .data = "x\n" }); // ignored
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "local-only") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "notes.md") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, ".claude") == null);
+    try testing.expect(std.mem.indexOf(u8, got.out, ".DS_Store") == null);
 }
 
 test "run: flags a dirty repo and an unpushed repo, a missing clone is shown, not a crash" {
