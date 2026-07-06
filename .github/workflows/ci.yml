@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel any in-flight runs for the same ref when a new commit lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  # Native build + full test suite on every platform holt ships for.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest          # x86_64-linux
+          - ubuntu-24.04-arm       # aarch64-linux
+          - macos-latest           # aarch64-macos
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install zig
+        shell: bash
+        run: |
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64)    triple=x86_64-linux ;;
+            Linux-ARM64)  triple=aarch64-linux ;;
+            macOS-ARM64)  triple=aarch64-macos ;;
+            *) echo "unsupported runner: ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
+          esac
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-${triple}-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/zig"
+          curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
+          echo "$HOME/zig/zig-${triple}-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v5
+        with:
+          path: .zig-cache
+          key: zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-
+
+      - name: zig build test
+        run: zig build test --summary all
+
+      - name: zig build (release)
+        run: zig build -Doptimize=ReleaseSafe --summary all
+
+  # Cross-compile every release target from one runner, so a break in any
+  # shipped binary is caught before a tag is ever cut.
+  cross-compile:
+    name: cross (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-macos
+          - x86_64-macos
+          - aarch64-linux
+          - x86_64-linux
+    steps:
+      - uses: actions/checkout@v6
+      - name: install zig
+        shell: bash
+        run: |
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/zig"
+          curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
+          echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - uses: actions/cache@v5
+        with:
+          path: .zig-cache
+          key: zig-cache-cross-${{ matrix.target }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            zig-cache-cross-${{ matrix.target }}-${{ env.ZIG_VERSION }}-
+      - name: build for ${{ matrix.target }}
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe

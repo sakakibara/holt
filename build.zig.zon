@@ -1,0 +1,23 @@
+.{
+    .name = .holt,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0x27d1d63bb90f450,
+    .dependencies = .{
+        .json = .{
+            .url = "https://github.com/sakakibara/json-zig/archive/refs/tags/v0.2.0.tar.gz",
+            .hash = "json-0.2.0-YtF7Jd3FBgB8HsKlP1vHrSaBwxAV5ExU0Rzl59iC3-Vy",
+        },
+        .toml = .{
+            .url = "https://github.com/sakakibara/toml-zig/archive/refs/tags/v0.4.0.tar.gz",
+            .hash = "toml-0.4.0-L7MJe5qrCgCF-2BmK9hpRu9Kb1qPPHllZo7xY67iJVQg",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+    },
+}

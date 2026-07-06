@@ -1,0 +1,35 @@
+const std = @import("std");
+const package_info = @import("build.zig.zon");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const json_dep = b.dependency("json", .{ .target = target, .optimize = optimize });
+    const toml_dep = b.dependency("toml", .{ .target = target, .optimize = optimize });
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", package_info.version);
+
+    const root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "json", .module = json_dep.module("json") },
+            .{ .name = "toml", .module = toml_dep.module("toml") },
+        },
+    });
+    root_module.addOptions("build_options", options);
+
+    const exe = b.addExecutable(.{
+        .name = "holt",
+        .root_module = root_module,
+    });
+    b.installArtifact(exe);
+
+    const tests = b.addTest(.{ .root_module = root_module });
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_tests.step);
+}
