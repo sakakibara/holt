@@ -253,6 +253,9 @@ test "run: rename moves every project in the org, rebuilds hubs, and leaves an u
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .{ .version = 1, .org = "acme", .name = "a", .repos = .empty });
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .{ .version = 1, .org = "acme", .name = "b", .repos = .empty });
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "work", "c", .{ .version = 1, .org = "work", .name = "c", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a", "docs" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b", "docs" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "work", "c", "docs" }));
 
     for (&[_][]const u8{ "acme/a", "acme/b", "work/c" }) |query| {
         const p = switch (try ws.find(arena, query)) {
@@ -309,6 +312,7 @@ test "run: rename moves an org's active and archived projects, clearing the old 
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "live", .{ .version = 1, .org = "acme", .name = "live", .repos = .empty });
     try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "live", "docs" }));
 
     const p = switch (try ws.find(arena, "acme/live")) {
         .one => |proj| proj,

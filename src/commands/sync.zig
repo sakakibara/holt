@@ -154,6 +154,11 @@ fn threeProjectSandbox(arena: std.mem.Allocator, root: []const u8) !workspace.Wo
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .{ .version = 1, .org = "zebra", .name = "aardvark", .repos = .empty });
 
+    // A real `holt new` project always has these seeded on disk; the fixture
+    // mirrors that so a project with no repos still yields desired links.
+    const proot = try ws.projectsRoot(arena);
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ proot, "zebra", "aardvark", "docs" }));
+
     return ws;
 }
 

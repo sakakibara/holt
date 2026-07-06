@@ -286,6 +286,7 @@ test "run: --all reports and continues past an unreachable repo, still cloning a
     var repos_bad: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_bad.put(arena, "repobad", url_bad);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "bad", .{ .version = 1, .org = "acme", .name = "bad", .repos = repos_bad });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "bad", "docs" }));
 
     var repos_good: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_good.put(arena, "repogood", url_good);
@@ -336,6 +337,7 @@ test "run: --all warns when a local repo's clone is missing and cannot be re-clo
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "proj", "docs" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -362,6 +364,7 @@ test "run: --all on an already-complete project just rebuilds the hub" {
     const ws = try testutil.testWorkspace(arena, root);
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "empty", "docs" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -471,6 +474,7 @@ test "run: <project> unarchives, moving the marker back and rebuilding its hub" 
     const ws = try testutil.testWorkspace(arena, root);
 
     try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget", "docs" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 0), got.code);

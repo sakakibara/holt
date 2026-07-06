@@ -1,7 +1,7 @@
 //! Derives a project's desired hub symlinks from its marker and reconciles
 //! the on-disk hub (`<hub_root>/<org>/<name>/`) to match. The hub is the
-//! unified browse view: `docs`/`assets`/`links` point into the synced
-//! content dir, and `code/<name>` points into the real clone under
+//! unified browse view: every top-level entry in the synced content dir gets
+//! a mirrored link, and `code/<name>` points into the real clone under
 //! `code_root`.
 
 const std = @import("std");
@@ -9,6 +9,7 @@ const workspace = @import("workspace.zig");
 const project_mod = @import("project.zig");
 const identity = @import("identity.zig");
 const fsutil = @import("fsutil.zig");
+const marker = @import("marker.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
 
@@ -34,8 +35,9 @@ fn flattenOwner(alloc: std.mem.Allocator, owner: []const u8) ![]u8 {
     return out;
 }
 
-/// The `docs`/`assets`/`links` content links plus one `code/<name>` link per
-/// marker repo. A member carrying a marker `aliases` entry links as
+/// One content link per top-level entry in the project's content dir (except
+/// the marker file and the reserved "code" name), plus one `code/<name>` link
+/// per marker repo. A member carrying a marker `aliases` entry links as
 /// `code/<alias>`, overriding both the flat name and collision
 /// owner-qualification. For the rest, a repo's short name (`identity.repo`)
 /// shared by more than one non-aliased member forces every member of that
@@ -45,12 +47,24 @@ fn flattenOwner(alloc: std.mem.Allocator, owner: []const u8) ![]u8 {
 pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Project) ![]Link {
     var links: std.ArrayList(Link) = .empty;
 
-    const content_names = [_][]const u8{ "docs", "assets", "links" };
-    for (content_names) |name| {
-        try links.append(alloc, .{
-            .rel = try alloc.dupe(u8, name),
-            .target = try std.fs.path.join(alloc, &.{ p.content_path, name }),
-        });
+    // Mirror every top-level content entry into the hub, except holt's own
+    // marker and the reserved "code" name. A missing content dir (fresh
+    // project not yet applied) yields no content links, which is correct.
+    var content_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), p.content_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => null,
+        else => return err,
+    };
+    if (content_dir) |*dir| {
+        defer dir.close(fsutil.io());
+        var it = dir.iterate();
+        while (try it.next(fsutil.io())) |entry| {
+            if (std.mem.eql(u8, entry.name, marker.marker_basename)) continue;
+            if (std.mem.eql(u8, entry.name, "code")) continue;
+            try links.append(alloc, .{
+                .rel = try alloc.dupe(u8, entry.name),
+                .target = try std.fs.path.join(alloc, &.{ p.content_path, entry.name }),
+            });
+        }
     }
 
     const repo_names = p.marker.repos.keys();
@@ -290,6 +304,18 @@ fn symlinkExists(alloc: std.mem.Allocator, path: []const u8) !bool {
     };
 }
 
+fn hasRel(links: []const Link, rel: []const u8) bool {
+    for (links) |l| if (std.mem.eql(u8, l.rel, rel)) return true;
+    return false;
+}
+
+/// Directory iteration order is filesystem-defined, so tests locate a content
+/// link by its rel-path rather than assuming a fixed index.
+fn findRel(links: []const Link, rel: []const u8) ?Link {
+    for (links) |l| if (std.mem.eql(u8, l.rel, rel)) return l;
+    return null;
+}
+
 test "desiredLinks: content links plus one flat code link per repo, absolute targets" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -304,19 +330,61 @@ test "desiredLinks: content links plus one flat code link per repo, absolute tar
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "acme", "proj", repos);
 
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
+
     const links = try desiredLinks(arena, &ws, &p);
     try testing.expectEqual(@as(usize, 4), links.len);
 
-    try testing.expectEqualStrings("docs", links[0].rel);
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ p.content_path, "docs" }), links[0].target);
-    try testing.expectEqualStrings("assets", links[1].rel);
-    try testing.expectEqualStrings("links", links[2].rel);
+    const docs = findRel(links, "docs") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ p.content_path, "docs" }), docs.target);
+    try testing.expect(hasRel(links, "assets"));
+    try testing.expect(hasRel(links, "links"));
 
-    try testing.expectEqualStrings("code/holt", links[3].rel);
+    const code_holt = findRel(links, "code/holt") orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings(
         try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" }),
-        links[3].target,
+        code_holt.target,
     );
+}
+
+test "desiredLinks: mirrors every content entry except the marker and code" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    const p = try testProject(arena, &ws, "acme", "proj", repos);
+
+    // Create real content entries on disk, plus the marker and a stray "code".
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "notes" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
+        .sub_path = try std.fs.path.join(arena, &.{ p.content_path, "plan.md" }),
+        .data = "x\n",
+    });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
+        .sub_path = try std.fs.path.join(arena, &.{ p.content_path, marker.marker_basename }),
+        .data = "{}\n",
+    });
+
+    const links = try desiredLinks(arena, &ws, &p);
+
+    // docs, assets, notes, plan.md are mirrored; .holt.json is not; code/holt is the repo link.
+    try testing.expect(hasRel(links, "docs"));
+    try testing.expect(hasRel(links, "assets"));
+    try testing.expect(hasRel(links, "notes"));
+    try testing.expect(hasRel(links, "plan.md"));
+    try testing.expect(!hasRel(links, ".holt.json"));
+    try testing.expect(!hasRel(links, "code"));
+    try testing.expect(hasRel(links, "code/holt"));
 }
 
 test "desiredLinks: colliding short names go owner-qualified, others stay flat" {
@@ -447,6 +515,10 @@ test "reconcile: fresh build creates all links with correct targets" {
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "acme", "proj", repos);
+
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
 
     const report = try reconcile(arena, &ws, &p, false);
     try testing.expectEqual(@as(u32, 4), report.created);
@@ -587,6 +659,10 @@ test "reconcile: dry_run computes the report without touching disk" {
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "acme", "proj", repos);
 
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
+
     const report = try reconcile(arena, &ws, &p, true);
     try testing.expectEqual(@as(u32, 4), report.created);
     try testing.expectEqual(@as(u32, 0), report.retargeted);
@@ -611,6 +687,10 @@ test "reconcile: collision case links both members owner-qualified, third stays 
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "org", "proj", repos);
+
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
 
     const report = try reconcile(arena, &ws, &p, false);
     try testing.expectEqual(@as(u32, 6), report.created);

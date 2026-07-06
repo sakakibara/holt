@@ -82,6 +82,7 @@ test "run: moves content, rewrites the marker, and rebuilds the hub at the new n
     const ws = try testutil.testWorkspace(arena, root);
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", "docs" }));
     const old_p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,

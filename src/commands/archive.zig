@@ -174,6 +174,7 @@ test "run: archive moves content into archive/, drops the hub, and restore round
     const ws = try testutil.testWorkspace(arena, root);
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", "docs" }));
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
