@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 /// The process has no `Io` threaded down to it from `main`, so filesystem
@@ -98,6 +99,11 @@ pub const LinkState = union(enum) {
     other,
 };
 
+/// Outcome of `replaceLink`. `.skipped_unprivileged` only ever occurs on
+/// Windows, when creating a file symlink requires a privilege the process
+/// doesn't hold.
+pub const LinkResult = enum { created, skipped_unprivileged };
+
 /// Inspects `path` without following a final symlink. Returns the raw
 /// (unresolved) link target when `path` is a symlink. Caller owns the
 /// returned target string.
@@ -121,6 +127,182 @@ pub fn replaceSymlink(target: []const u8, link_path: []const u8) !void {
         else => return err,
     };
     try cwd.symLink(io(), target, link_path, .{});
+}
+
+/// Points `link_path` at `target`, replacing any existing link (or file) at
+/// that path first. `is_dir` selects the platform-appropriate primitive: a
+/// symlink on POSIX (both kinds), and on Windows a directory junction (no
+/// privilege) for a directory target or a file symlink for a file target.
+/// A Windows file symlink that fails for lack of the symlink privilege
+/// returns `.skipped_unprivileged` rather than erroring. Not atomic: a crash
+/// between the remove and the create can leave `link_path` absent.
+pub fn replaceLink(target: []const u8, link_path: []const u8, is_dir: bool) !LinkResult {
+    const cwd = std.Io.Dir.cwd();
+    // A Windows directory junction (or a kind-flip from a prior file link)
+    // is a directory reparse point: deleteFile opens it NON_DIRECTORY_FILE
+    // and NT returns error.IsDir, so fall back to deleteDir, which opens
+    // DIRECTORY_FILE + OPEN_REPARSE_POINT and removes the reparse point
+    // itself, not the target's contents. On POSIX, deleteFile on a symlink
+    // never yields IsDir, so this arm is dead there.
+    cwd.deleteFile(io(), link_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        error.IsDir => cwd.deleteDir(io(), link_path) catch |e2| switch (e2) {
+            error.FileNotFound => {},
+            else => return e2,
+        },
+        else => return err,
+    };
+    if (builtin.os.tag != .windows) {
+        try cwd.symLink(io(), target, link_path, .{});
+        return .created;
+    } else {
+        if (is_dir) {
+            try createJunction(target, link_path);
+            return .created;
+        }
+        cwd.symLink(io(), target, link_path, .{ .is_directory = false }) catch |err| switch (err) {
+            error.PermissionDenied, error.AccessDenied => return .skipped_unprivileged,
+            else => return err,
+        };
+        return .created;
+    }
+}
+
+/// Creates a directory junction (NTFS mount-point reparse point) at
+/// `sym_link_path`, pointing at `target`. Requires no privilege, unlike a
+/// Windows directory symlink. `target` must be an absolute path (junctions,
+/// unlike symlinks, do not support relative targets); it is converted to its
+/// NT `\??\`-prefixed form.
+///
+/// A direct port of Zig 0.16's `dirSymLinkWindows`
+/// (`lib/std/Io/Threaded.zig`), specialized for the directory-junction case:
+/// a MOUNT_POINT reparse tag instead of SYMLINK, no `Flags` field in the
+/// reparse buffer, and an always-absolute substitute name. `OpenFile` and
+/// `deviceIoControl` are private to `Threaded`, so the open and
+/// `NtFsControlFile` calls are inlined here directly against
+/// `std.os.windows` rather than routed through the `Io` vtable.
+fn createJunction(target: []const u8, sym_link_path: []const u8) !void {
+    const w = std.os.windows;
+    const cwd = std.Io.Dir.cwd();
+
+    const sym_link_path_w = try std.Io.Threaded.sliceToPrefixedFileW(cwd.handle, sym_link_path, .{});
+
+    var result: w.HANDLE = undefined;
+    const attr: w.OBJECT.ATTRIBUTES = .{
+        .RootDirectory = if (std.fs.path.isAbsoluteWindowsWtf16(sym_link_path_w.span())) null else cwd.handle,
+        .ObjectName = @constCast(&w.UNICODE_STRING.init(sym_link_path_w.span())),
+    };
+    var open_iosb: w.IO_STATUS_BLOCK = undefined;
+    switch (w.ntdll.NtCreateFile(
+        &result,
+        .{ .GENERIC = .{ .READ = true, .WRITE = true }, .STANDARD = .{ .SYNCHRONIZE = true } },
+        &attr,
+        &open_iosb,
+        null,
+        .{ .NORMAL = true },
+        .VALID_FLAGS,
+        .CREATE,
+        .{ .DIRECTORY_FILE = true, .IO = .SYNCHRONOUS_NONALERT },
+        null,
+        0,
+    )) {
+        .SUCCESS => {},
+        .OBJECT_NAME_COLLISION => return error.PathAlreadyExists,
+        .ACCESS_DENIED => return error.AccessDenied,
+        .OBJECT_NAME_NOT_FOUND, .OBJECT_PATH_NOT_FOUND => return error.FileNotFound,
+        .FILE_IS_A_DIRECTORY => return error.IsDir,
+        .NOT_A_DIRECTORY => return error.NotDir,
+        else => |status| return w.unexpectedStatus(status),
+    }
+    const junction_handle = result;
+    defer w.CloseHandle(junction_handle);
+
+    // The print name is the target as given (backslash-canonicalized, no NT
+    // prefix) - the human-readable form Explorer shows as "Target:". The
+    // substitute name is what the filesystem actually resolves and must be
+    // the absolute NT-prefixed form.
+    var target_path_w: std.Io.Threaded.WindowsPathSpace = undefined;
+    target_path_w.len = try w.wtf8ToWtf16Le(&target_path_w.data, target);
+    target_path_w.data[target_path_w.len] = 0;
+    std.mem.replaceScalar(
+        u16,
+        target_path_w.data[0..target_path_w.len],
+        std.mem.nativeToLittle(u16, '/'),
+        std.mem.nativeToLittle(u16, '\\'),
+    );
+
+    const nt_prefix = [_]u16{ '\\', '?', '?', '\\' };
+    var substitute: std.Io.Threaded.WindowsPathSpace = undefined;
+    if (w.hasCommonNtPrefix(u16, target_path_w.data[0..target_path_w.len])) {
+        @memcpy(substitute.data[0..target_path_w.len], target_path_w.data[0..target_path_w.len]);
+        substitute.len = target_path_w.len;
+    } else {
+        substitute.data[0..nt_prefix.len].* = nt_prefix;
+        @memcpy(substitute.data[nt_prefix.len..][0..target_path_w.len], target_path_w.data[0..target_path_w.len]);
+        substitute.len = nt_prefix.len + target_path_w.len;
+    }
+    substitute.data[substitute.len] = 0;
+
+    const MOUNT_POINT_DATA = extern struct {
+        ReparseTag: w.IO_REPARSE_TAG,
+        ReparseDataLength: w.USHORT,
+        Reserved: w.USHORT,
+        SubstituteNameOffset: w.USHORT,
+        SubstituteNameLength: w.USHORT,
+        PrintNameOffset: w.USHORT,
+        PrintNameLength: w.USHORT,
+        // PathBuffer: [SubstituteName\0][PrintName\0] (WTF-16LE), appended
+        // after this header when building the wire buffer below.
+    };
+
+    const substitute_bytes: w.USHORT = @intCast(substitute.len * 2);
+    const print_bytes: w.USHORT = @intCast(target_path_w.len * 2);
+    const header_len = @sizeOf(w.ULONG) + @sizeOf(w.USHORT) * 2;
+    const buf_len = @sizeOf(MOUNT_POINT_DATA) + substitute_bytes + 2 + print_bytes + 2;
+
+    const mount_point_data: MOUNT_POINT_DATA = .{
+        .ReparseTag = .MOUNT_POINT,
+        .ReparseDataLength = @intCast(buf_len - header_len),
+        .Reserved = 0,
+        .SubstituteNameOffset = 0,
+        .SubstituteNameLength = substitute_bytes,
+        .PrintNameOffset = substitute_bytes + 2,
+        .PrintNameLength = print_bytes,
+    };
+
+    var buffer: [w.MAXIMUM_REPARSE_DATA_BUFFER_SIZE]u8 = undefined;
+    @memcpy(buffer[0..@sizeOf(MOUNT_POINT_DATA)], std.mem.asBytes(&mount_point_data));
+    var offset: usize = @sizeOf(MOUNT_POINT_DATA);
+    @memcpy(buffer[offset..][0..substitute_bytes], std.mem.sliceAsBytes(substitute.data[0..substitute.len]));
+    offset += substitute_bytes;
+    buffer[offset] = 0;
+    buffer[offset + 1] = 0;
+    offset += 2;
+    @memcpy(buffer[offset..][0..print_bytes], std.mem.sliceAsBytes(target_path_w.data[0..target_path_w.len]));
+    offset += print_bytes;
+    buffer[offset] = 0;
+    buffer[offset + 1] = 0;
+
+    var ctl_iosb: w.IO_STATUS_BLOCK = undefined;
+    switch (w.ntdll.NtFsControlFile(
+        junction_handle,
+        null,
+        null,
+        null,
+        &ctl_iosb,
+        .SET_REPARSE_POINT,
+        buffer[0..buf_len].ptr,
+        @intCast(buf_len),
+        null,
+        0,
+    )) {
+        .SUCCESS => {},
+        .INSUFFICIENT_RESOURCES => return error.SystemResources,
+        .PRIVILEGE_NOT_HELD => return error.PermissionDenied,
+        .ACCESS_DENIED => return error.AccessDenied,
+        .INVALID_DEVICE_REQUEST => return error.FileSystem,
+        else => |status| return w.unexpectedStatus(status),
+    }
 }
 
 /// Removes `path` if it is now an empty directory - best-effort cleanup that
@@ -507,6 +689,60 @@ test "replaceSymlink: overwrites an existing link pointing elsewhere" {
 
     try replaceSymlink("wrong-target", link_path);
     try replaceSymlink("right-target", link_path);
+
+    const state = try linkState(testing.allocator, link_path);
+    switch (state) {
+        .symlink => |t| {
+            defer testing.allocator.free(t);
+            try testing.expectEqualStrings("right-target", t);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "replaceLink: creates a working dir link and a working file link, returns .created" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    // A real directory target and a real file target.
+    const dir_target = try std.fs.path.join(arena, &.{ root, "d" });
+    try std.Io.Dir.cwd().createDirPath(io(), dir_target);
+    const file_target = try std.fs.path.join(arena, &.{ root, "f" });
+    try writeFileAtomic(arena, file_target, "x");
+
+    const dir_link = try std.fs.path.join(arena, &.{ root, "d-link" });
+    const file_link = try std.fs.path.join(arena, &.{ root, "f-link" });
+
+    try testing.expectEqual(LinkResult.created, try replaceLink(dir_target, dir_link, true));
+    try testing.expectEqual(LinkResult.created, try replaceLink(file_target, file_link, false));
+
+    // Both links resolve to their targets' contents.
+    try testing.expect(exists(dir_link));
+    try testing.expect(exists(file_link));
+}
+
+test "replaceLink: overwrites an existing dir link pointing elsewhere" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
+
+    const link_path = try std.fs.path.join(testing.allocator, &.{ root, "link" });
+    defer testing.allocator.free(link_path);
+
+    // On POSIX both calls take the symlink branch, so the second call
+    // exercises the delete-then-recreate replace contract. The Windows
+    // junction-overwrite path (deleteDir fallback on a mount-point reparse
+    // point) is exercised only by the Windows CI suite.
+    try testing.expectEqual(LinkResult.created, try replaceLink("wrong-target", link_path, true));
+    try testing.expectEqual(LinkResult.created, try replaceLink("right-target", link_path, true));
 
     const state = try linkState(testing.allocator, link_path);
     switch (state) {
