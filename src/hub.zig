@@ -16,7 +16,9 @@ const testing = std.testing;
 const Workspace = workspace.Workspace;
 const Project = project_mod.Project;
 
-pub const Link = struct { rel: []u8, target: []u8 };
+pub const LinkKind = enum { dir, file };
+
+pub const Link = struct { rel: []u8, target: []u8, kind: LinkKind };
 
 pub const ReconcileReport = struct {
     created: u32 = 0,
@@ -63,6 +65,7 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
             try links.append(alloc, .{
                 .rel = try alloc.dupe(u8, entry.name),
                 .target = try std.fs.path.join(alloc, &.{ p.content_path, entry.name }),
+                .kind = try contentEntryKind(alloc, p.content_path, entry),
             });
         }
     }
@@ -93,6 +96,7 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
         try links.append(alloc, .{
             .rel = try std.fmt.allocPrint(alloc, "code/{s}", .{code_name}),
             .target = clone_path,
+            .kind = .dir,
         });
 
         // A repo's git worktrees live in a sibling `<clone>@worktrees` dir, and
@@ -105,11 +109,29 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
             try links.append(alloc, .{
                 .rel = try std.fmt.allocPrint(alloc, "code/{s}@worktrees", .{code_name}),
                 .target = worktrees_dir,
+                .kind = .dir,
             });
         }
     }
 
     return links.toOwnedSlice(alloc);
+}
+
+/// Classifies a content entry as a directory or a file link target. Uses the
+/// dirent kind when known; falls back to a no-follow stat for `.unknown`
+/// (filesystems that never populate dirent type), treating anything that is
+/// not a directory - including a symlink - as a file, so the same symlink is
+/// classified identically no matter how a filesystem reports its dirent kind.
+fn contentEntryKind(alloc: std.mem.Allocator, content_path: []const u8, entry: std.Io.Dir.Entry) !LinkKind {
+    switch (entry.kind) {
+        .directory => return .dir,
+        .unknown => {
+            const full = try std.fs.path.join(alloc, &.{ content_path, entry.name });
+            const st = std.Io.Dir.cwd().statFile(fsutil.io(), full, .{ .follow_symlinks = false }) catch return .file;
+            return if (st.kind == .directory) .dir else .file;
+        },
+        else => return .file,
+    }
 }
 
 /// True iff `dir_path` holds at least one linked worktree (a subdir with a
@@ -410,6 +432,36 @@ test "desiredLinks: mirrors every content entry except the marker and code" {
     try testing.expect(!hasRel(links, ".holt.json"));
     try testing.expect(!hasRel(links, "code"));
     try testing.expect(hasRel(links, "code/holt"));
+}
+
+test "desiredLinks: tags a content directory .dir and a content file .file" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    const p = try testProject(arena, &ws, "acme", "widget", repos);
+
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
+        .sub_path = try std.fs.path.join(arena, &.{ p.content_path, "notes.md" }),
+        .data = "hi",
+    });
+
+    const links = try desiredLinks(arena, &ws, &p);
+
+    const docs = findRel(links, "docs") orelse return error.TestUnexpectedResult;
+    const notes = findRel(links, "notes.md") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(LinkKind.dir, docs.kind);
+    try testing.expectEqual(LinkKind.file, notes.kind);
+
+    const code_holt = findRel(links, "code/holt") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(LinkKind.dir, code_holt.kind);
 }
 
 test "desiredLinks: colliding short names go owner-qualified, others stay flat" {
