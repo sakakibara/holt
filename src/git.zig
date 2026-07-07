@@ -31,11 +31,23 @@ pub fn runEnv(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const 
     };
 }
 
+/// Runs `argv` with inherited stdio so a long-running git child streams its
+/// own progress to the terminal and can prompt for credentials, returning the
+/// mapped exit status. Nothing is captured, so a caller wanting git's stderr
+/// text uses `run` instead.
+pub fn spawnStreamed(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8) !u8 {
+    return proc.spawnInherited(alloc, argv, cwd) catch |err| switch (err) {
+        error.FileNotFound => error.GitNotFound,
+        else => err,
+    };
+}
+
 pub const Unpushed = enum { clean, ahead, no_upstream };
 
-/// `git clone url dest`, creating `dest`'s parent directories first. On
-/// failure, if `diag` is non-null, it is set to git's own stderr so the
-/// caller can show the real cause instead of a bare error name.
+/// `git clone url dest`, creating `dest`'s parent directories first. The
+/// clone streams git's own progress to the terminal and can prompt for
+/// credentials; git prints the real cause of a failure itself, so `diag`
+/// (if non-null) carries only a short summary.
 ///
 /// The clone lands in a unique sibling temp dir and is then renamed into
 /// `dest` atomically, so the canonical path only ever appears fully populated:
@@ -53,21 +65,15 @@ pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, diag: 
     defer alloc.free(tmp);
     defer std.Io.Dir.cwd().deleteTree(fsutil.io(), tmp) catch {};
 
-    const res = run(alloc, &.{ "git", "clone", url, tmp }, null) catch |err| switch (err) {
+    const status = spawnStreamed(alloc, &.{ "git", "clone", url, tmp }, null) catch |err| switch (err) {
         error.GitNotFound => {
             if (diag) |d| d.set(alloc, "git is not installed or not on your PATH", .{});
             return error.GitNotFound;
         },
         else => return err,
     };
-    defer alloc.free(res.stdout);
-    defer alloc.free(res.stderr);
-    if (res.status != 0) {
-        if (diag) |d| {
-            const trimmed = std.mem.trim(u8, res.stderr, " \t\r\n");
-            const cause = if (trimmed.len == 0) "git clone failed" else trimmed;
-            d.set(alloc, "failed to clone {s}: {s}", .{ url, cause });
-        }
+    if (status != 0) {
+        if (diag) |d| d.set(alloc, "failed to clone {s} (see the git output above)", .{url});
         return error.GitCloneFailed;
     }
 
