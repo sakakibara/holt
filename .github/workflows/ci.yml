@@ -70,6 +70,8 @@ jobs:
           - x86_64-macos
           - aarch64-linux
           - x86_64-linux
+          - x86_64-windows
+          - aarch64-windows
     steps:
       - uses: actions/checkout@v6
       - name: install zig
@@ -87,3 +89,28 @@ jobs:
             zig-cache-cross-${{ matrix.target }}-${{ env.ZIG_VERSION }}-
       - name: build for ${{ matrix.target }}
         run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+
+  # Runs the suite on real Windows to surface runtime gaps for the Windows port.
+  # Non-blocking (continue-on-error) until sub-project B makes it green.
+  test-windows:
+    name: test (windows-latest, informational)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - name: install zig
+        shell: bash
+        run: |
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-windows-${ZIG_VERSION}.zip"
+          curl -fsSL "$url" -o zig.zip
+          7z x zig.zip -o"$HOME/zig" >/dev/null
+          echo "$HOME/zig/zig-x86_64-windows-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - uses: actions/cache@v5
+        with:
+          path: .zig-cache
+          key: zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-
+      - name: zig build test
+        shell: bash
+        run: zig build test --summary all
