@@ -5,6 +5,7 @@
 //! it may be user data).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const doctor = @import("../doctor.zig");
@@ -133,6 +134,11 @@ fn render(w: *std.Io.Writer, report: *const doctor.Report, color_enabled: bool) 
     for (report.clone_temps) |t| {
         const status = if (t.removed) "removed" else "run doctor --fix to remove";
         try w.print("  {s} ({s})\n", .{ t.path, status });
+    }
+
+    if (builtin.os.tag == .windows and report.unsurfaced_files.len > 0) {
+        try w.print("note: {d} content file(s) not surfaced at the hub root (run `holt sync`; on Windows, file links need Developer Mode):\n", .{report.unsurfaced_files.len});
+        for (report.unsurfaced_files) |u| try w.print("  {s}: {s}\n", .{ u.project, u.rel });
     }
 }
 

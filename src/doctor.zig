@@ -18,6 +18,7 @@
 //! may be user data or need user judgment.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const workspace = @import("workspace.zig");
 const project_mod = @import("project.zig");
 const marker = @import("marker.zig");
@@ -42,6 +43,7 @@ pub const Shadow = struct { org: []const u8, name: []const u8 };
 pub const OrphanedContent = struct { path: []const u8 };
 pub const StaleAlias = struct { project: []const u8, alias: []const u8 };
 pub const ConflictCopy = struct { path: []const u8 };
+pub const Unsurfaced = struct { project: []const u8, rel: []const u8 };
 /// A `*.holt-tmp` clone-staging dir under code_root, left by a clone that was
 /// hard-killed before its atomic rename. `removed` is set when `--fix` deleted
 /// it.
@@ -82,6 +84,7 @@ pub const Report = struct {
     stale_aliases: []StaleAlias = &.{},
     conflict_copies: []ConflictCopy = &.{},
     clone_temps: []CloneTemp = &.{},
+    unsurfaced_files: []Unsurfaced = &.{},
 
     pub fn ok(self: Report) bool {
         if (self.d1_offenders.len != 0) return false;
@@ -453,6 +456,25 @@ fn findStaleAliases(alloc: std.mem.Allocator, projects: []const Project) ![]Stal
     return out.toOwnedSlice(alloc);
 }
 
+/// Windows: content-file mirrors that cannot be surfaced at the hub root
+/// without the symlink privilege (Developer Mode). Empty on POSIX.
+fn findUnsurfacedFiles(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) ![]Unsurfaced {
+    if (builtin.os.tag != .windows) return &.{};
+    var out: std.ArrayList(Unsurfaced) = .empty;
+    for (projects) |p| {
+        const links = try hub.desiredLinks(alloc, ws, &p);
+        for (links) |l| {
+            if (l.kind != .file) continue;
+            const link_path = try std.fs.path.join(alloc, &.{ p.hub_path, l.rel });
+            switch (try fsutil.linkState(alloc, link_path)) {
+                .missing => try out.append(alloc, .{ .project = try p.qualified(alloc), .rel = try alloc.dupe(u8, l.rel) }),
+                else => {},
+            }
+        }
+    }
+    return out.toOwnedSlice(alloc);
+}
+
 /// Runs every check and, with `opts.fix`, repairs hub drift in place
 /// (create/retarget/sweep only - never a conflict, never content, never a
 /// clone, never a D1 offender).
@@ -539,6 +561,7 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
         .stale_aliases = try findStaleAliases(alloc, scan.ok),
         .conflict_copies = try findConflictCopies(alloc, ws),
         .clone_temps = try findCloneTemps(alloc, ws, opts.fix),
+        .unsurfaced_files = try findUnsurfacedFiles(alloc, ws, scan.ok),
     };
 }
 

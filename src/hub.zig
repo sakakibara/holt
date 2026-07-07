@@ -31,7 +31,7 @@ pub const ReconcileReport = struct {
 // Test seam: forces file-target link creation to report "skipped for lack of
 // privilege", so the no-privilege degrade path (unreachable on an admin CI
 // runner, where real file symlinks succeed) is exercised on any platform.
-var force_skip_file_links_for_test = false;
+pub var force_skip_file_links_for_test = false;
 
 /// Replaces every "/" in `owner` with "-" (gitlab subgroup flattening).
 /// Caller owns the returned memory.

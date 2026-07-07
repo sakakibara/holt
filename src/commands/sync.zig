@@ -42,7 +42,8 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     var had_conflict = false;
     for (all) |p| {
         const report = try hub.reconcile(alloc, &ws, &p, dry_run);
-        if (report.created == 0 and report.retargeted == 0 and report.removed == 0 and report.conflicts.len == 0) continue;
+        if (report.created == 0 and report.retargeted == 0 and report.removed == 0 and
+            report.conflicts.len == 0 and report.skipped_unprivileged.len == 0) continue;
 
         changed += 1;
         if (report.conflicts.len > 0) had_conflict = true;
@@ -51,6 +52,11 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
             qualified, report.created, report.retargeted, report.removed, report.conflicts.len,
         });
         for (report.conflicts) |c| try ctx.out.print("  conflict: {s}\n", .{c});
+
+        if (report.skipped_unprivileged.len > 0) {
+            try ctx.out.print("  {d} content file(s) not surfaced at the hub root (needs Developer Mode for file links):\n", .{report.skipped_unprivileged.len});
+            for (report.skipped_unprivileged) |rel| try ctx.out.print("    {s}\n", .{rel});
+        }
     }
 
     changed += try pruneOrphanHubs(ctx, &ws, alloc, dry_run);
@@ -507,6 +513,29 @@ test "run: a hub whose project marker is merely evicted is not pruned" {
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "removed orphaned hub") == null);
     try testing.expect(fsutil.exists(hub_path));
+}
+
+test "run: warns about content files not surfaced for lack of privilege" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    const content_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try fsutil.writeFileAtomic(arena, try std.fs.path.join(arena, &.{ content_path, "notes.md" }), "hi");
+
+    hub.force_skip_file_links_for_test = true;
+    defer hub.force_skip_file_links_for_test = false;
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expect(std.mem.indexOf(u8, got.out, "not surfaced") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "notes.md") != null);
 }
 
 test "run: a local: marker whose clone dir is absent is skipped, not a crash" {
