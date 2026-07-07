@@ -246,7 +246,7 @@ list, or `holt <command> --help` for one command's usage.
 | `holt add <project> <url>` | Add a repo to a project, cloning it if absent (`url` accepts `owner/repo` or `host/owner/repo` shorthand) |
 | `holt get <url> [--update]` | Clone a repo standalone into the code tree (no project attached; accepts shorthand) |
 | `holt rm <project> <repo>` | Remove a repo from a project (the shared clone stays on disk) |
-| `holt adopt <project> <path> [--force]` | Register an existing clone into a project, moving it to its identity path |
+| `holt adopt [<project>] <path> [--force]` | Register an existing clone, moving it to its identity path - into a project, or standalone with no project when no `<project>` is given |
 | `holt promote <repo> [--dry-run] [--yes] [--force]` | Move a local repo to its real remote identity once it has an origin (previews and confirms unless `--yes`/`--force`) |
 
 **Navigate & inspect**
