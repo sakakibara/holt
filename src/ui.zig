@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const fsutil = @import("fsutil.zig");
+const env = @import("env.zig");
 const testing = std.testing;
 
 /// True when `file` is a terminal and NO_COLOR is unset. Any NO_COLOR
@@ -11,8 +12,7 @@ const testing = std.testing;
 pub fn colorEnabled(file: std.Io.File) bool {
     const is_tty = file.isTty(fsutil.io()) catch return false;
     if (!is_tty) return false;
-    const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    return environ.getPosix("NO_COLOR") == null;
+    return !env.has("NO_COLOR");
 }
 
 /// Writes `text` wrapped in the ANSI SGR `code` (e.g. "32" for green) when
