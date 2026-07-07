@@ -4,6 +4,7 @@
 //! untouched.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const comp = @import("../completion.zig");
@@ -175,21 +176,24 @@ test "run: a tar failure removes the partial tarball instead of leaving a trunca
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
 
     // An unreadable file inside the content dir makes tar exit nonzero after
-    // it has already opened (and started writing) its output archive.
+    // it has already opened (and started writing) its output archive. Mode
+    // bits don't gate access on Windows, so this simulation is POSIX-only.
     const secret_rel = "synced/projects/acme/widget/secret";
     try tmp.dir.writeFile(testing.io, .{ .sub_path = secret_rel, .data = "top secret\n" });
-    try tmp.dir.setFilePermissions(testing.io, secret_rel, std.Io.File.Permissions.fromMode(0o000), .{});
-    defer tmp.dir.setFilePermissions(testing.io, secret_rel, std.Io.File.Permissions.fromMode(0o644), .{}) catch {};
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.setFilePermissions(testing.io, secret_rel, std.Io.File.Permissions.fromMode(0o000), .{});
+        defer tmp.dir.setFilePermissions(testing.io, secret_rel, std.Io.File.Permissions.fromMode(0o644), .{}) catch {};
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
-    try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "tar failed") != null);
+        const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "tar failed") != null);
 
-    const backups_root = try ws.backupsRoot(arena);
-    var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), backups_root, .{ .iterate = true });
-    defer dir.close(fsutil.io());
-    var it = dir.iterate();
-    try testing.expect((try it.next(fsutil.io())) == null);
+        const backups_root = try ws.backupsRoot(arena);
+        var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), backups_root, .{ .iterate = true });
+        defer dir.close(fsutil.io());
+        var it = dir.iterate();
+        try testing.expect((try it.next(fsutil.io())) == null);
+    }
 }
 
 test "run: no matching project exits 1 and reports on stderr" {

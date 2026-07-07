@@ -7,6 +7,7 @@
 //! overwritten.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const comp = @import("../completion.zig");
@@ -402,29 +403,32 @@ test "run: a marker-save failure after the move names the new clone path and re-
     const new_clone_path = try new_id.clonePath(arena, ws.cfg.code_root);
 
     // A read-only content dir makes marker.save (writing .holt.json.tmp) fail
-    // after the clone has already been relocated.
-    const content_rel = "synced/projects/acme/proj";
-    try sb.tmp.dir.setFilePermissions(testing.io, content_rel, std.Io.File.Permissions.fromMode(0o555), .{});
-    defer sb.tmp.dir.setFilePermissions(testing.io, content_rel, std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+    // after the clone has already been relocated. Mode bits don't gate
+    // access on Windows, so this whole simulation is POSIX-only.
+    if (builtin.os.tag != .windows) {
+        const content_rel = "synced/projects/acme/proj";
+        try sb.tmp.dir.setFilePermissions(testing.io, content_rel, std.Io.File.Permissions.fromMode(0o555), .{});
+        defer sb.tmp.dir.setFilePermissions(testing.io, content_rel, std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", stray_path });
-    try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, new_clone_path) != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "re-run") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt adopt acme/proj") != null);
+        const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", stray_path });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, new_clone_path) != null);
+        try testing.expect(std.mem.indexOf(u8, got.err, "re-run") != null);
+        try testing.expect(std.mem.indexOf(u8, got.err, "holt adopt acme/proj") != null);
 
-    try testing.expect(!fsutil.exists(stray_path));
-    try testing.expect(fsutil.exists(new_clone_path));
+        try testing.expect(!fsutil.exists(stray_path));
+        try testing.expect(fsutil.exists(new_clone_path));
 
-    // Restore perms and re-run with the new path: the idempotent move
-    // short-circuits and the adopt completes.
-    try sb.tmp.dir.setFilePermissions(testing.io, content_rel, std.Io.File.Permissions.fromMode(0o755), .{});
-    const again = try testutil.runCmd(arena, command.run, ws, &.{ "proj", new_clone_path });
-    try testing.expectEqual(@as(u8, 0), again.code);
+        // Restore perms and re-run with the new path: the idempotent move
+        // short-circuits and the adopt completes.
+        try sb.tmp.dir.setFilePermissions(testing.io, content_rel, std.Io.File.Permissions.fromMode(0o755), .{});
+        const again = try testutil.runCmd(arena, command.run, ws, &.{ "proj", new_clone_path });
+        try testing.expectEqual(@as(u8, 0), again.code);
 
-    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
-    const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+        const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+        const loaded = try marker.load(arena, marker_path, null);
+        try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+    }
 }
 
 test "run: a plain directory with no .git is refused as unreadable, nothing moved" {

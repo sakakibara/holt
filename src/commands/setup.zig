@@ -5,6 +5,7 @@
 //! backend.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const comp = @import("../completion.zig");
@@ -285,18 +286,21 @@ test "run: a read-only config directory yields a permission-denied message, not 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    // XDG points at a directory holt cannot write into.
+    // XDG points at a directory holt cannot write into. Mode bits don't
+    // gate access on Windows, so this whole simulation is POSIX-only.
     const xdg = try std.fs.path.join(arena, &.{ root, "ro-cfg" });
     try fsutil.ensureDir(xdg);
-    try tmp.dir.setFilePermissions(testing.io, "ro-cfg", std.Io.File.Permissions.fromMode(0o555), .{});
-    defer tmp.dir.setFilePermissions(testing.io, "ro-cfg", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.setFilePermissions(testing.io, "ro-cfg", std.Io.File.Permissions.fromMode(0o555), .{});
+        defer tmp.dir.setFilePermissions(testing.io, "ro-cfg", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", xdg);
-    defer override.restore();
+        const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", xdg);
+        defer override.restore();
 
-    const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox" });
-    try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "permission denied") != null);
+        const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "permission denied") != null);
+    }
 }
 
 test "run: no flags and no terminal (the test harness's real stdin) errors asking for a flag" {

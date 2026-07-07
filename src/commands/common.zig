@@ -7,6 +7,7 @@
 //! performs the full mechanical move of a project to a new org/name.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
@@ -434,27 +435,31 @@ test "removeContent: a delete that fails reports the path and the error, not a b
     defer tmp.cleanup();
 
     try tmp.dir.createDirPath(testing.io, "parent/target");
+
     // Stripping write permission from "parent" makes removing "target" from
     // it fail, without relying on deleteTree's already-gone-is-fine path.
-    try tmp.dir.setFilePermissions(testing.io, "parent", std.Io.File.Permissions.fromMode(0o555), .{});
-    defer tmp.dir.setFilePermissions(testing.io, "parent", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+    // Mode bits don't gate access on Windows, so this is POSIX-only.
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.setFilePermissions(testing.io, "parent", std.Io.File.Permissions.fromMode(0o555), .{});
+        defer tmp.dir.setFilePermissions(testing.io, "parent", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const target_path = try std.fs.path.join(arena, &.{ root, "parent", "target" });
+        var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
+        const target_path = try std.fs.path.join(arena, &.{ root, "parent", "target" });
 
-    var args = try cli.Args.init(arena, &.{});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    defer out.deinit();
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    defer err_w.deinit();
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &args, .out = &out.writer, .err_w = &err_w.writer };
+        var args = try cli.Args.init(arena, &.{});
+        var out: std.Io.Writer.Allocating = .init(arena);
+        defer out.deinit();
+        var err_w: std.Io.Writer.Allocating = .init(arena);
+        defer err_w.deinit();
+        var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &args, .out = &out.writer, .err_w = &err_w.writer };
 
-    try testing.expectError(error.AccessDenied, removeContent(&ctx, target_path));
+        try testing.expectError(error.AccessDenied, removeContent(&ctx, target_path));
 
-    const reported = err_w.written();
-    try testing.expect(std.mem.indexOf(u8, reported, "failed to delete") != null);
-    try testing.expect(std.mem.indexOf(u8, reported, target_path) != null);
+        const reported = err_w.written();
+        try testing.expect(std.mem.indexOf(u8, reported, "failed to delete") != null);
+        try testing.expect(std.mem.indexOf(u8, reported, target_path) != null);
+    }
 }
 
 test "cloneIfAbsent: an incomplete clone already at the destination is refused, not adopted" {

@@ -4,6 +4,7 @@
 //! marker change.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const comp = @import("../completion.zig");
@@ -130,16 +131,19 @@ test "run: a hub rebuild failure after the content move points the user at holt 
     _ = try hub.reconcile(arena, &ws, &p, false);
 
     // A read-only hub_root makes creating the new hub dir fail, after the
-    // content has already moved to its new home.
-    try tmp.dir.setFilePermissions(testing.io, "hub", std.Io.File.Permissions.fromMode(0o555), .{});
-    defer tmp.dir.setFilePermissions(testing.io, "hub", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+    // content has already moved to its new home. Mode bits don't gate
+    // access on Windows, so this whole simulation is POSIX-only.
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.setFilePermissions(testing.io, "hub", std.Io.File.Permissions.fromMode(0o555), .{});
+        defer tmp.dir.setFilePermissions(testing.io, "hub", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "corp/gadget" });
-    try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt sync") != null);
+        const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "corp/gadget" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "holt sync") != null);
 
-    const new_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "gadget" });
-    try testing.expect(fsutil.exists(new_content));
+        const new_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "gadget" });
+        try testing.expect(fsutil.exists(new_content));
+    }
 }
 
 test "run: refuses when the target project already exists, leaving the source in place" {

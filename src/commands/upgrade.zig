@@ -266,7 +266,10 @@ pub fn replaceBinary(alloc: std.mem.Allocator, target_path: []const u8, new_bina
 fn installBinary(io: std.Io, alloc: std.mem.Allocator, new_binary_path: []const u8, staged_path: []const u8) !void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, new_binary_path, alloc, .unlimited);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = staged_path, .data = bytes });
-    try std.Io.Dir.cwd().setFilePermissions(io, staged_path, std.Io.File.Permissions.fromMode(0o755), .{});
+    // On Windows a .exe is executable by extension; no chmod is needed or possible.
+    if (builtin.os.tag != .windows) {
+        try std.Io.Dir.cwd().setFilePermissions(io, staged_path, std.Io.File.Permissions.fromMode(0o755), .{});
+    }
 }
 
 test "latestTag: extracts tag_name, ignoring unrelated fields" {
@@ -392,18 +395,23 @@ test "replaceBinary: a failure staging the new binary leaves the original target
 
     var root_dir = try std.Io.Dir.cwd().openDir(testing.io, root, .{ .iterate = true });
     defer root_dir.close(testing.io);
-    // Strips write permission from bin_dir so writing the staged
-    // "<target>.new" file fails before the atomic rename is ever reached.
-    try root_dir.setFilePermissions(testing.io, "bin", std.Io.File.Permissions.fromMode(0o555), .{});
-    defer root_dir.setFilePermissions(testing.io, "bin", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-    try testing.expectError(error.AccessDenied, replaceBinary(arena, target_path, new_path));
+    // Mode bits don't gate access on Windows, so this whole simulation
+    // (and the failure it induces) only applies on POSIX.
+    if (builtin.os.tag != .windows) {
+        // Strips write permission from bin_dir so writing the staged
+        // "<target>.new" file fails before the atomic rename is ever reached.
+        try root_dir.setFilePermissions(testing.io, "bin", std.Io.File.Permissions.fromMode(0o555), .{});
+        defer root_dir.setFilePermissions(testing.io, "bin", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-    const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_path, arena, .unlimited);
-    try testing.expectEqualStrings("OLD", got);
+        try testing.expectError(error.AccessDenied, replaceBinary(arena, target_path, new_path));
 
-    const staged_path = try std.fmt.allocPrint(arena, "{s}.new", .{target_path});
-    try testing.expect(!fsutil.exists(staged_path));
+        const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_path, arena, .unlimited);
+        try testing.expectEqualStrings("OLD", got);
+
+        const staged_path = try std.fmt.allocPrint(arena, "{s}.new", .{target_path});
+        try testing.expect(!fsutil.exists(staged_path));
+    }
 }
 
 test "run: a release matching the current version reports up to date" {

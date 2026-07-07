@@ -5,6 +5,7 @@
 //! passed.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const comp = @import("../completion.zig");
@@ -282,27 +283,30 @@ test "run: a partial content-delete failure keeps the marker, so the project sta
     _ = try hub.reconcile(arena, &ws, &p, false);
 
     // A child inside a read-only dir cannot be removed, so deleteTree of
-    // "locked" fails and the marker (deleted last) survives.
+    // "locked" fails and the marker (deleted last) survives. Mode bits don't
+    // gate access on Windows, so this whole simulation is POSIX-only.
     const locked_rel = "synced/projects/acme/widget/locked";
     try tmp.dir.createDirPath(testing.io, locked_rel ++ "/nested");
-    try tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o555), .{});
-    defer tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o555), .{});
+        defer tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "--yes" });
-    try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "failed to delete") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt delete acme/widget") != null);
+        const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "--yes" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "failed to delete") != null);
+        try testing.expect(std.mem.indexOf(u8, got.err, "holt delete acme/widget") != null);
 
-    const marker_path = try p.markerPath(arena);
-    try testing.expect(fsutil.exists(marker_path));
-    switch (try ws.find(arena, "acme/widget")) {
-        .one => {},
-        else => return error.TestUnexpectedResult,
+        const marker_path = try p.markerPath(arena);
+        try testing.expect(fsutil.exists(marker_path));
+        switch (try ws.find(arena, "acme/widget")) {
+            .one => {},
+            else => return error.TestUnexpectedResult,
+        }
+
+        // Restore perms and re-run: delete now completes fully.
+        try tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o755), .{});
+        const again = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "--yes" });
+        try testing.expectEqual(@as(u8, 0), again.code);
+        try testing.expect(!fsutil.exists(p.content_path));
     }
-
-    // Restore perms and re-run: delete now completes fully.
-    try tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o755), .{});
-    const again = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "--yes" });
-    try testing.expectEqual(@as(u8, 0), again.code);
-    try testing.expect(!fsutil.exists(p.content_path));
 }
