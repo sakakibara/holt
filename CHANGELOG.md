@@ -6,6 +6,42 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-07
+
+### Added
+
+- **The hub mirrors all synced content.** A project's hub now symlinks every
+  top-level entry in its content dir, not just a fixed `docs`/`assets`/`links`,
+  so anything you keep in synced content shows up at the project root on every
+  machine.
+- **`holt keep <path>`** promotes a loose file or directory at a project's hub
+  root into synced content (moving it there and leaving a symlink behind), so a
+  file you create at the project root can be cloud-synced. The move is
+  cross-filesystem safe.
+- **`holt status` surfaces loose local files** at a hub root in an on-demand
+  `local-only` section (and a `local_only` array under `--json`), so an unsynced
+  file at the project root is reported rather than silently lost.
+- **Standalone `holt adopt <path>`.** Given a single path, `adopt` ingests an
+  existing local clone with no project attached, moving it to its identity path
+  in the code tree; `holt adopt <project> <path>` is unchanged. `holt get` now
+  redirects a local-checkout path argument to `holt adopt`.
+
+### Changed
+
+- A project's hub `code/` directory is created only when the project has at
+  least one repo, so a docs-only project gets a clean hub.
+- Clone relocation (`adopt`, `promote`, `archive`, `org rename`, `restore`) now
+  works across filesystems - for example a checkout on an external or
+  cloud-mounted volume - via a copy-then-delete fallback, instead of failing
+  when a plain rename cannot cross the boundary.
+
+### Fixed
+
+- **`holt sync` no longer risks deleting real data when pruning orphaned hubs.**
+  It refuses to prune through a symlinked `hub_root`, and never deletes a hub
+  directory that contains real files (such as loose local files), including on
+  filesystems that do not report directory-entry types.
+
 ## [0.1.0] - 2026-07-07
 
 Initial release.
