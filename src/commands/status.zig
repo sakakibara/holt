@@ -243,9 +243,14 @@ fn runJson(ctx: *cli.Ctx, ws: *const workspace.Workspace, org_filter: ?[]const u
             try repo_items.append(alloc, .{ .object = repo_obj });
         }
 
+        const locals = try localOnlyEntries(alloc, p);
+        var local_items: std.ArrayList(json.Value) = .empty;
+        for (locals) |name| try local_items.append(alloc, .{ .string = name });
+
         var obj: json.ObjectMap = .empty;
         try obj.put(alloc, "project", .{ .string = qualified });
         try obj.put(alloc, "repos", .{ .array = try repo_items.toOwnedSlice(alloc) });
+        try obj.put(alloc, "local_only", .{ .array = try local_items.toOwnedSlice(alloc) });
         try items.append(alloc, .{ .object = obj });
         start = end;
     }
@@ -640,7 +645,7 @@ test "run: --json reports each repo's state as a string, no ANSI escapes" {
     try testing.expect(std.mem.indexOf(u8, got.out, "\x1b[") == null);
 
     const Repo = struct { name: []const u8, state: []const u8, branch: ?[]const u8 };
-    const Entry = struct { project: []const u8, repos: []Repo };
+    const Entry = struct { project: []const u8, repos: []Repo, local_only: [][]const u8 };
     const parsed = try json.parseInto([]Entry, arena, got.out, .{});
     try testing.expectEqual(@as(usize, 1), parsed.len);
     try testing.expectEqualStrings("acme/proj", parsed[0].project);
@@ -650,6 +655,29 @@ test "run: --json reports each repo's state as a string, no ANSI escapes" {
     try testing.expectEqualStrings("clean", states.get("clean-repo").?);
     try testing.expectEqualStrings("dirty", states.get("dirty-repo").?);
     try testing.expectEqualStrings("missing", states.get("gone").?);
+}
+
+test "runJson: includes a local_only array per project" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--json" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "\"local_only\"") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "notes.md") != null);
 }
 
 test "run: --json on an empty workspace emits [] on stdout, not the human hint" {
