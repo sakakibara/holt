@@ -68,12 +68,23 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 /// Removes hub trees left behind by a project that was renamed, archived, or
 /// deleted (or a move interrupted before its hub was torn down): a
 /// `<hub>/<org>/<name>` whose project has neither a marker nor an eviction
-/// placeholder. A hub is purely derived symlinks, so removing an orphaned one
-/// loses nothing and is regenerated on demand - deleteTree unlinks the
-/// symlinks without ever following them into a clone or the content tree.
-/// Returns how many were pruned (or, under `dry_run`, would be). Empty org
-/// dirs left behind are swept too.
+/// placeholder. Only a hub that is purely derived symlinks is safe to
+/// deleteTree without loss, so this guards both ways that assumption can be
+/// false: a hub_root reached through a symlink (deleteTree would resolve
+/// through it into live content, not just unlink the link) is skipped
+/// entirely, and an individual orphan holding a real file (loose local
+/// content dropped via `holt keep`, not yet synced) is left alone rather than
+/// swept. Returns how many were actually pruned (or, under `dry_run`, would
+/// be). Empty org dirs left behind by a pruned hub are swept too.
 fn pruneOrphanHubs(ctx: *cli.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, dry_run: bool) !u32 {
+    switch (try fsutil.linkState(alloc, ws.cfg.hub_root)) {
+        .symlink => {
+            try ctx.err_w.print("holt: hub_root {s} is a symlink; skipping orphan-hub pruning to avoid deleting content through it\n", .{ws.cfg.hub_root});
+            return 0;
+        },
+        else => {},
+    }
+
     var hub_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), ws.cfg.hub_root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return 0,
         else => return err,
@@ -104,17 +115,52 @@ fn pruneOrphanHubs(ctx: *cli.Ctx, ws: *const workspace.Workspace, alloc: std.mem
         }
     }
 
+    var pruned: u32 = 0;
     for (orphans.items) |o| {
+        if (try hubHasRealFile(alloc, o.hub_path)) {
+            if (dry_run) {
+                try ctx.out.print("would keep hub {s}/{s} (has local files)\n", .{ o.org, o.name });
+            } else {
+                try ctx.out.print("kept hub {s}/{s}: it has local files, not pruning (holt keep them, or remove manually)\n", .{ o.org, o.name });
+            }
+            continue;
+        }
+
         if (dry_run) {
             try ctx.out.print("would remove orphaned hub {s}/{s}\n", .{ o.org, o.name });
+            pruned += 1;
             continue;
         }
         try std.Io.Dir.cwd().deleteTree(fsutil.io(), o.hub_path);
         if (std.fs.path.dirname(o.hub_path)) |org_hub| fsutil.rmdirIfEmpty(org_hub);
         try ctx.out.print("removed orphaned hub {s}/{s}\n", .{ o.org, o.name });
+        pruned += 1;
     }
 
-    return @intCast(orphans.items.len);
+    return pruned;
+}
+
+/// True if any regular file sits anywhere under `path`, recursing into
+/// directories but never following a symlink - a legitimate prunable hub is
+/// purely symlinks (mirror links plus `code`'s clone-symlinks) and empty
+/// directories, so any real file found means the hub holds content that
+/// deleteTree must not touch.
+fn hubHasRealFile(alloc: std.mem.Allocator, path: []const u8) !bool {
+    var dir = try std.Io.Dir.openDirAbsolute(fsutil.io(), path, .{ .iterate = true });
+    defer dir.close(fsutil.io());
+
+    var it = dir.iterate();
+    while (try it.next(fsutil.io())) |entry| {
+        switch (entry.kind) {
+            .file => return true,
+            .directory => {
+                const child = try std.fs.path.join(alloc, &.{ path, entry.name });
+                if (try hubHasRealFile(alloc, child)) return true;
+            },
+            else => {}, // symlinks (and any other special entry) are skipped, never followed
+        }
+    }
+    return false;
 }
 
 /// Hints at every distinct `local:<name>` repo whose clone has grown an
@@ -319,6 +365,68 @@ test "run: an orphaned hub with no project is pruned; --dry-run only reports it"
     try testing.expect(!fsutil.exists(orphan_hub));
     // The now-empty org dir is swept too.
     try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" })));
+}
+
+test "run: an orphaned hub holding a real local file is kept, not deleted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // An orphan hub that also holds a loose local file dropped via `holt
+    // keep`, alongside a derived symlink - the file must survive pruning
+    // even though the hub itself has no project marker.
+    const orphan_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "gone" });
+    try fsutil.ensureDir(orphan_hub);
+    const notes_path = try std.fs.path.join(arena, &.{ orphan_hub, "notes.md" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = notes_path, .data = "keep me\n" });
+    try fsutil.replaceSymlink("/nowhere", try std.fs.path.join(arena, &.{ orphan_hub, "code" }));
+
+    const dry = try testutil.runCmd(arena, command.run, ws, &.{"--dry-run"});
+    try testing.expectEqual(@as(u8, 0), dry.code);
+    try testing.expect(std.mem.indexOf(u8, dry.out, "would keep hub acme/gone (has local files)") != null);
+    try testing.expect(fsutil.exists(notes_path));
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "kept hub acme/gone") != null);
+    try testing.expect(fsutil.exists(orphan_hub));
+    try testing.expect(fsutil.exists(notes_path));
+}
+
+test "run: a symlinked hub_root is never pruned through" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // Simulates the old hive layout where hub_root itself is a symlink into
+    // live synced content (e.g. ~/Projects -> synced/projects). An orphan
+    // hub with a real file sits behind it; deleteTree must never resolve
+    // through the symlink to reach it.
+    const real_target = try std.fs.path.join(arena, &.{ root, "real-hub" });
+    const orphan_hub = try std.fs.path.join(arena, &.{ real_target, "acme", "gone" });
+    try fsutil.ensureDir(orphan_hub);
+    const notes_path = try std.fs.path.join(arena, &.{ orphan_hub, "notes.md" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = notes_path, .data = "keep me\n" });
+    try fsutil.replaceSymlink(real_target, ws.cfg.hub_root);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "hub_root") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "is a symlink") != null);
+    try testing.expect(fsutil.exists(notes_path));
+    try testing.expect(fsutil.exists(orphan_hub));
 }
 
 test "run: a hub whose project marker is merely evicted is not pruned" {
