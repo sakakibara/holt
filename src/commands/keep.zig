@@ -73,9 +73,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     defer lock.release();
 
     try fsutil.moveTree(alloc, abs, dest);
-    try fsutil.replaceSymlink(dest, abs);
+    const dest_stat = try std.Io.Dir.cwd().statFile(fsutil.io(), dest, .{});
+    const result = try fsutil.replaceLink(dest, abs, dest_stat.kind == .directory);
 
     try ctx.out.print("kept {s} -> content\n", .{base});
+    if (result == .skipped_unprivileged) {
+        try ctx.err_w.print("holt: warning: {s} is in content but not surfaced at the hub root (needs Developer Mode for file links); run \"holt sync\" after enabling it\n", .{base});
+    }
     return 0;
 }
 
