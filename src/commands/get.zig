@@ -51,6 +51,14 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
+    // A local checkout belongs to `adopt` (which moves an existing clone),
+    // not `get` (which clones a remote). Redirect rather than mis-parse it.
+    const maybe_local = try fsutil.toAbsolute(alloc, raw);
+    if (fsutil.exists(maybe_local) and try git.inspectable(alloc, maybe_local)) {
+        try ctx.err_w.print("holt: {s} is a local checkout; use \"holt adopt {s}\" to ingest it standalone\n", .{ raw, raw });
+        return 1;
+    }
+
     // Expand "owner/repo" / "host/owner/repo" shorthand to a real clone URL.
     const url = identity.expand(alloc, raw) catch |err| switch (err) {
         error.UnrecognizedUrl => {
@@ -249,6 +257,25 @@ test "run: a parseable but unreachable url surfaces git's cause, naming the url"
     const id = try identity.fromUrl(arena, url);
     const owner_dir = try std.fs.path.join(arena, &.{ ws.cfg.code_root, id.host, id.owner });
     try testing.expect(!fsutil.exists(owner_dir));
+}
+
+test "run: get on an existing local repo redirects to adopt" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const repo = try std.fs.path.join(arena, &.{ sb.root, "checkout", "widget" });
+    try fsutil.ensureDir(repo);
+    try testutil.runGit(&sb, repo, &.{ "init", "-q" });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{repo});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "holt adopt") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "local checkout") != null);
 }
 
 test "run: a local: url is rejected pointing at the project commands" {
