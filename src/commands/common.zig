@@ -166,8 +166,10 @@ pub fn parseOrgNameMessage(alloc: std.mem.Allocator, spec: []const u8) ![]const 
 /// both paths and the underlying error to `ctx.err_w` instead of letting a
 /// raw error name reach the user via dispatch's catch-all.
 pub fn moveDir(ctx: *cli.Ctx, from: []const u8, to: []const u8) !void {
-    if (std.fs.path.dirname(to)) |parent| try fsutil.ensureDir(parent);
-    std.Io.Dir.renameAbsolute(from, to, fsutil.io()) catch |err| {
+    // moveTree renames within a filesystem and copy-then-deletes across one, so
+    // a clone whose checkout lives on a different volume than code_root still
+    // relocates instead of failing with CrossDevice.
+    fsutil.moveTree(ctx.alloc, from, to) catch |err| {
         try ctx.err_w.print("holt: failed to move {s} -> {s}: {s}\n", .{ from, to, @errorName(err) });
         return err;
     };
@@ -189,7 +191,7 @@ pub fn moveClone(ctx: *cli.Ctx, from: []const u8, to: []const u8) !void {
     if (!fsutil.exists(from_wt)) return;
 
     const to_wt = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{to});
-    std.Io.Dir.renameAbsolute(from_wt, to_wt, fsutil.io()) catch |err| {
+    fsutil.moveTree(alloc, from_wt, to_wt) catch |err| {
         try ctx.err_w.print("holt: moved clone but could not move its worktrees dir: {s}\n", .{@errorName(err)});
         return;
     };
