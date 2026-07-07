@@ -459,20 +459,21 @@ fn findStaleAliases(alloc: std.mem.Allocator, projects: []const Project) ![]Stal
 /// Windows: content-file mirrors that cannot be surfaced at the hub root
 /// without the symlink privilege (Developer Mode). Empty on POSIX.
 fn findUnsurfacedFiles(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) ![]Unsurfaced {
-    if (builtin.os.tag != .windows) return &.{};
-    var out: std.ArrayList(Unsurfaced) = .empty;
-    for (projects) |p| {
-        const links = try hub.desiredLinks(alloc, ws, &p);
-        for (links) |l| {
-            if (l.kind != .file) continue;
-            const link_path = try std.fs.path.join(alloc, &.{ p.hub_path, l.rel });
-            switch (try fsutil.linkState(alloc, link_path)) {
-                .missing => try out.append(alloc, .{ .project = try p.qualified(alloc), .rel = try alloc.dupe(u8, l.rel) }),
-                else => {},
+    if (builtin.os.tag == .windows) {
+        var out: std.ArrayList(Unsurfaced) = .empty;
+        for (projects) |p| {
+            const links = try hub.desiredLinks(alloc, ws, &p);
+            for (links) |l| {
+                if (l.kind != .file) continue;
+                const link_path = try std.fs.path.join(alloc, &.{ p.hub_path, l.rel });
+                switch (try fsutil.linkState(alloc, link_path)) {
+                    .missing => try out.append(alloc, .{ .project = try p.qualified(alloc), .rel = try alloc.dupe(u8, l.rel) }),
+                    else => {},
+                }
             }
         }
-    }
-    return out.toOwnedSlice(alloc);
+        return out.toOwnedSlice(alloc);
+    } else return &.{};
 }
 
 /// Runs every check and, with `opts.fix`, repairs hub drift in place
