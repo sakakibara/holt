@@ -7,7 +7,6 @@
 //! missing from the table or a broken cross-command filesystem contract.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const cli = @import("cli.zig");
 const main = @import("main.zig");
 const marker = @import("marker.zig");
@@ -38,45 +37,6 @@ fn writeConfig(alloc: std.mem.Allocator, xdg_config_home: []const u8, synced_roo
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = config_path, .data = content });
 }
 
-// identity.fromUrl only accepts a remote-shaped url, never a bare local path,
-// so fake holt-test.invalid urls are rewritten via a git insteadOf config to
-// real hermetic bare repos for the process's git children. XDG_CONFIG_HOME
-// rides along in the same overridden environ so config.loadDefault (which
-// dispatchTo calls for real, unlike every other command test) finds our
-// fixture config instead of the developer's real one. Both are restored
-// after the test.
-const EnvOverride = struct {
-    original: std.process.Environ,
-
-    fn install(
-        alloc: std.mem.Allocator,
-        gitconfig_path: []const u8,
-        xdg_config_home: []const u8,
-        pairs: []const struct { url: []const u8, bare: []const u8 },
-    ) !EnvOverride {
-        var content: std.ArrayList(u8) = .empty;
-        for (pairs) |pair| {
-            try content.appendSlice(alloc, try std.fmt.allocPrint(alloc, "[url \"{s}\"]\n\tinsteadOf = {s}\n", .{ pair.bare, pair.url }));
-        }
-        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gitconfig_path, .data = content.items });
-
-        const singleton = std.Io.Threaded.global_single_threaded;
-        const original = singleton.environ.process_environ;
-        if (builtin.os.tag != .windows) {
-            var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
-            try map.put("GIT_CONFIG_GLOBAL", gitconfig_path);
-            try map.put("XDG_CONFIG_HOME", xdg_config_home);
-            const block = try map.createPosixBlock(alloc, .{});
-            singleton.environ.process_environ = .{ .block = block };
-        }
-        return .{ .original = original };
-    }
-
-    fn restore(self: EnvOverride) void {
-        std.Io.Threaded.global_single_threaded.environ.process_environ = self.original;
-    }
-};
-
 fn expectSymlink(arena: std.mem.Allocator, path: []const u8) !void {
     switch (try fsutil.linkState(arena, path)) {
         .symlink => {},
@@ -105,11 +65,13 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
     const url_a = "https://holt-test.invalid/acme/alpha";
     const url_b = "https://holt-test.invalid/acme/beta";
     const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
-    const override = try EnvOverride.install(arena, gitconfig_path, xdg_config_home, &.{
+    const git_override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{
         .{ .url = url_a, .bare = bare_a },
         .{ .url = url_b, .bare = bare_b },
     });
-    defer override.restore();
+    defer git_override.restore();
+    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", xdg_config_home);
+    defer xdg_override.restore();
 
     const clone_alpha = try std.fs.path.join(arena, &.{ code_root, "holt-test.invalid", "acme", "alpha" });
     const clone_beta = try std.fs.path.join(arena, &.{ code_root, "holt-test.invalid", "acme", "beta" });

@@ -7,8 +7,8 @@
 //! releases it if the holding process dies, so a crash never wedges a project.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const fsutil = @import("fsutil.zig");
+const testutil = @import("testutil.zig");
 const testing = std.testing;
 
 pub const Handle = struct {
@@ -54,7 +54,7 @@ test "acquire: a held lock blocks a second acquirer; releasing frees it" {
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    const override = try EnvOverride.install(arena, "TMPDIR", root);
+    const override = try testutil.EnvOverride.install(arena, "TMPDIR", root);
     defer override.restore();
 
     const content_path = "/some/project/acme/widget";
@@ -71,23 +71,3 @@ test "acquire: a held lock blocks a second acquirer; releasing frees it" {
     var second = try acquire(arena, content_path);
     second.release();
 }
-
-const EnvOverride = struct {
-    original: std.process.Environ,
-
-    fn install(alloc: std.mem.Allocator, key: []const u8, value: []const u8) !EnvOverride {
-        const singleton = std.Io.Threaded.global_single_threaded;
-        const original = singleton.environ.process_environ;
-        if (builtin.os.tag != .windows) {
-            var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
-            try map.put(key, value);
-            const block = try map.createPosixBlock(alloc, .{});
-            singleton.environ.process_environ = .{ .block = block };
-        }
-        return .{ .original = original };
-    }
-
-    fn restore(self: EnvOverride) void {
-        std.Io.Threaded.global_single_threaded.environ.process_environ = self.original;
-    }
-};

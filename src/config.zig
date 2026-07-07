@@ -4,10 +4,10 @@
 //! Every returned field is arena-owned; callers never free them individually.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const toml = @import("toml");
 const fsutil = @import("fsutil.zig");
 const diagnostic = @import("diag.zig");
+const testutil = @import("testutil.zig");
 const testing = std.testing;
 
 /// A user-defined `[backends.<name>]` entry: `name` is the sub-table key,
@@ -271,30 +271,6 @@ fn loadFromPath(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.D
     return load(alloc, path, diag);
 }
 
-// Config resolution reads $HOME and $XDG_CONFIG_HOME from the process environ
-// singleton; overriding one lets a test point "~" at a disposable temp
-// directory or feed configPath a hostile XDG value, instead of touching the
-// developer's real environment.
-const EnvOverride = struct {
-    original: std.process.Environ,
-
-    fn install(alloc: std.mem.Allocator, key: []const u8, value: []const u8) !EnvOverride {
-        const singleton = std.Io.Threaded.global_single_threaded;
-        const original = singleton.environ.process_environ;
-        if (builtin.os.tag != .windows) {
-            var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
-            try map.put(key, value);
-            const block = try map.createPosixBlock(alloc, .{});
-            singleton.environ.process_environ = .{ .block = block };
-        }
-        return .{ .original = original };
-    }
-
-    fn restore(self: EnvOverride) void {
-        std.Io.Threaded.global_single_threaded.environ.process_environ = self.original;
-    }
-};
-
 fn writeFixture(tmp: *testing.TmpDir, content: []const u8) ![]u8 {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "config.toml", .data = content });
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -512,7 +488,7 @@ test "loadFromPath: an existing iCloud container never gets adopted when the con
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const fake_home = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try EnvOverride.install(arena, "HOME", fake_home);
+    const override = try testutil.EnvOverride.install(arena, "HOME", fake_home);
     defer override.restore();
 
     const icloud_container = try fsutil.expandTilde(arena, icloud_default_synced_root);
@@ -650,7 +626,7 @@ test "configPath: an empty or relative XDG_CONFIG_HOME is treated as unset, stil
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
-        const override = try EnvOverride.install(arena, "XDG_CONFIG_HOME", bad_xdg);
+        const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", bad_xdg);
         defer override.restore();
 
         const path = try configPath(arena);
@@ -664,7 +640,7 @@ test "configPath: an absolute XDG_CONFIG_HOME is used verbatim" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const override = try EnvOverride.install(arena, "XDG_CONFIG_HOME", "/somewhere/cfg");
+    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", "/somewhere/cfg");
     defer override.restore();
 
     const path = try configPath(arena);

@@ -164,11 +164,32 @@ pub fn testWorkspace(alloc: std.mem.Allocator, root: []const u8) !workspace.Work
     } };
 }
 
+/// Not exposed by `std.os.windows.kernel32` (0.16 only binds the calls the
+/// standard library itself needs); this is the real Win32 entry point,
+/// declared the same way the rest of that module declares one.
+extern "kernel32" fn SetEnvironmentVariableW(
+    lpName: ?[*:0]const u16,
+    lpValue: ?[*:0]const u16,
+) callconv(.winapi) std.os.windows.BOOL;
+
 /// A saved process environment, swapped back in on `restore`. Used by
 /// tests that need a command to see a different env var than the real
 /// process has, without leaking the override past the test.
 pub const EnvOverride = struct {
     original: std.process.Environ,
+    windows: Windows,
+
+    /// On Windows, `Environ.Block` resolves to `GlobalBlock` - a single
+    /// `use_global` flag, not a data-carrying block - because the PEB
+    /// environment can move whenever it's edited, so no long-lived pointer
+    /// to it is valid. `process_environ` therefore always mirrors the live
+    /// PEB there and swapping it (the POSIX approach) has no effect; the
+    /// override instead mutates that same live block via the real
+    /// `SetEnvironmentVariableW`, and restores it the same way.
+    const Windows = if (builtin.os.tag == .windows) struct {
+        key_w: [:0]const u16,
+        prior_value_w: ?[:0]const u16,
+    } else void;
 
     /// Overrides `key` to `value` (or removes it, if `value` is null) in
     /// the process environment. Returns the prior environment so the
@@ -176,20 +197,35 @@ pub const EnvOverride = struct {
     pub fn install(alloc: std.mem.Allocator, key: []const u8, value: ?[]const u8) !EnvOverride {
         const singleton = std.Io.Threaded.global_single_threaded;
         const original = singleton.environ.process_environ;
-        if (builtin.os.tag != .windows) {
-            var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
-            if (value) |v| {
-                try map.put(key, v);
-            } else {
-                _ = map.swapRemove(key);
-            }
+        var map = try std.process.Environ.createMap(original, alloc);
+        const prior_value_w: if (builtin.os.tag == .windows) ?[:0]const u16 else void = if (builtin.os.tag == .windows)
+            (if (map.get(key)) |v| try std.unicode.wtf8ToWtf16LeAllocZ(alloc, v) else null)
+        else {};
+        if (value) |v| {
+            try map.put(key, v);
+        } else {
+            _ = map.swapRemove(key);
+        }
+        if (builtin.os.tag == .windows) {
+            const key_w = try std.unicode.wtf8ToWtf16LeAllocZ(alloc, key);
+            const value_w: ?[:0]const u16 = if (value) |v| try std.unicode.wtf8ToWtf16LeAllocZ(alloc, v) else null;
+            if (!SetEnvironmentVariableW(key_w.ptr, if (value_w) |w| w.ptr else null).toBool())
+                return error.SetEnvironmentVariableFailed;
+            return .{ .original = original, .windows = .{ .key_w = key_w, .prior_value_w = prior_value_w } };
+        } else {
             const block = try map.createPosixBlock(alloc, .{});
             singleton.environ.process_environ = .{ .block = block };
+            return .{ .original = original, .windows = {} };
         }
-        return .{ .original = original };
     }
 
     pub fn restore(self: EnvOverride) void {
+        if (builtin.os.tag == .windows) {
+            _ = SetEnvironmentVariableW(
+                self.windows.key_w.ptr,
+                if (self.windows.prior_value_w) |w| w.ptr else null,
+            );
+        }
         std.Io.Threaded.global_single_threaded.environ.process_environ = self.original;
     }
 };

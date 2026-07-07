@@ -5,10 +5,10 @@
 //! treated as one impossible binary name.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const cli = @import("cli.zig");
 const proc = @import("proc.zig");
 const fsutil = @import("fsutil.zig");
+const testutil = @import("testutil.zig");
 const testing = std.testing;
 
 /// Opens `path` in $EDITOR (child cwd `cwd`, or the process cwd when null),
@@ -77,7 +77,7 @@ test "open: a multi-word $EDITOR is split into a command plus the path" {
     });
 
     const editor_val = try std.fmt.allocPrint(arena, "{s} --flag", .{script});
-    const override = try EnvOverride.install(arena, "EDITOR", editor_val);
+    const override = try testutil.EnvOverride.install(arena, "EDITOR", editor_val);
     defer override.restore();
 
     const target = try std.fs.path.join(arena, &.{ root, "file.txt" });
@@ -100,7 +100,7 @@ test "open: a blank $EDITOR is treated as unset, never spawned" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const override = try EnvOverride.install(arena, "EDITOR", "   ");
+    const override = try testutil.EnvOverride.install(arena, "EDITOR", "   ");
     defer override.restore();
 
     var args = try cli.Args.init(arena, &.{});
@@ -117,7 +117,7 @@ test "open: an editor binary that is not on PATH is reported by name, not a bare
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const override = try EnvOverride.install(arena, "EDITOR", "holt-no-such-editor-xyz");
+    const override = try testutil.EnvOverride.install(arena, "EDITOR", "holt-no-such-editor-xyz");
     defer override.restore();
 
     var args = try cli.Args.init(arena, &.{});
@@ -129,23 +129,3 @@ test "open: an editor binary that is not on PATH is reported by name, not a bare
     try testing.expect(std.mem.indexOf(u8, err_w.written(), "holt-no-such-editor-xyz") != null);
     try testing.expect(std.mem.indexOf(u8, err_w.written(), "not") != null);
 }
-
-const EnvOverride = struct {
-    original: std.process.Environ,
-
-    fn install(alloc: std.mem.Allocator, key: []const u8, value: []const u8) !EnvOverride {
-        const singleton = std.Io.Threaded.global_single_threaded;
-        const original = singleton.environ.process_environ;
-        if (builtin.os.tag != .windows) {
-            var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
-            try map.put(key, value);
-            const block = try map.createPosixBlock(alloc, .{});
-            singleton.environ.process_environ = .{ .block = block };
-        }
-        return .{ .original = original };
-    }
-
-    fn restore(self: EnvOverride) void {
-        std.Io.Threaded.global_single_threaded.environ.process_environ = self.original;
-    }
-};
