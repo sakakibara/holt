@@ -345,8 +345,10 @@ test "replaceBinary: swaps in the new binary's bytes and mode, leaving no .old b
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_path, arena, .unlimited);
     try testing.expectEqualStrings("NEW", got);
 
-    const st = try std.Io.Dir.cwd().statFile(testing.io, target_path, .{});
-    try testing.expectEqual(@as(std.posix.mode_t, 0o755), st.permissions.toMode() & 0o777);
+    if (builtin.os.tag != .windows) {
+        const st = try std.Io.Dir.cwd().statFile(testing.io, target_path, .{});
+        try testing.expectEqual(@as(std.posix.mode_t, 0o755), st.permissions.toMode() & 0o777);
+    }
 
     const old_path = try std.fmt.allocPrint(arena, "{s}.old", .{target_path});
     try testing.expect(!fsutil.exists(old_path));
