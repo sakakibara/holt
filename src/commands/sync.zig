@@ -117,7 +117,15 @@ fn pruneOrphanHubs(ctx: *cli.Ctx, ws: *const workspace.Workspace, alloc: std.mem
 
     var pruned: u32 = 0;
     for (orphans.items) |o| {
-        if (try hubHasRealFile(alloc, o.hub_path)) {
+        // An I/O error probing the hub (e.g. permission-denied subdir) must
+        // not abort the whole sync over one orphan - assume the worst
+        // (real files present), warn, and leave it for the next run rather
+        // than deleting on incomplete information or crashing outright.
+        const has_files = hubHasRealFile(alloc, o.hub_path) catch |err| {
+            try ctx.err_w.print("holt: could not check hub {s}/{s} for real files ({s}); leaving it in place, not pruning\n", .{ o.org, o.name, @errorName(err) });
+            continue;
+        };
+        if (has_files) {
             if (dry_run) {
                 try ctx.out.print("would keep hub {s}/{s} (has local files)\n", .{ o.org, o.name });
             } else {
@@ -157,7 +165,29 @@ fn hubHasRealFile(alloc: std.mem.Allocator, path: []const u8) !bool {
                 const child = try std.fs.path.join(alloc, &.{ path, entry.name });
                 if (try hubHasRealFile(alloc, child)) return true;
             },
-            else => {}, // symlinks (and any other special entry) are skipped, never followed
+            .sym_link => {}, // never followed
+            .unknown => {
+                // Some filesystems (NFS/FUSE mounts) never populate dirent
+                // d_type, so every entry - including real files - reports
+                // as `.unknown`; resolve it with an lstat-then-stat pair
+                // rather than guess, since guessing wrong here means a
+                // real file silently escapes the guard.
+                const child = try std.fs.path.join(alloc, &.{ path, entry.name });
+                switch (try fsutil.linkState(alloc, child)) {
+                    .symlink => {}, // never followed
+                    .other, .missing => {
+                        const st = std.Io.Dir.cwd().statFile(fsutil.io(), child, .{}) catch |err| switch (err) {
+                            error.FileNotFound => continue, // raced away between iterate and stat
+                            else => return err,
+                        };
+                        switch (st.kind) {
+                            .directory => if (try hubHasRealFile(alloc, child)) return true,
+                            else => return true,
+                        }
+                    },
+                }
+            },
+            else => {}, // other special entries (device nodes, etc.) are ignored, never followed
         }
     }
     return false;
@@ -365,6 +395,32 @@ test "run: an orphaned hub with no project is pruned; --dry-run only reports it"
     try testing.expect(!fsutil.exists(orphan_hub));
     // The now-empty org dir is swept too.
     try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" })));
+}
+
+test "run: an orphaned hub containing only symlinks is still pruned" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // An orphan hub holding nothing but legitimate derived symlinks (a
+    // mirror link plus a clone-symlink) - no regular file anywhere under
+    // it - must still be pruned; `hubHasRealFile` skipping symlinks must
+    // not be mistaken for "has real files".
+    const orphan_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "gone" });
+    try fsutil.ensureDir(orphan_hub);
+    try fsutil.replaceSymlink("/nowhere", try std.fs.path.join(arena, &.{ orphan_hub, "docs" }));
+    try fsutil.replaceSymlink("/nowhere-else", try std.fs.path.join(arena, &.{ orphan_hub, "code" }));
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "removed orphaned hub acme/gone") != null);
+    try testing.expect(!fsutil.exists(orphan_hub));
 }
 
 test "run: an orphaned hub holding a real local file is kept, not deleted" {
