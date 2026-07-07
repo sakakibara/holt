@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const testutil = @import("testutil.zig");
 const testing = std.testing;
 
 /// The process has no `Io` threaded down to it from `main`, so filesystem
@@ -11,6 +12,29 @@ pub fn io() std.Io {
 
 fn homeDirAlloc(alloc: std.mem.Allocator) ![]u8 {
     return std.process.Environ.getAlloc(std.Io.Threaded.global_single_threaded.environ.process_environ, alloc, "HOME");
+}
+
+/// The process temp directory: `TMPDIR` then `/tmp` on POSIX; `TEMP` then
+/// `TMP` then `C:\Windows\Temp` on Windows.
+pub fn tempDir(alloc: std.mem.Allocator) ![]const u8 {
+    const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
+    if (builtin.os.tag == .windows) {
+        if (std.process.Environ.getAlloc(environ, alloc, "TEMP")) |v| {
+            return v;
+        } else |err| switch (err) {
+            error.EnvironmentVariableMissing => {},
+            else => return err,
+        }
+        return std.process.Environ.getAlloc(environ, alloc, "TMP") catch |err| switch (err) {
+            error.EnvironmentVariableMissing => "C:\\Windows\\Temp",
+            else => return err,
+        };
+    } else {
+        return std.process.Environ.getAlloc(environ, alloc, "TMPDIR") catch |err| switch (err) {
+            error.EnvironmentVariableMissing => "/tmp",
+            else => return err,
+        };
+    }
 }
 
 /// Expands a leading "~" (home directory) or "~/rest" (home-relative path)
@@ -353,6 +377,18 @@ pub fn rmdirIfEmpty(path: []const u8) void {
         error.DirNotEmpty, error.FileNotFound => {}, // dir has projects, or already gone
         else => {}, // best-effort cleanup must never fail the command
     };
+}
+
+test "tempDir honors the platform temp env var" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const key = if (builtin.os.tag == .windows) "TEMP" else "TMPDIR";
+    const override = try testutil.EnvOverride.install(arena, key, "/some/tmp/dir");
+    defer override.restore();
+
+    try testing.expectEqualStrings("/some/tmp/dir", try tempDir(arena));
 }
 
 test "expandTilde: ~ and ~/x expand via $HOME, other paths pass through" {

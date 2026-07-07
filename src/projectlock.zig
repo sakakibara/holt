@@ -35,16 +35,13 @@ pub fn acquire(alloc: std.mem.Allocator, content_path: []const u8) !Handle {
 /// that is never part of a synced tree, so lock files are never cloud-synced.
 /// The lock dir is created if absent. Exposed for tests.
 fn lockPath(alloc: std.mem.Allocator, content_path: []const u8) ![]const u8 {
-    const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    const base = std.process.Environ.getAlloc(environ, alloc, "TMPDIR") catch |err| switch (err) {
-        error.EnvironmentVariableMissing => "/tmp",
-        else => return err,
-    };
+    const base = try fsutil.tempDir(alloc);
     const dir = try std.fs.path.join(alloc, &.{ base, "holt-locks" });
     try fsutil.ensureDir(dir);
 
     const key = std.hash.Wyhash.hash(0, content_path);
-    return std.fmt.allocPrint(alloc, "{s}/holt-{x}.lock", .{ dir, key });
+    const filename = try std.fmt.allocPrint(alloc, "holt-{x}.lock", .{key});
+    return std.fs.path.join(alloc, &.{ dir, filename });
 }
 
 test "acquire: a held lock blocks a second acquirer; releasing frees it" {
