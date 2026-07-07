@@ -25,7 +25,13 @@ pub const ReconcileReport = struct {
     retargeted: u32 = 0,
     removed: u32 = 0,
     conflicts: [][]u8 = &.{},
+    skipped_unprivileged: [][]u8 = &.{},
 };
+
+// Test seam: forces file-target link creation to report "skipped for lack of
+// privilege", so the no-privilege degrade path (unreachable on an admin CI
+// runner, where real file symlinks succeed) is exercised on any platform.
+var force_skip_file_links_for_test = false;
 
 /// Replaces every "/" in `owner` with "-" (gitlab subgroup flattening).
 /// Caller owns the returned memory.
@@ -223,6 +229,15 @@ fn sweepDir(
     }
 }
 
+/// Points `link_path` at `link.target`, threading `link.kind` through to
+/// `fsutil.replaceLink` so a directory gets a junction on Windows. Honors
+/// `force_skip_file_links_for_test` to exercise the skip path on any
+/// platform.
+fn linkOrSkip(link: Link, link_path: []const u8) !fsutil.LinkResult {
+    if (force_skip_file_links_for_test and link.kind == .file) return .skipped_unprivileged;
+    return fsutil.replaceLink(link.target, link_path, link.kind == .dir);
+}
+
 /// Idempotently reconciles the on-disk hub to `desiredLinks(ws, p)`: creates
 /// missing links, retargets links pointing at the wrong place, and sweeps
 /// away stale symlinks no longer desired. Real files/dirs blocking a desired
@@ -232,6 +247,7 @@ fn sweepDir(
 pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Project, dry_run: bool) !ReconcileReport {
     var report: ReconcileReport = .{};
     var conflicts: std.ArrayList([]u8) = .empty;
+    var skipped: std.ArrayList([]u8) = .empty;
 
     const links = try desiredLinks(alloc, ws, p);
     const code_dir_path = try std.fs.path.join(alloc, &.{ p.hub_path, "code" });
@@ -258,13 +274,23 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
         const state = try fsutil.linkState(alloc, link_path);
         switch (state) {
             .missing => {
-                report.created += 1;
-                if (!dry_run) try fsutil.replaceSymlink(link.target, link_path);
+                if (dry_run) {
+                    report.created += 1;
+                } else {
+                    const result = try linkOrSkip(link, link_path);
+                    report.created += @intFromBool(result == .created);
+                    if (result == .skipped_unprivileged) try skipped.append(alloc, try alloc.dupe(u8, link.rel));
+                }
             },
             .symlink => |current_target| {
                 if (!std.mem.eql(u8, current_target, link.target)) {
-                    report.retargeted += 1;
-                    if (!dry_run) try fsutil.replaceSymlink(link.target, link_path);
+                    if (dry_run) {
+                        report.retargeted += 1;
+                    } else {
+                        const result = try linkOrSkip(link, link_path);
+                        report.retargeted += @intFromBool(result == .created);
+                        if (result == .skipped_unprivileged) try skipped.append(alloc, try alloc.dupe(u8, link.rel));
+                    }
                 }
             },
             .other => try conflicts.append(alloc, link_path),
@@ -277,6 +303,7 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
     if (!dry_run and p.marker.repos.keys().len == 0) fsutil.rmdirIfEmpty(code_dir_path);
 
     report.conflicts = try conflicts.toOwnedSlice(alloc);
+    report.skipped_unprivileged = try skipped.toOwnedSlice(alloc);
     return report;
 }
 
@@ -668,6 +695,36 @@ test "reconcile: fresh build creates all links with correct targets" {
         ),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "reconcile: a file mirror that cannot be linked is recorded, not created, no error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const p = try testProject(arena, &ws, "acme", "widget", .empty);
+
+    // One content file whose mirror will be forced to "skip".
+    try fsutil.ensureDir(p.content_path);
+    try fsutil.writeFileAtomic(arena, try std.fs.path.join(arena, &.{ p.content_path, "notes.md" }), "hi");
+
+    force_skip_file_links_for_test = true;
+    defer force_skip_file_links_for_test = false;
+
+    const report = try reconcile(arena, &ws, &p, false);
+
+    try testing.expectEqual(@as(usize, 1), report.skipped_unprivileged.len);
+    try testing.expectEqualStrings("notes.md", report.skipped_unprivileged[0]);
+    // A skip is not a create: the file is the only desired link here.
+    try testing.expectEqual(@as(u32, 0), report.created);
+    // Not counted as created, and no link on disk.
+    const link_path = try std.fs.path.join(arena, &.{ p.hub_path, "notes.md" });
+    try testing.expect(!fsutil.exists(link_path));
 }
 
 test "reconcile: second run is idempotent (all zero)" {
