@@ -5,6 +5,7 @@
 //! env-override map is given.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 pub const RunResult = struct { status: u8, stdout: []u8, stderr: []u8 };
@@ -97,8 +98,10 @@ test "run: a nonzero exit is reflected in status, not an error" {
 test "termStatus: maps exited, signal, stopped, and unknown terms" {
     try testing.expectEqual(@as(u8, 0), termStatus(.{ .exited = 0 }));
     try testing.expectEqual(@as(u8, 42), termStatus(.{ .exited = 42 }));
-    try testing.expectEqual(@as(u8, 255), termStatus(.{ .signal = std.posix.SIG.KILL }));
-    try testing.expectEqual(@as(u8, 255), termStatus(.{ .stopped = std.posix.SIG.STOP }));
+    if (builtin.os.tag != .windows) {
+        try testing.expectEqual(@as(u8, 255), termStatus(.{ .signal = std.posix.SIG.KILL }));
+        try testing.expectEqual(@as(u8, 255), termStatus(.{ .stopped = std.posix.SIG.STOP }));
+    }
     try testing.expectEqual(@as(u8, 255), termStatus(.{ .unknown = 0 }));
 }
 
