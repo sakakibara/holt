@@ -210,7 +210,8 @@ fn sweepDir(
                 var prune = true;
                 if (prefix.len == 0) {
                     switch (try fsutil.linkState(alloc, full_path)) {
-                        .symlink => |target| prune = fsutil.pathIsInside(target, content_root) or fsutil.pathIsInside(target, code_root),
+                        .symlink => |target| prune = try fsutil.pathIsInsideNormalized(alloc, target, content_root) or
+                            try fsutil.pathIsInsideNormalized(alloc, target, code_root),
                         else => prune = false,
                     }
                 }
@@ -283,7 +284,7 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
                 }
             },
             .symlink => |current_target| {
-                if (!std.mem.eql(u8, current_target, link.target)) {
+                if (!try fsutil.targetsEqual(alloc, current_target, link.target)) {
                     if (dry_run) {
                         report.retargeted += 1;
                     } else {
@@ -747,6 +748,29 @@ test "reconcile: second run is idempotent (all zero)" {
     try testing.expectEqual(@as(u32, 0), report.retargeted);
     try testing.expectEqual(@as(u32, 0), report.removed);
     try testing.expectEqual(@as(usize, 0), report.conflicts.len);
+}
+
+test "reconcile: a second run over an already-correct hub retargets nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const p = try testProject(arena, &ws, "acme", "widget", .empty);
+
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+
+    const first = try reconcile(arena, &ws, &p, false);
+    try testing.expect(first.created > 0);
+
+    const second = try reconcile(arena, &ws, &p, false);
+    try testing.expectEqual(@as(u32, 0), second.created);
+    try testing.expectEqual(@as(u32, 0), second.retargeted);
+    try testing.expectEqual(@as(u32, 0), second.removed);
 }
 
 test "reconcile: a marker URL change retargets the existing link" {

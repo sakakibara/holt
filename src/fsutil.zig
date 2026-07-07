@@ -104,6 +104,39 @@ pub const LinkState = union(enum) {
 /// doesn't hold.
 pub const LinkResult = enum { created, skipped_unprivileged };
 
+/// A Windows junction's substitute name is stored NT-prefixed
+/// (`\??\C:\...`); strip that prefix and canonicalize `/` to `\` so a
+/// correctly-pointing junction's readback compares equal to holt's stored
+/// (Win32-form) target and `hub.reconcile` stays idempotent. Identity on
+/// POSIX, where a symlink reads back verbatim. Caller owns the returned
+/// memory on Windows; on POSIX the input is returned unchanged.
+pub fn normalizeTarget(alloc: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    if (builtin.os.tag == .windows) {
+        var s = raw;
+        if (std.mem.startsWith(u8, s, "\\??\\")) s = s["\\??\\".len..];
+        const out = try alloc.dupe(u8, s);
+        std.mem.replaceScalar(u8, out, '/', '\\');
+        return out;
+    }
+    return raw;
+}
+
+/// Compares two link targets after `normalizeTarget`, so a Windows
+/// junction's real on-disk target and holt's stored target are judged
+/// equal despite the NT-path prefix. Plain `std.mem.eql` on POSIX.
+pub fn targetsEqual(alloc: std.mem.Allocator, a: []const u8, b: []const u8) !bool {
+    return std.mem.eql(u8, try normalizeTarget(alloc, a), try normalizeTarget(alloc, b));
+}
+
+/// `pathIsInside` after `normalizeTarget` on both sides, so a Windows
+/// junction's backslash-normalized readback and a root taken verbatim from
+/// user config (which may carry forward slashes) are compared on the same
+/// separator convention. Identity-normalized on POSIX, so byte-equivalent
+/// to `pathIsInside` there.
+pub fn pathIsInsideNormalized(alloc: std.mem.Allocator, child: []const u8, parent: []const u8) !bool {
+    return pathIsInside(try normalizeTarget(alloc, child), try normalizeTarget(alloc, parent));
+}
+
 /// Inspects `path` without following a final symlink. Returns the raw
 /// (unresolved) link target when `path` is a symlink. Caller owns the
 /// returned target string.
