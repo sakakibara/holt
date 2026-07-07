@@ -546,3 +546,125 @@ test "run: a relative path argument resolves against the cwd instead of crashing
         else => return error.TestUnexpectedResult,
     }
 }
+
+test "run: standalone adopt of a repo with no remote lands under code/local" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // A local repo with NO origin.
+    const src = try std.fs.path.join(arena, &.{ sb.root, "scratch", "thing" });
+    try fsutil.ensureDir(src);
+    try testutil.runGit(&sb, src, &.{ "init", "-q" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "f" }), .data = "x\n" });
+    try testutil.runGit(&sb, src, &.{ "add", "f" });
+    try testutil.runGit(&sb, src, &.{ "commit", "-m", "c" });
+
+    const got2 = try testutil.runCmd(arena, command.run, ws, &.{src});
+    try testing.expectEqual(@as(u8, 0), got2.code);
+    const dest = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "thing" });
+    try testing.expect(fsutil.exists(dest));
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{dest}), got2.out);
+}
+
+test "run: standalone adopt of a clone already at its ghq path is a no-op" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const src = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "thing" });
+    try fsutil.ensureDir(src);
+    try testutil.runGit(&sb, src, &.{ "init", "-q" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "f" }), .data = "x\n" });
+    try testutil.runGit(&sb, src, &.{ "add", "f" });
+    try testutil.runGit(&sb, src, &.{ "commit", "-m", "c" });
+    const inode_before = (try std.Io.Dir.cwd().statFile(fsutil.io(), src, .{})).inode;
+
+    const got2 = try testutil.runCmd(arena, command.run, ws, &.{src});
+    try testing.expectEqual(@as(u8, 0), got2.code);
+    try testing.expect(std.mem.indexOf(u8, got2.err, "already there") != null);
+    try testing.expectEqual(inode_before, (try std.Io.Dir.cwd().statFile(fsutil.io(), src, .{})).inode);
+}
+
+test "run: standalone adopt refuses when the ghq destination is occupied by another clone" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin2 = "https://holt-test.invalid/acme/widget";
+
+    const id = try identity.fromUrl(arena, fake_origin2);
+    const occupied_dest = try id.clonePath(arena, ws.cfg.code_root);
+    try fsutil.ensureDir(occupied_dest);
+    try testutil.runGit(&sb, occupied_dest, &.{ "init", "-q" }); // a DIFFERENT clone already there
+
+    // Sandbox.init freezes GIT_CONFIG_GLOBAL=/dev/null into its git env
+    // snapshot, so an insteadOf rewrite via a second gitconfig is invisible
+    // to runGit; cloneWithOrigin (clone the bare repo directly, then
+    // set-url) is the only way to get a real clone with fake_origin2 set.
+    const bare2 = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare2);
+    const src = try std.fs.path.join(arena, &.{ sb.root, "checkout", "widget" });
+    try cloneWithOrigin(&sb, bare2, src, fake_origin2);
+
+    const got2 = try testutil.runCmd(arena, command.run, ws, &.{src});
+    try testing.expectEqual(@as(u8, 1), got2.code);
+    try testing.expect(std.mem.indexOf(u8, got2.err, "already exists") != null);
+    try testing.expect(fsutil.exists(src)); // source untouched
+}
+
+test "run: standalone adopt of a non-git path errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const dir = try std.fs.path.join(arena, &.{ sb.root, "plain" });
+    try fsutil.ensureDir(dir);
+
+    const got2 = try testutil.runCmd(arena, command.run, ws, &.{dir});
+    try testing.expectEqual(@as(u8, 1), got2.code);
+    try testing.expect(std.mem.indexOf(u8, got2.err, "not a readable git repository") != null);
+}
+
+test "run: standalone adopt of a dirty repo needs --force" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const src = try std.fs.path.join(arena, &.{ sb.root, "scratch", "thing" });
+    try fsutil.ensureDir(src);
+    try testutil.runGit(&sb, src, &.{ "init", "-q" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "f" }), .data = "x\n" });
+    try testutil.runGit(&sb, src, &.{ "add", "f" });
+    try testutil.runGit(&sb, src, &.{ "commit", "-m", "c" });
+    // Make it dirty: an uncommitted change.
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "f" }), .data = "changed\n" });
+
+    const refused = try testutil.runCmd(arena, command.run, ws, &.{src});
+    try testing.expectEqual(@as(u8, 1), refused.code);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "unrecoverable local state") != null);
+    try testing.expect(fsutil.exists(src)); // not moved
+
+    const forced = try testutil.runCmd(arena, command.run, ws, &.{ src, "--force" });
+    try testing.expectEqual(@as(u8, 0), forced.code);
+    const dest = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "thing" });
+    try testing.expect(fsutil.exists(dest));
+}
