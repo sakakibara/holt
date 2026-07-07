@@ -367,6 +367,36 @@ test "run: lists loose local files and skips the ignore-list" {
     try testing.expect(std.mem.indexOf(u8, got.out, ".DS_Store") == null);
 }
 
+test "run: lists a real loose file but skips a symlink entry (the keep round-trip)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(hub);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
+
+    const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    try fsutil.ensureDir(content);
+    const link_path = try std.fs.path.join(arena, &.{ hub, "docs" });
+    try fsutil.replaceSymlink(content, link_path);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "local-only") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "notes.md") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "docs") == null);
+}
+
 test "run: flags a dirty repo and an unpushed repo, a missing clone is shown, not a crash" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
