@@ -7,6 +7,7 @@
 //! missing from the table or a broken cross-command filesystem contract.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli.zig");
 const main = @import("main.zig");
 const marker = @import("marker.zig");
@@ -60,13 +61,14 @@ const EnvOverride = struct {
         try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gitconfig_path, .data = content.items });
 
         const singleton = std.Io.Threaded.global_single_threaded;
-        var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
-        try map.put("GIT_CONFIG_GLOBAL", gitconfig_path);
-        try map.put("XDG_CONFIG_HOME", xdg_config_home);
-        const block = try map.createPosixBlock(alloc, .{});
-
         const original = singleton.environ.process_environ;
-        singleton.environ.process_environ = .{ .block = block };
+        if (builtin.os.tag != .windows) {
+            var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
+            try map.put("GIT_CONFIG_GLOBAL", gitconfig_path);
+            try map.put("XDG_CONFIG_HOME", xdg_config_home);
+            const block = try map.createPosixBlock(alloc, .{});
+            singleton.environ.process_environ = .{ .block = block };
+        }
         return .{ .original = original };
     }
 

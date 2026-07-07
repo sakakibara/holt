@@ -4,6 +4,7 @@
 //! Every returned field is arena-owned; callers never free them individually.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const toml = @import("toml");
 const fsutil = @import("fsutil.zig");
 const diagnostic = @import("diag.zig");
@@ -279,12 +280,13 @@ const EnvOverride = struct {
 
     fn install(alloc: std.mem.Allocator, key: []const u8, value: []const u8) !EnvOverride {
         const singleton = std.Io.Threaded.global_single_threaded;
-        var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
-        try map.put(key, value);
-        const block = try map.createPosixBlock(alloc, .{});
-
         const original = singleton.environ.process_environ;
-        singleton.environ.process_environ = .{ .block = block };
+        if (builtin.os.tag != .windows) {
+            var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
+            try map.put(key, value);
+            const block = try map.createPosixBlock(alloc, .{});
+            singleton.environ.process_environ = .{ .block = block };
+        }
         return .{ .original = original };
     }
 
