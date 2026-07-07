@@ -11,6 +11,7 @@ const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const comp = @import("../completion.zig");
 const common = @import("common.zig");
+const project_mod = @import("../project.zig");
 const identity = @import("../identity.zig");
 const marker = @import("../marker.zig");
 const projectlock = @import("../projectlock.zig");
@@ -22,15 +23,17 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to adopt the clone into" }),
-    path: args.Pos([]const u8, .{ .complete = .files, .help = "the path to the existing clone" }),
+    // Interpreted by count in run(): two positionals -> <project> <path>;
+    // one positional -> <path> (standalone). Hence the generic roles here.
+    first: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the clone path, or the project to adopt into when a path follows" }),
+    second: args.Pos(?[]const u8, .{ .complete = .files, .help = "the clone path (when a project is given first)" }),
     force: args.Flag(.{ .short = 'f', .help = "adopt even if the clone has unrecoverable local state" }),
 };
 
 pub const command = args.command(Spec, .{
     .name = "adopt",
     .about = "Register an existing clone into a project, moving it to its identity path",
-    .usage = "holt adopt <project> <path> [--force]",
+    .usage = "holt adopt [<project>] <path> [--force]",
     .group = .create,
     .details =
     \\Example:
@@ -66,20 +69,23 @@ fn localSafetyCheck(alloc: std.mem.Allocator, repo_path: []const u8) !recover.Ve
 }
 
 fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
-    const project_query = a.project;
-    const path_arg = a.path;
+    // Two positionals -> (project, path); one -> (path), standalone.
+    const project_query: ?[]const u8 = if (a.second != null) a.first else null;
+    const path_arg: []const u8 = a.second orelse a.first;
     const force = a.force;
 
     const ws = ctx.ws.?;
     const alloc = ctx.alloc;
 
-    var p = (try common.resolveOne(ctx, project_query)) orelse return 1;
-
-    // Lock and re-read so a concurrent holt mutating this project cannot make
-    // this adopt clobber (or be clobbered by) its edit.
-    var lock = try projectlock.acquire(alloc, p.content_path);
-    defer lock.release();
-    p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
+    // Project setup (project mode only): resolve, lock, re-read the marker.
+    var p: project_mod.Project = undefined;
+    var content_lock: ?projectlock.Handle = null;
+    defer if (content_lock) |l| l.release();
+    if (project_query) |q| {
+        p = (try common.resolveOne(ctx, q)) orelse return 1;
+        content_lock = try projectlock.acquire(alloc, p.content_path);
+        p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
+    }
 
     const abs_path = try fsutil.toAbsolute(alloc, path_arg);
 
@@ -112,7 +118,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         marker_value = try std.fmt.allocPrint(alloc, "local:{s}", .{basename});
     }
 
-    if (p.marker.repos.contains(id.repo)) {
+    if (project_query != null and p.marker.repos.contains(id.repo)) {
         try ctx.err_w.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });
         return 1;
     }
@@ -152,6 +158,14 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         moved = true;
     }
 
+    // Standalone: no marker, no hub. Print the clone path (cd-friendly), like `get`.
+    if (project_query == null) {
+        try ctx.out.print("{s}\n", .{final_path});
+        try ctx.err_w.print("{s}\n", .{if (moved) "adopted (standalone)" else "already there"});
+        return 0;
+    }
+
+    // Project mode: record + reconcile, then report.
     try p.marker.repos.put(alloc, id.repo, marker_value);
     const marker_path = try p.markerPath(alloc);
     // Once the clone has been relocated, a marker or hub failure leaves the
@@ -453,6 +467,38 @@ test "run: a nonexistent path is a hard error, not a crash" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", missing_path });
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, missing_path) != null);
+}
+
+test "run: one-arg standalone adopt moves a clone to its ghq path with no marker and no hub" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin = "https://holt-test.invalid/acme/widget";
+
+    // An existing local checkout at a NON-ghq path, with origin = fake_origin.
+    const src = try std.fs.path.join(arena, &.{ sb.root, "checkout", "widget" });
+    try cloneWithOrigin(&sb, bare, src, fake_origin);
+
+    // Standalone adopt: ONE positional (the path).
+    const got = try testutil.runCmd(arena, command.run, ws, &.{src});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const id = try identity.fromUrl(arena, fake_origin);
+    const clone_path = try id.clonePath(arena, ws.cfg.code_root);
+    try testing.expect(fsutil.exists(clone_path)); // moved to ghq
+    try testing.expect(!fsutil.exists(src)); // source gone
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{clone_path}), got.out); // path on stdout
+    // Standalone: no marker, no hub.
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ clone_path, ".holt.json" })));
+    try testing.expect(!fsutil.exists(ws.cfg.synced_root));
+    try testing.expect(!fsutil.exists(ws.cfg.hub_root));
 }
 
 test "run: a relative path argument resolves against the cwd instead of crashing" {
