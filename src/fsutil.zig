@@ -39,7 +39,10 @@ pub fn tempDir(alloc: std.mem.Allocator) ![]const u8 {
 
 /// Expands a leading "~" (home directory) or "~/rest" (home-relative path)
 /// using $HOME. Any other path, absolute or relative, is duped unchanged.
-/// Caller owns the returned memory.
+/// The "~/"-relative tail is always `/`-joined (it comes from config, which
+/// is platform-agnostic); split it on `/` and rejoin so each segment nests
+/// with the platform separator rather than leaving a literal `/` embedded in
+/// a Windows path. Caller owns the returned memory.
 pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     if (!std.mem.eql(u8, path, "~") and !std.mem.startsWith(u8, path, "~/")) {
         return alloc.dupe(u8, path);
@@ -47,7 +50,12 @@ pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     const home = try homeDirAlloc(alloc);
     defer alloc.free(home);
     if (path.len == 1) return alloc.dupe(u8, home);
-    return std.fs.path.join(alloc, &.{ home, path[2..] });
+    var segs: std.ArrayList([]const u8) = .empty;
+    defer segs.deinit(alloc);
+    try segs.append(alloc, home);
+    var it = std.mem.splitScalar(u8, path[2..], '/');
+    while (it.next()) |s| if (s.len > 0) try segs.append(alloc, s);
+    return std.fs.path.join(alloc, segs.items);
 }
 
 /// Creates `dir_path` and any missing parents; succeeds if it already
