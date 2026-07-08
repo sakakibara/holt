@@ -64,7 +64,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 pub const command = args.command(Spec, .{
     .name = "list",
     .about = "List every project in the workspace",
-    .usage = "holt list [--paths] [--org <org>] [--json]",
+    .usage = "holt list [--repos] [--paths] [--org <org>] [--json]",
     .group = .navigate,
     .details =
     \\Example:
