@@ -266,6 +266,47 @@ pub fn currentBranch(alloc: std.mem.Allocator, repo: []const u8) !?[]u8 {
     return try alloc.dupe(u8, trimmed);
 }
 
+pub const RepoStatus = struct { branch: ?[]u8, dirty: bool, unpushed: Unpushed };
+
+/// Branch, working-tree dirtiness, and ahead-of-upstream from a SINGLE `git
+/// status --porcelain=v2 --branch` - the three facts `status` needs in one
+/// subprocess instead of `currentBranch`+`isDirty`+`unpushed` (three).
+/// Ceiling-pinned like `inspectable` so it never resolves a parent repo.
+/// Returns `error.NotInspectable` on a nonzero git exit (corrupt/non-repo) so
+/// the caller maps it to unreadable, preserving corrupted-repo detection.
+pub fn repoStatus(alloc: std.mem.Allocator, repo: []const u8) !RepoStatus {
+    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
+    var map = try std.process.Environ.createMap(real_env, alloc);
+    defer map.deinit();
+    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
+
+    const res = try runEnv(alloc, &.{ "git", "-C", repo, "status", "--porcelain=v2", "--branch" }, null, &map);
+    defer alloc.free(res.stdout);
+    defer alloc.free(res.stderr);
+    if (res.status != 0) return error.NotInspectable;
+
+    var branch: ?[]u8 = null;
+    var dirty = false;
+    var unpushed_state: Unpushed = .no_upstream;
+
+    var it = std.mem.splitScalar(u8, res.stdout, '\n');
+    while (it.next()) |line| {
+        if (std.mem.startsWith(u8, line, "# branch.head ")) {
+            const name = line["# branch.head ".len..];
+            if (!std.mem.eql(u8, name, "(detached)")) branch = try alloc.dupe(u8, name);
+        } else if (std.mem.startsWith(u8, line, "# branch.ab ")) {
+            const rest = line["# branch.ab ".len..];
+            const ahead_str = rest[1 .. std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len];
+            const ahead = std.fmt.parseInt(u64, ahead_str, 10) catch 0;
+            unpushed_state = if (ahead > 0) .ahead else .clean;
+        } else if (!std.mem.startsWith(u8, line, "# ") and line.len > 0) {
+            dirty = true;
+        }
+    }
+
+    return .{ .branch = branch, .dirty = dirty, .unpushed = unpushed_state };
+}
+
 const testutil = @import("testutil.zig");
 
 test "clone: populates dest from a makeBareRepo bare, checked out on main" {
@@ -448,4 +489,121 @@ test "currentBranch: returns the checked-out branch name" {
     defer if (branch) |b| testing.allocator.free(b);
     try testing.expect(branch != null);
     try testing.expectEqualStrings("main", branch.?);
+}
+
+/// Asserts `repoStatus(repo)` agrees, field for field, with what the three
+/// helpers it replaces (`currentBranch`+`isDirty`+`unpushed`) report for the
+/// same repo - the byte-identical proof the collapse-to-one-call rewrite
+/// depends on.
+fn expectRepoStatusMatchesHelperTrio(alloc: std.mem.Allocator, repo: []const u8) !void {
+    const want_branch = try currentBranch(alloc, repo);
+    defer if (want_branch) |b| alloc.free(b);
+    const want_dirty = try isDirty(alloc, repo);
+    const want_unpushed = try unpushed(alloc, repo);
+
+    const got = try repoStatus(alloc, repo);
+    defer if (got.branch) |b| alloc.free(b);
+
+    if (want_branch) |wb| {
+        try testing.expect(got.branch != null);
+        try testing.expectEqualStrings(wb, got.branch.?);
+    } else {
+        try testing.expect(got.branch == null);
+    }
+    try testing.expectEqual(want_dirty, got.dirty);
+    try testing.expectEqual(want_unpushed, got.unpushed);
+}
+
+test "repoStatus: matches currentBranch+isDirty+unpushed on a clean fresh clone" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    try expectRepoStatusMatchesHelperTrio(testing.allocator, work);
+
+    const got = try repoStatus(testing.allocator, work);
+    defer if (got.branch) |b| testing.allocator.free(b);
+    try testing.expectEqualStrings("main", got.branch.?);
+    try testing.expect(!got.dirty);
+    try testing.expectEqual(Unpushed.clean, got.unpushed);
+}
+
+test "repoStatus: matches the trio once an untracked file makes the tree dirty" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    var work_dir = try std.Io.Dir.cwd().openDir(fsutil.io(), work, .{});
+    defer work_dir.close(fsutil.io());
+    try work_dir.writeFile(fsutil.io(), .{ .sub_path = "untracked.txt", .data = "hi\n" });
+
+    try expectRepoStatusMatchesHelperTrio(testing.allocator, work);
+
+    const got = try repoStatus(testing.allocator, work);
+    defer if (got.branch) |b| testing.allocator.free(b);
+    try testing.expect(got.dirty);
+}
+
+test "repoStatus: matches the trio once a local commit is ahead of upstream" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    var work_dir = try std.Io.Dir.cwd().openDir(fsutil.io(), work, .{});
+    defer work_dir.close(fsutil.io());
+    try work_dir.writeFile(fsutil.io(), .{ .sub_path = "README", .data = "changed\n" });
+    try testutil.runGit(&sb, work, &.{ "commit", "-am", "local change" });
+
+    try expectRepoStatusMatchesHelperTrio(testing.allocator, work);
+
+    const got = try repoStatus(testing.allocator, work);
+    defer if (got.branch) |b| testing.allocator.free(b);
+    try testing.expectEqual(Unpushed.ahead, got.unpushed);
+}
+
+test "repoStatus: matches the trio on a detached HEAD (branch null, no_upstream)" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    try testutil.runGit(&sb, work, &.{ "checkout", "--detach", "HEAD" });
+
+    try expectRepoStatusMatchesHelperTrio(testing.allocator, work);
+
+    const got = try repoStatus(testing.allocator, work);
+    defer if (got.branch) |b| testing.allocator.free(b);
+    try testing.expect(got.branch == null);
+    try testing.expectEqual(Unpushed.no_upstream, got.unpushed);
+}
+
+test "repoStatus: errors on a corrupted .git, so the caller can map it to unreadable" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    const head_path = try std.fs.path.join(testing.allocator, &.{ work, ".git", "HEAD" });
+    defer testing.allocator.free(head_path);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
+
+    try testing.expectError(error.NotInspectable, repoStatus(testing.allocator, work));
 }
