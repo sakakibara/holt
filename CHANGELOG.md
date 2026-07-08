@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The Windows PowerShell installer preserves expandable (`%VAR%`) entries when
+  adding its directory to the user `PATH`, and renames an existing `holt.exe`
+  aside so a reinstall over a running copy succeeds.
+- `holt upgrade` stages its download under the platform temp directory
+  (`%TEMP%` on Windows) rather than `/tmp`.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added
