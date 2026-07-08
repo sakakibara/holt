@@ -115,7 +115,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
-    extractArchive(alloc, archive_path, tmp_dir, is_zip) catch {
+    extractArchive(archive_path, tmp_dir, is_zip) catch {
         try ctx.err_w.writeAll("holt: extract failed\n");
         return 1;
     };
@@ -124,13 +124,6 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     if (!fsutil.exists(extracted_bin)) {
         try ctx.err_w.writeAll("holt: extracted archive did not contain a holt binary\n");
         return 1;
-    }
-
-    if (builtin.os.tag == .windows) {
-        // A `.old` can be left behind when a prior upgrade's own process was
-        // still running at replace time; reap it here so it never accumulates.
-        const old = try std.fmt.allocPrint(alloc, "{s}.old", .{target_path});
-        std.Io.Dir.deleteFileAbsolute(fsutil.io(), old) catch {};
     }
 
     try replaceBinary(alloc, target_path, extracted_bin);
@@ -235,8 +228,7 @@ pub fn assetBinaryName(os_tag: std.Target.Os.Tag) []const u8 {
 /// Extracts `archive_path` into `dest_dir` in process. A `.zip` (Windows) via
 /// `std.zip`; a `.tar.gz` (unix) via gzip-decompress + `std.tar`. Replaces the
 /// prior external `tar -xzf`, so holt no longer depends on a `tar` binary.
-fn extractArchive(alloc: std.mem.Allocator, archive_path: []const u8, dest_dir: []const u8, is_zip: bool) !void {
-    _ = alloc;
+fn extractArchive(archive_path: []const u8, dest_dir: []const u8, is_zip: bool) !void {
     const io = fsutil.io();
     var dest = try std.Io.Dir.openDirAbsolute(io, dest_dir, .{});
     defer dest.close(io);
@@ -413,7 +405,7 @@ test "extractArchive: unpacks a gzip tar into the destination" {
 
     const dest = try std.fs.path.join(arena, &.{ root, "dest" });
     try fsutil.ensureDir(dest);
-    try extractArchive(arena, archive, dest, false);
+    try extractArchive(archive, dest, false);
 
     const out = try std.fs.path.join(arena, &.{ dest, "holt" });
     try testing.expectEqualStrings("BINARY", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), out, arena, .unlimited));
