@@ -202,12 +202,14 @@ fn versionsEqual(current: []const u8, tag: []const u8) bool {
 
 pub const AssetNameError = error{UnsupportedPlatform} || std.mem.Allocator.Error;
 
-/// Names the release tarball for `os_tag`/`arch`, e.g. "holt-macos-aarch64.tar.gz".
-/// Any platform outside the four combos holt ships for is `error.UnsupportedPlatform`.
+/// Names the release asset for `os_tag`/`arch`: `holt-windows-<arch>.zip` on
+/// Windows, `holt-<os>-<arch>.tar.gz` on macOS/Linux. Any platform outside
+/// the combos holt ships for is `error.UnsupportedPlatform`.
 pub fn assetName(alloc: std.mem.Allocator, os_tag: std.Target.Os.Tag, arch: std.Target.Cpu.Arch) AssetNameError![]const u8 {
     const os_name: []const u8 = switch (os_tag) {
         .macos => "macos",
         .linux => "linux",
+        .windows => "windows",
         else => return error.UnsupportedPlatform,
     };
     const arch_name: []const u8 = switch (arch) {
@@ -215,7 +217,14 @@ pub fn assetName(alloc: std.mem.Allocator, os_tag: std.Target.Os.Tag, arch: std.
         .x86_64 => "x86_64",
         else => return error.UnsupportedPlatform,
     };
-    return std.fmt.allocPrint(alloc, "holt-{s}-{s}.tar.gz", .{ os_name, arch_name });
+    const ext: []const u8 = if (os_tag == .windows) "zip" else "tar.gz";
+    return std.fmt.allocPrint(alloc, "holt-{s}-{s}.{s}", .{ os_name, arch_name, ext });
+}
+
+/// The binary's name inside the release archive: `holt.exe` on Windows,
+/// `holt` elsewhere.
+pub fn assetBinaryName(os_tag: std.Target.Os.Tag) []const u8 {
+    return if (os_tag == .windows) "holt.exe" else "holt";
 }
 
 /// `<base>/<tag>/<asset>`, the GitHub release-asset download URL layout.
@@ -313,7 +322,25 @@ test "assetName: the four supported os/arch combos name the right tarball, anyth
     try testing.expectEqualStrings("holt-macos-x86_64.tar.gz", try assetName(arena, .macos, .x86_64));
     try testing.expectEqualStrings("holt-linux-aarch64.tar.gz", try assetName(arena, .linux, .aarch64));
     try testing.expectEqualStrings("holt-linux-x86_64.tar.gz", try assetName(arena, .linux, .x86_64));
-    try testing.expectError(error.UnsupportedPlatform, assetName(arena, .windows, .x86_64));
+    try testing.expectError(error.UnsupportedPlatform, assetName(arena, .freebsd, .x86_64));
+    try testing.expectError(error.UnsupportedPlatform, assetName(arena, .linux, .riscv64));
+}
+
+test "assetName: windows is a .zip, unix is a .tar.gz" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try testing.expectEqualStrings("holt-windows-x86_64.zip", try assetName(arena, .windows, .x86_64));
+    try testing.expectEqualStrings("holt-windows-aarch64.zip", try assetName(arena, .windows, .aarch64));
+    try testing.expectEqualStrings("holt-macos-aarch64.tar.gz", try assetName(arena, .macos, .aarch64));
+    try testing.expectEqualStrings("holt-linux-x86_64.tar.gz", try assetName(arena, .linux, .x86_64));
+}
+
+test "assetBinaryName: holt.exe on windows, holt elsewhere" {
+    try testing.expectEqualStrings("holt.exe", assetBinaryName(.windows));
+    try testing.expectEqualStrings("holt", assetBinaryName(.macos));
+    try testing.expectEqualStrings("holt", assetBinaryName(.linux));
 }
 
 test "downloadUrl: joins base, tag, and asset with slashes" {
