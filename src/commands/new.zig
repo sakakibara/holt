@@ -19,7 +19,7 @@ const testutil = @import("../testutil.zig");
 
 const Spec = struct {
     org_name: args.Pos([]const u8, .{ .complete = comp.cat(.org), .help = "the org/name to create" }),
-    url: args.Pos(?[]const u8, .{ .help = "a repo url to clone as the project's first member" }),
+    url: args.Pos(?[]const u8, .{ .complete = .files, .help = "a repo url to clone as the project's first member" }),
 };
 
 pub const command = args.command(Spec, .{

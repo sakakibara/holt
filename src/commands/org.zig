@@ -22,7 +22,7 @@ const hub = @import("../hub.zig");
 
 const RenameSpec = struct {
     old_org: args.Pos([]const u8, .{ .complete = comp.cat(.org), .help = "the org to rename" }),
-    new_org: args.Pos([]const u8, .{ .help = "the new org name (may already exist, if no project name collides)" }),
+    new_org: args.Pos([]const u8, .{ .complete = comp.cat(.org), .help = "the new org name (may already exist, if no project name collides)" }),
     yes: args.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
 };
 

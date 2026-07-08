@@ -15,7 +15,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    url: args.Pos([]const u8, .{ .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
+    url: args.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
     update: args.Flag(.{ .short = 'u', .help = "fast-forward an existing clone instead of re-cloning" }),
 };
 

@@ -127,3 +127,63 @@ test {
     _ = @import("commands/worktree.zig");
     _ = @import("integration_test.zig");
 }
+
+const CoverageAllow = struct { cmd: []const u8, field: []const u8 };
+
+fn coverageAllowed(allow: []const CoverageAllow, cmd: []const u8, field: []const u8) bool {
+    for (allow) |a| {
+        if (std.mem.eql(u8, a.cmd, cmd) and std.mem.eql(u8, a.field, field)) return true;
+    }
+    return false;
+}
+
+/// Checks one command's own positionals and value-flags (not its
+/// subcommands - the caller walks those separately) against the allowlist,
+/// appending a description of each uncovered slot to `gaps`.
+fn coverageCheckCommand(alloc: std.mem.Allocator, command: cli.Command, allow: []const CoverageAllow, gaps: *std.ArrayList([]const u8)) !void {
+    for (command.args) |a| {
+        if (a.variadic) continue;
+        if (a.complete != .none) continue;
+        if (coverageAllowed(allow, command.name, a.name)) continue;
+        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s}.{s} (positional, no completion)", .{ command.name, a.name }));
+    }
+    for (command.flags) |f| {
+        if (!f.takes_value) continue;
+        if (f.value != .none) continue;
+        if (coverageAllowed(allow, command.name, f.long)) continue;
+        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s} --{s} (value flag, no completion)", .{ command.name, f.long }));
+    }
+}
+
+test "coverage: every command positional and value-flag completes or is allowlisted" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Intentionally free-form or numeric slots with no candidate set to
+    // complete against - honest gaps, not oversights.
+    const allow = [_]CoverageAllow{
+        .{ .cmd = "alias", .field = "name" }, // a new alias is invented
+        .{ .cmd = "rename", .field = "new_name" }, // a new name is invented
+        .{ .cmd = "upgrade", .field = "version" }, // free-form version string
+        .{ .cmd = "status", .field = "jobs" }, // numeric concurrency count
+        .{ .cmd = "recent", .field = "count" }, // numeric result count
+        .{ .cmd = "recent", .field = "jobs" }, // numeric concurrency count
+        .{ .cmd = "restore", .field = "jobs" }, // numeric concurrency count
+        .{ .cmd = "doctor", .field = "jobs" }, // numeric concurrency count
+        .{ .cmd = "run", .field = "jobs" }, // numeric concurrency count
+    };
+
+    var gaps: std.ArrayList([]const u8) = .empty;
+
+    for (command_table) |c| {
+        try coverageCheckCommand(arena, c, &allow, &gaps);
+        for (c.subcommands) |sub| try coverageCheckCommand(arena, sub, &allow, &gaps);
+    }
+
+    if (gaps.items.len > 0) {
+        std.debug.print("uncovered completion fields ({d}):\n", .{gaps.items.len});
+        for (gaps.items) |g| std.debug.print("  {s}\n", .{g});
+        return error.UncoveredField;
+    }
+}

@@ -19,7 +19,7 @@ const testutil = @import("../testutil.zig");
 
 const Spec = struct {
     project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to add the repo to" }),
-    url: args.Pos([]const u8, .{ .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
+    url: args.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
 };
 
 pub const command = args.command(Spec, .{
