@@ -128,6 +128,17 @@ pub fn realPathOrSelf(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = std.Io.Dir.realPathFileAbsolute(io(), path, &buf) catch |err| switch (err) {
         error.FileNotFound => return alloc.dupe(u8, path),
+        // Windows opens `path` through a non-directory handle here, which
+        // NT refuses for a directory; re-resolve through a directory handle
+        // instead, which still yields the symlink-free canonical path.
+        // Never fires on POSIX, where a directory resolves through the
+        // call above just fine.
+        error.IsDir => {
+            var dir = try std.Io.Dir.openDirAbsolute(io(), path, .{});
+            defer dir.close(io());
+            const dn = try dir.realPath(io(), &buf);
+            return alloc.dupe(u8, buf[0..dn]);
+        },
         else => return err,
     };
     return alloc.dupe(u8, buf[0..n]);
