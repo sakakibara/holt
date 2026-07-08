@@ -1,5 +1,10 @@
 const std = @import("std");
 const cli = @import("cli.zig");
+const completion = @import("completion.zig");
+const testutil = @import("testutil.zig");
+const marker = @import("marker.zig");
+const workspace = @import("workspace.zig");
+const testing = std.testing;
 const version_cmd = @import("commands/version.zig");
 const init_cmd = @import("commands/init.zig");
 const setup_cmd = @import("commands/setup.zig");
@@ -186,4 +191,117 @@ test "coverage: every command positional and value-flag completes or is allowlis
         for (gaps.items) |g| std.debug.print("  {s}\n", .{g});
         return error.UncoveredField;
     }
+}
+
+fn containsCandidate(candidates: []const completion.Candidate, value: []const u8) bool {
+    for (candidates) |c| {
+        if (std.mem.eql(u8, c.value, value)) return true;
+    }
+    return false;
+}
+
+fn findCandidate(candidates: []const completion.Candidate, value: []const u8) ?completion.Candidate {
+    for (candidates) |c| {
+        if (std.mem.eql(u8, c.value, value)) return c;
+    }
+    return null;
+}
+
+/// Seeds `ws` with a multi-project, multi-org fixture reused across the
+/// integration tests below: an org with a repo-less project ("acme/widget"),
+/// an org with a project carrying both a remote and a `local:` repo
+/// ("acme/proj"), and an org that only exists in the archive ("gone/old").
+fn seedCompletionFixture(alloc: std.mem.Allocator, ws: *const workspace.Workspace) !void {
+    try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "widget", .{ .version = marker.marker_version, .org = "acme", .name = "widget", .repos = .empty });
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(alloc, "backend", "https://example.com/acme/backend.git");
+    try repos.put(alloc, "tool", "local:tool");
+    try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "proj", .{ .version = marker.marker_version, .org = "acme", .name = "proj", .repos = repos });
+
+    try testutil.writeMarker(alloc, try ws.archiveRoot(alloc), "gone", "old", .{ .version = marker.marker_version, .org = "gone", .name = "old", .repos = .empty });
+}
+
+test "integration: bare command and subcommand-group completion against the real command_table" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    const ws_ptr: ?*const workspace.Workspace = &ws;
+    try seedCompletionFixture(arena, &ws);
+
+    // A bare command name completes off the real 31-entry table, with or
+    // without a workspace - command names never need one.
+    const bare = try completion.compute(arena, &command_table, &.{"inf"}, ws_ptr);
+    try testing.expect(containsCandidate(bare.candidates, "info"));
+    const bare_no_ws = try completion.compute(arena, &command_table, &.{"inf"}, null);
+    try testing.expect(containsCandidate(bare_no_ws.candidates, "info"));
+
+    // Subcommand groups: `org` and `config` each offer their real sub-names.
+    const org_subs = try completion.compute(arena, &command_table, &.{ "org", "" }, ws_ptr);
+    try testing.expect(containsCandidate(org_subs.candidates, "rename"));
+    const config_subs = try completion.compute(arena, &command_table, &.{ "config", "" }, ws_ptr);
+    try testing.expect(containsCandidate(config_subs.candidates, "edit"));
+
+    // A subcommand's own positional (`org rename <old_org>`) resolves an
+    // `org` category, archive-inclusive: "gone" only exists in the archive.
+    const org_rename_old = try completion.compute(arena, &command_table, &.{ "org", "rename", "" }, ws_ptr);
+    try testing.expect(containsCandidate(org_rename_old.candidates, "acme/"));
+    try testing.expect(containsCandidate(org_rename_old.candidates, "gone/"));
+}
+
+test "integration: project/repo/backend_seed categories carry real descriptions" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    const ws_ptr: ?*const workspace.Workspace = &ws;
+    try seedCompletionFixture(arena, &ws);
+
+    // `info`'s project positional carries the project's org as description.
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try completion.reply(arena, &command_table, &.{ "info", "wid" }, ws_ptr, &out.writer);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "widget\tacme") != null);
+
+    // `rm`'s second positional (repo) resolves off the first (project) and
+    // carries each repo's clone-state description - no git involved.
+    const repo_got = try completion.compute(arena, &command_table, &.{ "rm", "acme/proj", "" }, ws_ptr);
+    const backend_cand = findCandidate(repo_got.candidates, "backend") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("missing", backend_cand.description.?);
+    const tool_cand = findCandidate(repo_got.candidates, "tool") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("local", tool_cand.description.?);
+
+    // `setup --backend` lists the builtin seeds even with a null workspace
+    // (the fresh-install path, before config.toml exists).
+    const seed_got = try completion.compute(arena, &command_table, &.{ "setup", "--backend", "" }, null);
+    const dropbox_cand = findCandidate(seed_got.candidates, "dropbox") orelse return error.TestUnexpectedResult;
+    try testing.expect(dropbox_cand.description != null);
+
+    // `run --repo` completes off the preceding project positional.
+    const run_got = try completion.compute(arena, &command_table, &.{ "run", "acme/proj", "--repo", "back" }, ws_ptr);
+    try testing.expect(containsCandidate(run_got.candidates, "backend"));
+
+    // A glued `--org=<partial>` on `list` completes the flag's value.
+    const list_got = try completion.compute(arena, &command_table, &.{ "list", "--org=ac" }, ws_ptr);
+    try testing.expect(containsCandidate(list_got.candidates, "acme/"));
+}
+
+test "integration: a broken (null) workspace still replies with the directive line and no candidates" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try completion.reply(arena, &command_table, &.{ "info", "wid" }, null, &out.writer);
+    try testing.expectEqualStrings("default\n", out.written());
 }
