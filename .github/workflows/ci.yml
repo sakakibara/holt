@@ -114,3 +114,20 @@ jobs:
       - name: zig build test
         shell: bash
         run: zig build test --summary all
+
+  # install.ps1 can't run end-to-end without a published Windows release, so
+  # parse-check it on every push instead.
+  install-script:
+    name: install.ps1 parse-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: parse-check install.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/install.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host 'install.ps1 parses cleanly'

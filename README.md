@@ -97,6 +97,17 @@ Prefer a manual install? Grab the tarball for your platform from the
 build from source with Zig 0.16 (`zig build`, binary at `zig-out/bin/holt`).
 Either way, `holt upgrade` self-updates afterward.
 
+On Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/sakakibara/holt/main/scripts/install.ps1 | iex
+```
+
+Installs the latest release to `%LOCALAPPDATA%\holt\bin` and adds it to your
+user `PATH`. Pin a version or change the location by setting `$env:HOLT_VERSION`
+/ `$env:HOLT_INSTALL_DIR` before the pipe. The manual download is
+`holt-windows-{aarch64,x86_64}.zip` from the latest release.
+
 ## Quick start
 
 ```sh
