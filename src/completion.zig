@@ -122,10 +122,14 @@ fn resolve(alloc: std.mem.Allocator, spec: cli.Complete, cur: []const u8, prev: 
         .files => return .{ .directive = .files, .candidates = &.{} },
         .choices => |cs| return .{ .directive = .default, .candidates = try filterPrefix(alloc, try plain(alloc, cs), cur) },
         .dynamic => |key| {
-            // A path-shaped word on a project slot (bare `adopt <path>`, whose
-            // first positional is a project category in the general schema)
-            // completes filesystem paths instead of filtering project names.
-            if ((std.mem.eql(u8, key, "project") or std.mem.eql(u8, key, "project_repo")) and isPathShaped(cur)) {
+            // A path-shaped word on the `.project` slot (`adopt`'s first
+            // positional, a project OR a standalone clone path) completes
+            // filesystem paths instead of filtering project names. No
+            // `.project_repo` selector ever takes a bare path, so it must
+            // stay out of this guard - otherwise a `<project>/<repo>@<branch>`
+            // selector with 2+ slashes gets routed here before the '@'-branch
+            // handler below ever sees it.
+            if (std.mem.eql(u8, key, "project") and isPathShaped(cur)) {
                 return .{ .directive = .files, .candidates = &.{} };
             }
             // A `<project>/<repo>@<branch>` selector (for `h`/`holt path`)
@@ -780,6 +784,47 @@ test "resolve: a path-shaped current word falls back to file completion for a pr
         if (std.mem.eql(u8, c.value, "acme/widget")) found_qualified = true;
     }
     try testing.expect(found_qualified);
+}
+
+test "resolve: a multi-slash project_repo `@branch` selector reaches the worktree-branch handler, not the path fallback" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "backend", "https://holt-test.invalid/proj/backend");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const table = [_]cli.Command{.{
+        .name = "path",
+        .summary = "",
+        .usage = "",
+        .group = .maintain,
+        .args = &.{.{ .name = "query", .complete = cat(.project_repo) }},
+        .needs_workspace = true,
+        .run = struct {
+            fn run(_: *cli.Ctx) anyerror!u8 {
+                return 0;
+            }
+        }.run,
+    }};
+
+    // A project_repo `@branch` selector with 2+ slashes must reach the worktree
+    // branch handler, not the path-shape fallback (regression: isPathShaped's
+    // slash-count once shadowed this).
+    const got = try compute(arena, &table, &.{ "path", "proj/backend@feature/x" }, &ws);
+    try testing.expectEqual(Directive.default, got.directive); // routed to the @-handler, not file completion
+
+    // A qualified `org/project/repo@branch` selector (also 2+ slashes) must
+    // reach the same handler.
+    const qualified_got = try compute(arena, &table, &.{ "path", "acme/proj/backend@main" }, &ws);
+    try testing.expectEqual(Directive.default, qualified_got.directive);
 }
 
 test "computeFor: --org=<partial> completes the flag value" {
