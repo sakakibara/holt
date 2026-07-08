@@ -121,6 +121,12 @@ fn resolve(alloc: std.mem.Allocator, spec: cli.Complete, cur: []const u8, prev: 
         .files => return .{ .directive = .files, .candidates = &.{} },
         .choices => |cs| return .{ .directive = .default, .candidates = try filterPrefix(alloc, try plain(alloc, cs), cur) },
         .dynamic => |key| {
+            // A path-shaped word on a project slot (bare `adopt <path>`, whose
+            // first positional is a project category in the general schema)
+            // completes filesystem paths instead of filtering project names.
+            if ((std.mem.eql(u8, key, "project") or std.mem.eql(u8, key, "project_repo")) and isPathShaped(cur)) {
+                return .{ .directive = .files, .candidates = &.{} };
+            }
             // A `<project>/<repo>@<branch>` selector (for `h`/`holt path`)
             // completes the repo's worktree branches after the '@'.
             if (std.mem.eql(u8, key, "project_repo")) {
@@ -134,6 +140,20 @@ fn resolve(alloc: std.mem.Allocator, spec: cli.Complete, cur: []const u8, prev: 
             return .{ .directive = directive, .candidates = try filterPrefix(alloc, all, cur) };
         },
     }
+}
+
+/// Whether `cur` looks like a filesystem path rather than an `org/name`
+/// project query: a leading `./`, `/`, or `~`, a Windows drive letter
+/// (`X:`), or more than one `/` (an `org/name` selector has exactly one).
+fn isPathShaped(cur: []const u8) bool {
+    if (cur.len == 0) return false;
+    if (cur[0] == '/' or cur[0] == '~' or cur[0] == '.') return true;
+    if (cur.len >= 2 and std.ascii.isAlphabetic(cur[0]) and cur[1] == ':') return true;
+    var slashes: usize = 0;
+    for (cur) |c| {
+        if (c == '/') slashes += 1;
+    }
+    return slashes > 1;
 }
 
 /// The declared value-flag that `tok` names when it is a bare `--long`/`-s`
@@ -565,6 +585,60 @@ test "computeFor: run --repo completes off the preceding project positional" {
     const got = try compute(arena, &table, &.{ "run", "widget", "--repo", "back" }, &ws);
     try testing.expectEqual(@as(usize, 1), got.candidates.len);
     try testing.expectEqualStrings("backend", got.candidates[0].value);
+}
+
+test "resolve: a path-shaped current word falls back to file completion for a project slot" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const table = [_]cli.Command{.{
+        .name = "adopt",
+        .summary = "",
+        .usage = "",
+        .group = .maintain,
+        .args = &.{.{ .name = "project", .complete = cat(.project) }},
+        .needs_workspace = true,
+        .run = struct {
+            fn run(_: *cli.Ctx) anyerror!u8 {
+                return 0;
+            }
+        }.run,
+    }};
+
+    // A path-shaped word (standalone `adopt <path>`) falls back to file
+    // completion instead of filtering project names.
+    const path_got = try compute(arena, &table, &.{ "adopt", "./checkouts/wi" }, &ws);
+    try testing.expectEqual(Directive.files, path_got.directive);
+    try testing.expectEqual(@as(usize, 0), path_got.candidates.len);
+
+    // A bare project query is unaffected: still completes project names.
+    const proj_got = try compute(arena, &table, &.{ "adopt", "wid" }, &ws);
+    try testing.expectEqual(Directive.default, proj_got.directive);
+    try testing.expect(proj_got.candidates.len > 0);
+    var found_widget = false;
+    for (proj_got.candidates) |c| {
+        if (std.mem.eql(u8, c.value, "widget")) found_widget = true;
+    }
+    try testing.expect(found_widget);
+
+    // An `org/name` query (a single slash, no leading ./~/) also stays a
+    // project completion, not a path fallback.
+    const org_name_got = try compute(arena, &table, &.{ "adopt", "acme/wid" }, &ws);
+    try testing.expectEqual(Directive.default, org_name_got.directive);
+    var found_qualified = false;
+    for (org_name_got.candidates) |c| {
+        if (std.mem.eql(u8, c.value, "acme/widget")) found_qualified = true;
+    }
+    try testing.expect(found_qualified);
 }
 
 test "computeFor: --org=<partial> completes the flag value" {
