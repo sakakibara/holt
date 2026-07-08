@@ -217,7 +217,7 @@ fn sweepDir(
                 }
                 if (prune) {
                     report.removed += 1;
-                    if (!dry_run) try std.Io.Dir.cwd().deleteFile(fsutil.io(), full_path);
+                    if (!dry_run) try fsutil.removePath(full_path);
                 }
             },
             else => {
@@ -336,7 +336,7 @@ pub fn removeHub(p: *const Project) !void {
         var code_dir = code_dir_const;
         var it = code_dir.iterate();
         while (try it.next(fsutil.io())) |entry| {
-            if (entry.kind == .sym_link) try code_dir.deleteFile(fsutil.io(), entry.name);
+            if (entry.kind == .sym_link) try fsutil.removeEntry(code_dir, entry.name);
         }
         code_dir.close(fsutil.io());
     } else |err| switch (err) {
@@ -350,7 +350,7 @@ pub fn removeHub(p: *const Project) !void {
 
     var it = hub_dir.iterate();
     while (try it.next(fsutil.io())) |entry| {
-        if (entry.kind == .sym_link) try hub_dir.deleteFile(fsutil.io(), entry.name);
+        if (entry.kind == .sym_link) try fsutil.removeEntry(hub_dir, entry.name);
     }
     hub_dir.close(fsutil.io());
 

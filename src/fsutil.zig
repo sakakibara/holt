@@ -201,6 +201,29 @@ pub fn linkState(alloc: std.mem.Allocator, path: []const u8) !LinkState {
     return .{ .symlink = try alloc.dupe(u8, buf[0..n]) };
 }
 
+/// Removes whatever is at `sub_path` under `dir` - a file, a symlink, or a
+/// directory/junction. On Windows a junction is a directory reparse point,
+/// which `deleteFile` refuses with `error.IsDir`; falls back to `deleteDir`,
+/// which opens DIRECTORY_FILE + OPEN_REPARSE_POINT and removes the reparse
+/// point itself, not the target's contents. On POSIX, `deleteFile` on a
+/// symlink never yields `error.IsDir`, so that fallback is dead there. Absent
+/// is success.
+pub fn removeEntry(dir: std.Io.Dir, sub_path: []const u8) !void {
+    dir.deleteFile(io(), sub_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        error.IsDir => dir.deleteDir(io(), sub_path) catch |e2| switch (e2) {
+            error.FileNotFound => {},
+            else => return e2,
+        },
+        else => return err,
+    };
+}
+
+/// `removeEntry` against an absolute path, relative to the process cwd.
+pub fn removePath(path: []const u8) !void {
+    return removeEntry(std.Io.Dir.cwd(), path);
+}
+
 /// Points `link_path` at `target`, replacing any existing link (or file) at
 /// that path first. Not atomic: a crash between the remove and the create
 /// can leave `link_path` absent.
@@ -223,19 +246,9 @@ pub fn replaceSymlink(target: []const u8, link_path: []const u8) !void {
 pub fn replaceLink(target: []const u8, link_path: []const u8, is_dir: bool) !LinkResult {
     const cwd = std.Io.Dir.cwd();
     // A Windows directory junction (or a kind-flip from a prior file link)
-    // is a directory reparse point: deleteFile opens it NON_DIRECTORY_FILE
-    // and NT returns error.IsDir, so fall back to deleteDir, which opens
-    // DIRECTORY_FILE + OPEN_REPARSE_POINT and removes the reparse point
-    // itself, not the target's contents. On POSIX, deleteFile on a symlink
-    // never yields IsDir, so this arm is dead there.
-    cwd.deleteFile(io(), link_path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        error.IsDir => cwd.deleteDir(io(), link_path) catch |e2| switch (e2) {
-            error.FileNotFound => {},
-            else => return e2,
-        },
-        else => return err,
-    };
+    // is a directory reparse point that plain deleteFile refuses; removePath
+    // falls back to deleteDir for that case.
+    try removePath(link_path);
     if (builtin.os.tag != .windows) {
         try cwd.symLink(io(), target, link_path, .{});
         return .created;
