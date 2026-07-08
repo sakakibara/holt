@@ -127,7 +127,7 @@ test "run: with no argument, prints the three roots, the active backend, and the
         \\[backends.dropbox]
         \\synced_root = "{s}"
         \\
-    , .{ code_root, hub_root, synced_root });
+    , .{ try config.tomlEscape(arena, code_root), try config.tomlEscape(arena, hub_root), try config.tomlEscape(arena, synced_root) });
     const path = try writeConfigFile(arena, root, content);
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
@@ -157,7 +157,7 @@ test "run: with no argument in direct mode, the backend line reads (direct synce
         \\[workspace]
         \\synced_root = "{s}"
         \\
-    , .{synced_root});
+    , .{try config.tomlEscape(arena, synced_root)});
     _ = try writeConfigFile(arena, root, content);
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
