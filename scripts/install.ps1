@@ -53,11 +53,25 @@ try {
   if ($installed) { Write-Host "Installed $installed to $InstallDir\$Bin" }
   else { Write-Host "Installed holt to $InstallDir\$Bin" }
 
-  # Add InstallDir to the USER PATH (idempotent), never the system PATH.
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  if (($userPath -split ';') -notcontains $InstallDir) {
-    $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+  # Add InstallDir to the USER PATH (idempotent), preserving REG_EXPAND_SZ so
+  # existing %VAR% entries are not flattened to literal paths.
+  $key = 'HKCU:\Environment'
+  $raw = (Get-Item -Path $key).GetValue(
+    'Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+  if (($raw -split ';' | Where-Object { $_ }) -notcontains $InstallDir) {
+    $newPath = if ($raw) { "$raw;$InstallDir" } else { $InstallDir }
+    Set-ItemProperty -Path $key -Name Path -Value $newPath -Type ExpandString
+    # Set-ItemProperty does not broadcast; tell running Explorer/shells to reload
+    # the environment so a NEW shell sees the change without a logoff.
+    if (-not ([System.Management.Automation.PSTypeName]'HoltNative.Win32').Type) {
+      Add-Type -Namespace HoltNative -Name Win32 -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Auto)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);
+'@
+    }
+    $HWND_BROADCAST = [System.IntPtr]0xffff; $WM_SETTINGCHANGE = 0x1a; $SMTO_ABORTIFHUNG = 0x2
+    [System.UIntPtr]$res = [System.UIntPtr]::Zero
+    [void][HoltNative.Win32]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [System.IntPtr]::Zero, 'Environment', $SMTO_ABORTIFHUNG, 5000, [ref]$res)
     Write-Host "Added $InstallDir to your user PATH. Restart your shell for it to take effect."
   }
   Write-Host "Then run 'holt setup' to get started."
