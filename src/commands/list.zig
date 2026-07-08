@@ -15,14 +15,29 @@ const Spec = struct {
     paths: args.Flag(.{ .help = "show each project's hub path instead of just its name" }),
     org: args.Opt([]const u8, .{ .value_name = "org", .complete = comp.cat(.org), .help = "only list projects under this org" }),
     json: args.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --paths)" }),
+    repos: args.Flag(.{ .help = "list every clone in the code tree instead of projects" }),
 };
 
 fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+    const ws = ctx.ws.?;
+
+    if (a.repos) {
+        const clones = try ws.listClones(ctx.alloc);
+        if (a.json) {
+            var items: std.ArrayList(json.Value) = .empty;
+            for (clones) |c| try items.append(ctx.alloc, .{ .string = c });
+            try json.encode(ctx.out, .{ .array = try items.toOwnedSlice(ctx.alloc) }, .{});
+            try ctx.out.writeByte('\n');
+            return 0;
+        }
+        for (clones) |c| try ctx.out.print("{s}\n", .{c});
+        return 0;
+    }
+
     const with_paths = a.paths;
     const json_flag = a.json;
     const org_filter = a.org;
 
-    const ws = ctx.ws.?;
     const all = try ws.list(ctx.alloc);
 
     if (json_flag) return runJson(ctx, all, org_filter);
@@ -200,6 +215,41 @@ test "run: --json emits a parseable array with the right orgs, names, and repos"
     try testing.expectEqualStrings("widget-repo", parsed[0].repos[0]);
     try testing.expectEqualStrings("zebra", parsed[1].org);
     try testing.expectEqual(@as(usize, 0), parsed[1].repos.len);
+}
+
+test "list --repos: prints the sorted absolute clone paths" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"--repos"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox" });
+    try testing.expect(std.mem.indexOf(u8, got.out, clone) != null);
+}
+
+test "list --repos --json: emits a JSON array of clone paths" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "--repos", "--json" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const trimmed = std.mem.trim(u8, got.out, " \t\r\n");
+    try testing.expect(trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']');
+    try testing.expect(std.mem.indexOf(u8, got.out, "mox") != null);
 }
 
 test "run: --json on an empty workspace emits [] on stdout, not the human hint" {

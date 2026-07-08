@@ -306,6 +306,18 @@ test "integration: project/repo/backend_seed categories carry real descriptions"
     try testing.expect(containsCandidate(list_got.candidates, "acme/"));
 }
 
+test "list --repos appears in list's flag-name completion" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const got = try completion.compute(arena, &command_table, &.{ "list", "--" }, null);
+    var found = false;
+    for (got.candidates) |c| {
+        if (std.mem.eql(u8, c.value, "--repos")) found = true;
+    }
+    try testing.expect(found);
+}
+
 test "integration: a broken (null) workspace still replies with the directive line and no candidates" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
