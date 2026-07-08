@@ -117,6 +117,22 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         }
     }
 
+    if (a.project) |project_query| {
+        var p = (try common.resolveOne(ctx, project_query)) orelse return 1;
+        var lock = try projectlock.acquire(alloc, p.content_path);
+        defer lock.release();
+        p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
+
+        const member_value = if (target.origin) |origin|
+            origin
+        else
+            try std.fmt.allocPrint(alloc, "local:{s}", .{target.id.repo});
+
+        try p.marker.repos.put(alloc, target.id.repo, member_value);
+        try marker.save(&p.marker, try p.markerPath(alloc));
+        _ = try hub.reconcile(alloc, &ws, &p, false);
+    }
+
     try ctx.out.print("{s}\n", .{clone_path});
     return 0;
 }
@@ -210,4 +226,28 @@ test "run: a normal owner/repo shorthand still creates at the identity path with
     const remote = try git.run(arena, &.{ "git", "-C", expected_path, "remote", "get-url", "origin" }, null);
     try testing.expectEqual(@as(u8, 0), remote.status);
     try testing.expectEqualStrings(url, std.mem.trim(u8, remote.stdout, " \t\r\n"));
+}
+
+test "run: -p attaches a local member (marker local:<name> + hub) and doctor does not flag it broken" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "tool", "-p", "acme/widget" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", marker.marker_basename });
+    const m = try marker.load(arena, marker_path, null);
+    try testing.expectEqualStrings("local:tool", m.repos.get("tool").?);
+
+    const clone_path = try identity.local("tool").clonePath(arena, ws.cfg.code_root);
+    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ clone_path, ".git" })));
+
+    const doctor = @import("../doctor.zig");
+    const report = try doctor.run(arena, &ws, .{ .full = false, .fix = false, .jobs = 1 });
+    try testing.expectEqual(@as(usize, 0), report.broken_clones.len);
 }
