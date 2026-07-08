@@ -108,6 +108,15 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
+    if (target.origin) |origin| {
+        const rr = try git.run(alloc, &.{ "git", "-C", clone_path, "remote", "add", "origin", origin }, null);
+        if (rr.status != 0) {
+            const cause = std.mem.trim(u8, rr.stderr, " \t\r\n");
+            try ctx.err_w.print("holt: failed to set origin on {s}: {s}\n", .{ clone_path, cause });
+            return 1;
+        }
+    }
+
     try ctx.out.print("{s}\n", .{clone_path});
     return 0;
 }
@@ -181,7 +190,7 @@ test "run: a traversal spec that looks remote is refused (does not init outside 
     }
 }
 
-test "run: a normal owner/repo shorthand still creates at the identity path" {
+test "run: a normal owner/repo shorthand still creates at the identity path with origin set" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -195,4 +204,10 @@ test "run: a normal owner/repo shorthand still creates at the identity path" {
     const expected_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "widget" });
     try testing.expectEqualStrings(expected_path, std.mem.trim(u8, got.out, " \t\r\n"));
     try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ expected_path, ".git" })));
+
+    // origin is set to the expanded url.
+    const url = try identity.expand(arena, "acme/widget");
+    const remote = try git.run(arena, &.{ "git", "-C", expected_path, "remote", "get-url", "origin" }, null);
+    try testing.expectEqual(@as(u8, 0), remote.status);
+    try testing.expectEqualStrings(url, std.mem.trim(u8, remote.stdout, " \t\r\n"));
 }
