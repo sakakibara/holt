@@ -75,20 +75,6 @@ fn resolveTarget(ctx: *cli.Ctx, ws: workspace.Workspace, query: []const u8) !?[]
     return null;
 }
 
-fn writeFakeEditor(alloc: std.mem.Allocator, script_path: []const u8, marker_path: []const u8) !void {
-    const script = try std.fmt.allocPrint(alloc,
-        \\#!/bin/sh
-        \\printf '%s\n' "$1" > "{s}"
-        \\pwd >> "{s}"
-        \\
-    , .{ marker_path, marker_path });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
-        .sub_path = script_path,
-        .data = script,
-        .flags = .{ .permissions = .executable_file },
-    });
-}
-
 test "run: spawns $EDITOR with the docs path as both argv[1] and cwd" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -102,9 +88,8 @@ test "run: spawns $EDITOR with the docs path as both argv[1] and cwd" {
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
 
-    const script_path = try std.fs.path.join(arena, &.{ root, "fake-editor.sh" });
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
-    try writeFakeEditor(arena, script_path, marker_path);
+    const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
     const override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
     defer override.restore();
@@ -116,9 +101,9 @@ test "run: spawns $EDITOR with the docs path as both argv[1] and cwd" {
     try testing.expect(fsutil.exists(docs_path));
 
     const recorded = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), marker_path, arena, .limited(1 << 20));
-    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\n"), '\n');
-    try testing.expectEqualStrings(docs_path, lines.next().?);
-    try testing.expectEqualStrings(docs_path, lines.next().?);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\r\n"), '\n');
+    try testing.expectEqualStrings(docs_path, std.mem.trimEnd(u8, lines.next().?, "\r"));
+    try testing.expectEqualStrings(docs_path, std.mem.trimEnd(u8, lines.next().?, "\r"));
 }
 
 test "run: <project>/<repo> opens the repo's real clone path, not the docs dir" {
@@ -139,9 +124,8 @@ test "run: <project>/<repo> opens the repo's real clone path, not the docs dir" 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
     try fsutil.ensureDir(clone_path);
 
-    const script_path = try std.fs.path.join(arena, &.{ root, "fake-editor.sh" });
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
-    try writeFakeEditor(arena, script_path, marker_path);
+    const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
     const override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
     defer override.restore();
@@ -150,8 +134,8 @@ test "run: <project>/<repo> opens the repo's real clone path, not the docs dir" 
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const recorded = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), marker_path, arena, .limited(1 << 20));
-    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\n"), '\n');
-    try testing.expectEqualStrings(clone_path, lines.next().?);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\r\n"), '\n');
+    try testing.expectEqualStrings(clone_path, std.mem.trimEnd(u8, lines.next().?, "\r"));
 
     const docs_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", "docs" });
     try testing.expect(std.mem.indexOf(u8, recorded, docs_path) == null);
@@ -172,9 +156,8 @@ test "run: a project with no docs dir yet still gets one created for the editor"
     const docs_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "docs" });
     try testing.expect(!fsutil.exists(docs_path));
 
-    const script_path = try std.fs.path.join(arena, &.{ root, "fake-editor.sh" });
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
-    try writeFakeEditor(arena, script_path, marker_path);
+    const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
     const override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
     defer override.restore();

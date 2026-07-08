@@ -69,12 +69,7 @@ test "open: a multi-word $EDITOR is split into a command plus the path" {
     // A two-word editor: the wrapper script records each argv it received, so
     // splitting "<script> --flag" into two words plus the path is observable.
     const record = try std.fs.path.join(arena, &.{ root, "argv.txt" });
-    const script = try std.fs.path.join(arena, &.{ root, "ed.sh" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
-        .sub_path = script,
-        .data = try std.fmt.allocPrint(arena, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{s}\"\n", .{record}),
-        .flags = .{ .permissions = .executable_file },
-    });
+    const script = try testutil.writeFakeEditor(arena, root, record, .{ .args = 2 });
 
     const editor_val = try std.fmt.allocPrint(arena, "{s} --flag", .{script});
     const override = try testutil.EnvOverride.install(arena, "EDITOR", editor_val);
@@ -90,9 +85,9 @@ test "open: a multi-word $EDITOR is split into a command plus the path" {
     try testing.expectEqual(@as(u8, 0), try open(&ctx, target, null));
 
     const recorded = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), record, arena, .limited(1 << 20));
-    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\n"), '\n');
-    try testing.expectEqualStrings("--flag", lines.next().?);
-    try testing.expectEqualStrings(target, lines.next().?);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\r\n"), '\n');
+    try testing.expectEqualStrings("--flag", std.mem.trimEnd(u8, lines.next().?, "\r"));
+    try testing.expectEqualStrings(target, std.mem.trimEnd(u8, lines.next().?, "\r"));
 }
 
 test "open: a blank $EDITOR is treated as unset, never spawned" {

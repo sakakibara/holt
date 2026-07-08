@@ -240,7 +240,10 @@ pub const GitInsteadOfPair = struct { url: []const u8, bare: []const u8 };
 pub fn gitInsteadOf(alloc: std.mem.Allocator, gitconfig_path: []const u8, pairs: []const GitInsteadOfPair) !EnvOverride {
     var content: std.ArrayList(u8) = .empty;
     for (pairs) |pair| {
-        const bare_slashed = try forwardSlashed(alloc, pair.bare);
+        // A `\`-path written as a git-config VALUE is parsed for backslash
+        // escapes (`\a`, `\U`, ...) and comes out mangled; git accepts
+        // forward slashes in paths/URLs on Windows, so use those instead.
+        const bare_slashed = try fsutil.forwardSlashed(alloc, pair.bare);
         try content.appendSlice(alloc, try std.fmt.allocPrint(alloc, "[url \"{s}\"]\n\tinsteadOf = {s}\n", .{ bare_slashed, pair.url }));
     }
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gitconfig_path, .data = content.items });
@@ -248,15 +251,58 @@ pub fn gitInsteadOf(alloc: std.mem.Allocator, gitconfig_path: []const u8, pairs:
     return EnvOverride.install(alloc, "GIT_CONFIG_GLOBAL", gitconfig_path);
 }
 
-/// Git accepts forward slashes in paths/URLs on Windows, but a `\`-path
-/// written as a git-config VALUE is parsed for backslash escapes (`\a`,
-/// `\U`, ...) and comes out mangled. Any local filesystem path handed to
-/// git as a URL/config value goes through this first. Identity on POSIX,
-/// where paths never carry backslashes.
-fn forwardSlashed(alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
-    const out = try alloc.dupe(u8, path);
-    std.mem.replaceScalar(u8, out, '\\', '/');
-    return out;
+pub const FakeEditorOpts = struct {
+    /// Positional args ($1, $2, ...) to record, one per line.
+    args: u8 = 1,
+    /// Also record the child's working directory as a final line.
+    cwd: bool = false,
+};
+
+/// Writes a fake $EDITOR into `dir` that records `opts.args` positional
+/// arguments (and, if `opts.cwd`, its own working directory) to
+/// `marker_path`, one per line. Returns the path to point $EDITOR at.
+///
+/// CreateProcess on Windows cannot execute a POSIX shebang script directly,
+/// so this writes a `.cmd` batch script there instead of the `#!/bin/sh`
+/// script used everywhere else - the same recording contract, a different
+/// shell. Batch `echo` always terminates lines with CRLF; callers reading
+/// the marker back should trim a trailing '\r' off each line (a no-op on
+/// POSIX, where none is ever written).
+pub fn writeFakeEditor(alloc: std.mem.Allocator, dir: []const u8, marker_path: []const u8, opts: FakeEditorOpts) ![]const u8 {
+    if (builtin.os.tag == .windows) {
+        const script_path = try std.fs.path.join(alloc, &.{ dir, "fake-editor.cmd" });
+        var body: std.ArrayList(u8) = .empty;
+        try body.appendSlice(alloc, "@echo off\r\n");
+        var i: u8 = 1;
+        while (i <= opts.args) : (i += 1) {
+            const op: []const u8 = if (i == 1) ">" else ">>";
+            try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "echo %~{d}{s}\"{s}\"\r\n", .{ i, op, marker_path }));
+        }
+        if (opts.cwd) {
+            const op: []const u8 = if (opts.args == 0) ">" else ">>";
+            try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "cd{s}\"{s}\"\r\n", .{ op, marker_path }));
+        }
+        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = script_path, .data = body.items });
+        return script_path;
+    }
+
+    const script_path = try std.fs.path.join(alloc, &.{ dir, "fake-editor.sh" });
+    var body: std.ArrayList(u8) = .empty;
+    try body.appendSlice(alloc, "#!/bin/sh\n");
+    if (opts.args == 1) {
+        try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "printf '%s\\n' \"$1\" > \"{s}\"\n", .{marker_path}));
+    } else {
+        try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "printf '%s\\n' \"$@\" > \"{s}\"\n", .{marker_path}));
+    }
+    if (opts.cwd) {
+        try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "pwd >> \"{s}\"\n", .{marker_path}));
+    }
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
+        .sub_path = script_path,
+        .data = body.items,
+        .flags = .{ .permissions = .executable_file },
+    });
+    return script_path;
 }
 
 pub const RunResult = struct { code: u8, out: []const u8, err: []const u8 };

@@ -90,19 +90,6 @@ fn runEdit(ctx: *cli.Ctx, _: args.Args(EditSpec)) anyerror!u8 {
     return editor.open(ctx, path, null);
 }
 
-fn writeFakeEditor(alloc: std.mem.Allocator, script_path: []const u8, marker_path: []const u8) !void {
-    const script = try std.fmt.allocPrint(alloc,
-        \\#!/bin/sh
-        \\printf '%s\n' "$1" > "{s}"
-        \\
-    , .{marker_path});
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
-        .sub_path = script_path,
-        .data = script,
-        .flags = .{ .permissions = .executable_file },
-    });
-}
-
 fn writeConfigFile(alloc: std.mem.Allocator, xdg_root: []const u8, content: []const u8) ![]u8 {
     const holt_dir = try std.fs.path.join(alloc, &.{ xdg_root, "holt" });
     try fsutil.ensureDir(holt_dir);
@@ -228,9 +215,8 @@ test "run: config edit opens $EDITOR even when the config file is malformed" {
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const script_path = try std.fs.path.join(arena, &.{ root, "fake-editor.sh" });
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
-    try writeFakeEditor(arena, script_path, marker_path);
+    const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{});
 
     const editor_override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
     defer editor_override.restore();
@@ -247,7 +233,7 @@ test "run: config edit opens $EDITOR even when the config file is malformed" {
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const recorded = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), marker_path, arena, .limited(1 << 20));
-    try testing.expectEqualStrings(path, std.mem.trimEnd(u8, recorded, "\n"));
+    try testing.expectEqualStrings(path, std.mem.trimEnd(u8, recorded, "\r\n"));
 }
 
 test "run: config edit with no config file errors, pointing at holt setup, without spawning anything" {
@@ -259,9 +245,8 @@ test "run: config edit with no config file errors, pointing at holt setup, witho
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const script_path = try std.fs.path.join(arena, &.{ root, "fake-editor.sh" });
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
-    try writeFakeEditor(arena, script_path, marker_path);
+    const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{});
 
     const editor_override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
     defer editor_override.restore();
