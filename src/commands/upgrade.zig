@@ -100,7 +100,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const download_base = try envOrDefault(alloc, environ, "HOLT_UPGRADE_DOWNLOAD_BASE", default_download_base);
     const url = try downloadUrl(alloc, download_base, tag, asset);
 
-    const tmp_dir = try makeTempDir(alloc, environ);
+    const tmp_dir = try makeTempDir(alloc);
     defer std.Io.Dir.cwd().deleteTree(fsutil.io(), tmp_dir) catch {};
 
     const is_zip = builtin.os.tag == .windows;
@@ -255,10 +255,10 @@ pub fn downloadUrl(alloc: std.mem.Allocator, base: []const u8, tag: []const u8, 
 const temp_name_random_bytes = 12;
 const temp_name_len = std.base64.url_safe.Encoder.calcSize(temp_name_random_bytes);
 
-/// Creates a fresh `holt-upgrade-<random>` directory under `TMPDIR` (or
-/// `/tmp`) to stage the downloaded archive in. Caller deletes it when done.
-fn makeTempDir(alloc: std.mem.Allocator, environ: std.process.Environ) ![]const u8 {
-    const base = try envOrDefault(alloc, environ, "TMPDIR", "/tmp");
+/// Creates a fresh `holt-upgrade-<random>` directory under the platform temp
+/// location to stage the downloaded archive in. Caller deletes it when done.
+fn makeTempDir(alloc: std.mem.Allocator) ![]const u8 {
+    const base = try fsutil.tempDir(alloc);
 
     var random_bytes: [temp_name_random_bytes]u8 = undefined;
     fsutil.io().random(&random_bytes);
