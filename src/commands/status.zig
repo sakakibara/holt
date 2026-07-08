@@ -87,7 +87,10 @@ const RepoState = struct {
 /// git call here is safe to invoke concurrently (see parallel.zig).
 fn probe(_: void, arena: std.mem.Allocator, clone_path: []const u8) anyerror!RepoState {
     if (!fsutil.exists(clone_path)) return .{ .kind = .missing };
-    const st = git.repoStatus(arena, clone_path) catch return .{ .kind = .unreadable };
+    const st = git.repoStatus(arena, clone_path) catch |err| switch (err) {
+        error.NotInspectable => return .{ .kind = .unreadable },
+        else => return err,
+    };
     return .{ .kind = .ok, .branch = st.branch, .dirty = st.dirty, .unpushed = st.unpushed };
 }
 

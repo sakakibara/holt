@@ -289,9 +289,14 @@ pub fn repoStatus(alloc: std.mem.Allocator, repo: []const u8) !RepoStatus {
     var dirty = false;
     var unpushed_state: Unpushed = .no_upstream;
 
+    var unborn = false;
+
     var it = std.mem.splitScalar(u8, res.stdout, '\n');
     while (it.next()) |line| {
-        if (std.mem.startsWith(u8, line, "# branch.head ")) {
+        if (std.mem.startsWith(u8, line, "# branch.oid ")) {
+            const oid = line["# branch.oid ".len..];
+            if (std.mem.eql(u8, oid, "(initial)")) unborn = true;
+        } else if (std.mem.startsWith(u8, line, "# branch.head ")) {
             const name = line["# branch.head ".len..];
             if (!std.mem.eql(u8, name, "(detached)")) branch = try alloc.dupe(u8, name);
         } else if (std.mem.startsWith(u8, line, "# branch.ab ")) {
@@ -302,6 +307,15 @@ pub fn repoStatus(alloc: std.mem.Allocator, repo: []const u8) !RepoStatus {
         } else if (!std.mem.startsWith(u8, line, "# ") and line.len > 0) {
             dirty = true;
         }
+    }
+
+    // An unborn HEAD (no commits yet) still reports `# branch.head <name>`,
+    // but the old `currentBranch` (`git rev-parse --abbrev-ref HEAD`) exits
+    // nonzero with nothing to resolve and returns null - match that here
+    // regardless of header order.
+    if (unborn) {
+        if (branch) |b| alloc.free(b);
+        branch = null;
     }
 
     return .{ .branch = branch, .dirty = dirty, .unpushed = unpushed_state };
@@ -590,6 +604,25 @@ test "repoStatus: matches the trio on a detached HEAD (branch null, no_upstream)
     defer if (got.branch) |b| testing.allocator.free(b);
     try testing.expect(got.branch == null);
     try testing.expectEqual(Unpushed.no_upstream, got.unpushed);
+}
+
+test "repoStatus: matches currentBranch (both null) on an unborn HEAD (empty clone, no commits)" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try std.fs.path.join(testing.allocator, &.{ sb.root, "empty-origin.git" });
+    defer testing.allocator.free(bare);
+    try testutil.runGit(&sb, null, &.{ "init", "--bare", bare });
+
+    const work = try std.fs.path.join(testing.allocator, &.{ sb.root, "unborn-clone" });
+    defer testing.allocator.free(work);
+    try testutil.runGit(&sb, null, &.{ "clone", bare, work });
+
+    try expectRepoStatusMatchesHelperTrio(testing.allocator, work);
+
+    const got = try repoStatus(testing.allocator, work);
+    defer if (got.branch) |b| testing.allocator.free(b);
+    try testing.expect(got.branch == null);
 }
 
 test "repoStatus: errors on a corrupted .git, so the caller can map it to unreadable" {
