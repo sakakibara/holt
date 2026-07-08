@@ -37,8 +37,9 @@ const fish_snippet =
     \\end
     \\
     \\# Tab-completion. `holt __complete` prints a directive line then one
-    \\# candidate per line; org candidates end in "/" so fish already omits the
-    \\# trailing space.
+    \\# candidate per line as "value<TAB>description"; fish's `-a` splits on
+    \\# that tab natively, so the raw lines pass straight into it. Org
+    \\# candidates end in "/" so fish already omits the trailing space.
     \\function __holt_complete
     \\    holt __complete (commandline -opc)[2..-1] (commandline -ct) | tail -n +2
     \\end
@@ -84,13 +85,24 @@ const bash_completion =
     \\        COMPREPLY=($(compgen -f -- "$cur")); return
     \\    fi
     \\    [ "$directive" = "nospace" ] && compopt -o nospace 2>/dev/null
-    \\    COMPREPLY=("${reply[@]}")
+    \\    COMPREPLY=()
+    \\    local line val
+    \\    for line in "${reply[@]}"; do
+    \\        val="${line%%$'\t'*}"                 # drop the description at the tab
+    \\        COMPREPLY+=("$(printf '%q' "$val")")  # quote so a space is one word
+    \\    done
     \\}
     \\complete -F _holt_complete holt
     \\_h_complete() {
     \\    local IFS=$'\n'
     \\    local reply=($(holt __complete path "${COMP_WORDS[COMP_CWORD]}"))
-    \\    COMPREPLY=("${reply[@]:1}")
+    \\    reply=("${reply[@]:1}")
+    \\    COMPREPLY=()
+    \\    local line val
+    \\    for line in "${reply[@]}"; do
+    \\        val="${line%%$'\t'*}"
+    \\        COMPREPLY+=("$(printf '%q' "$val")")
+    \\    done
     \\}
     \\complete -F _h_complete h
     \\
@@ -98,23 +110,34 @@ const bash_completion =
 
 const zsh_completion =
     \\_holt_complete() {
-    \\    local -a reply
-    \\    reply=("${(@f)$(holt __complete ${words[2,$CURRENT]})}")
-    \\    local directive=$reply[1]
-    \\    reply=(${reply[2,-1]})
+    \\    local -a lines values descs
+    \\    lines=("${(@f)$(holt __complete ${words[2,$CURRENT]})}")
+    \\    local directive=$lines[1]
+    \\    lines=(${lines[2,-1]})
+    \\    local line
+    \\    for line in $lines; do
+    \\        values+=("${line%%$'\t'*}")
+    \\        if [[ $line == *$'\t'* ]]; then descs+=("${line#*$'\t'}"); else descs+=("${line%%$'\t'*}"); fi
+    \\    done
     \\    if [[ $directive == files ]]; then
     \\        _files
     \\    elif [[ $directive == nospace ]]; then
-    \\        compadd -S '' -- $reply
+    \\        compadd -S '' -d descs -- $values
     \\    else
-    \\        compadd -- $reply
+    \\        compadd -d descs -- $values
     \\    fi
     \\}
     \\compdef _holt_complete holt
     \\_h_complete() {
-    \\    local -a reply
-    \\    reply=("${(@f)$(holt __complete path ${words[CURRENT]})}")
-    \\    compadd -- ${reply[2,-1]}
+    \\    local -a lines values descs
+    \\    lines=("${(@f)$(holt __complete path ${words[CURRENT]})}")
+    \\    lines=(${lines[2,-1]})
+    \\    local line
+    \\    for line in $lines; do
+    \\        values+=("${line%%$'\t'*}")
+    \\        if [[ $line == *$'\t'* ]]; then descs+=("${line#*$'\t'}"); else descs+=("${line%%$'\t'*}"); fi
+    \\    done
+    \\    compadd -d descs -- $values
     \\}
     \\compdef _h_complete h
     \\
@@ -147,7 +170,20 @@ const powershell_snippet =
     \\    param($wordToComplete, $commandAst, $cursorPosition)
     \\    $tokens = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { "$_" })
     \\    & holt __complete @tokens $wordToComplete | Select-Object -Skip 1 | ForEach-Object {
-    \\        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+    \\        $parts = $_ -split "`t", 2
+    \\        $val = $parts[0]
+    \\        $desc = if ($parts.Count -gt 1) { $parts[1] } else { $parts[0] }
+    \\        [System.Management.Automation.CompletionResult]::new($val, $val, 'ParameterValue', $desc)
+    \\    }
+    \\}
+    \\
+    \\Register-ArgumentCompleter -CommandName h -ParameterName Query -ScriptBlock {
+    \\    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+    \\    & holt __complete path $wordToComplete | Select-Object -Skip 1 | ForEach-Object {
+    \\        $parts = $_ -split "`t", 2
+    \\        $val = $parts[0]
+    \\        $desc = if ($parts.Count -gt 1) { $parts[1] } else { $parts[0] }
+    \\        [System.Management.Automation.CompletionResult]::new($val, $val, 'ParameterValue', $desc)
     \\    }
     \\}
     \\
@@ -185,4 +221,24 @@ test "snippet: fish uses function/end, bash and zsh use POSIX name(), powershell
     try testing.expect(std.mem.indexOf(u8, snippet(.bash), "h() {") != null);
     try testing.expect(std.mem.indexOf(u8, snippet(.zsh), "h() {") != null);
     try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "function h {") != null);
+}
+
+test "snippet: powershell registers a completer for h, not just holt" {
+    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "-CommandName h") != null);
+}
+
+test "snippet: powershell splits the description off the tab for both completers" {
+    const s = snippet(.powershell);
+    try testing.expect(std.mem.indexOf(u8, s, "-split \"`t\"") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "'ParameterValue', $desc") != null);
+}
+
+test "snippet: zsh renders candidate descriptions via compadd -d" {
+    try testing.expect(std.mem.indexOf(u8, snippet(.zsh), "compadd -d") != null);
+}
+
+test "snippet: bash strips the description at the tab and quotes the value" {
+    const s = snippet(.bash);
+    try testing.expect(std.mem.indexOf(u8, s, "%%$'\\t'") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "printf '%q'") != null);
 }
