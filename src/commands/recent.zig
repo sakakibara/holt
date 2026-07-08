@@ -46,9 +46,8 @@ const CloneTs = anyerror!?i64;
 /// thread with its OWN `arena`; every git call here is concurrency-safe.
 fn cloneTimestamp(_: void, arena: std.mem.Allocator, clone_path: []const u8) CloneTs {
     if (!fsutil.exists(clone_path)) return null;
-    if (!try git.inspectable(arena, clone_path)) return null;
 
-    const res = try git.run(arena, &.{ "git", "log", "-1", "--format=%ct" }, clone_path);
+    const res = try git.runInRepo(arena, &.{ "log", "-1", "--format=%ct" }, clone_path);
     if (res.status != 0) return null;
 
     const trimmed = std.mem.trim(u8, res.stdout, "\n");
@@ -415,4 +414,85 @@ test "run: -j 1 and -j 8 produce byte-identical ordering across many projects an
     try testing.expectEqualStrings(serial.out, parallel_run.out);
     // Newest-first: p1 (1.9e9) leads, p0 (1.0e9) trails.
     try testing.expectEqualStrings("acme/p1\nacme/p5\nacme/p3\nacme/p2\nacme/p4\nacme/p0\n", serial.out);
+}
+
+test "cloneTimestamp: matches a direct `git log -1 --format=%ct` for a valid clone" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    const want = try git.run(arena, &.{ "git", "log", "-1", "--format=%ct" }, work);
+    const want_ts = try std.fmt.parseInt(i64, std.mem.trim(u8, want.stdout, "\n"), 10);
+
+    const got = try cloneTimestamp({}, arena, work);
+    try testing.expect(got != null);
+    try testing.expectEqual(want_ts, got.?);
+}
+
+test "cloneTimestamp: null for a clone with a corrupted .git (HEAD overwritten with garbage)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    const head_path = try std.fs.path.join(arena, &.{ work, ".git", "HEAD" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
+
+    try testing.expect(try cloneTimestamp({}, arena, work) == null);
+}
+
+test "cloneTimestamp: null for a plain non-repo directory" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    try testing.expect(try cloneTimestamp({}, arena, root) == null);
+}
+
+test "cloneTimestamp: null for a non-repo subdirectory nested inside a parent git repo (ceiling guard)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    try testutil.runGit(&sb, null, &.{ "init", "-q", sb.root });
+    try testutil.runGit(&sb, sb.root, &.{ "commit", "--allow-empty", "-m", "parent commit" });
+
+    const sub = try std.fs.path.join(arena, &.{ sb.root, "sub" });
+    try fsutil.ensureDir(sub);
+
+    // Without the ceiling guard this would resolve `sb.root`'s HEAD and
+    // return its timestamp instead of null.
+    try testing.expect(try cloneTimestamp({}, arena, sub) == null);
+}
+
+test "cloneTimestamp: null for a missing path" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const missing = try std.fs.path.join(arena, &.{ sb.root, "does-not-exist" });
+    try testing.expect(try cloneTimestamp({}, arena, missing) == null);
 }

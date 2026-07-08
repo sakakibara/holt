@@ -213,6 +213,25 @@ pub fn isCompleteClone(alloc: std.mem.Allocator, repo: []const u8) !bool {
     return res.status == 0;
 }
 
+/// Runs `git <args...>` inside `repo`, ceiling-pinned like `inspectable` so a
+/// non-repo `repo` is judged on its own merits rather than git walking up and
+/// resolving some ancestor repository above it. For read commands that must
+/// stay scoped to the clone at `repo` without a separate `inspectable`
+/// precheck.
+pub fn runInRepo(alloc: std.mem.Allocator, args: []const []const u8, repo: []const u8) !proc.RunResult {
+    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
+    var map = try std.process.Environ.createMap(real_env, alloc);
+    defer map.deinit();
+    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(alloc);
+    try argv.appendSlice(alloc, &.{ "git", "-C", repo });
+    try argv.appendSlice(alloc, args);
+
+    return runEnv(alloc, argv.items, null, &map);
+}
+
 /// The `origin` remote URL, or null if it is unset. Caller owns the returned
 /// memory.
 pub fn remoteUrl(alloc: std.mem.Allocator, repo: []const u8) !?[]u8 {
@@ -374,6 +393,46 @@ test "inspectable: true for a real repo, false for a plain directory and a nonex
     const missing = try std.fs.path.join(testing.allocator, &.{ sb.root, "does-not-exist" });
     defer testing.allocator.free(missing);
     try testing.expect(!try inspectable(testing.allocator, missing));
+}
+
+test "runInRepo: `git log -1 --format=%ct` on a real repo matches a plain `git log` run" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    const want = try run(testing.allocator, &.{ "git", "log", "-1", "--format=%ct" }, work);
+    defer testing.allocator.free(want.stdout);
+    defer testing.allocator.free(want.stderr);
+    try testing.expectEqual(@as(u8, 0), want.status);
+
+    const got = try runInRepo(testing.allocator, &.{ "log", "-1", "--format=%ct" }, work);
+    defer testing.allocator.free(got.stdout);
+    defer testing.allocator.free(got.stderr);
+    try testing.expectEqual(@as(u8, 0), got.status);
+    try testing.expectEqualStrings(want.stdout, got.stdout);
+}
+
+test "runInRepo: never resolves a parent repo above a non-repo subdirectory" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    // `sb.root` itself is a git repo with a commit (`makeBareRepo`'s seed
+    // clone lands there too, but a fresh init at the root is more direct).
+    try testutil.runGit(&sb, null, &.{ "init", "-q", sb.root });
+    try testutil.runGit(&sb, sb.root, &.{ "commit", "--allow-empty", "-m", "parent commit" });
+
+    const sub = try std.fs.path.join(testing.allocator, &.{ sb.root, "sub" });
+    defer testing.allocator.free(sub);
+    try fsutil.ensureDir(sub);
+
+    const got = try runInRepo(testing.allocator, &.{ "log", "-1", "--format=%ct" }, sub);
+    defer testing.allocator.free(got.stdout);
+    defer testing.allocator.free(got.stderr);
+    try testing.expect(got.status != 0);
 }
 
 test "isCompleteClone: true for a checked-out clone, false for an empty git init and a plain dir" {
