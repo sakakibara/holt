@@ -451,14 +451,17 @@ test "toAbsolute: absolute input passes through, relative input joins the cwd" {
     const cwd_path = buf[0..try std.process.currentPath(io(), &buf)];
 
     {
-        const got = try toAbsolute(testing.allocator, "/abs/path");
+        const abs_input = if (builtin.os.tag == .windows) "C:\\abs\\path" else "/abs/path";
+        const want = try std.fs.path.resolve(testing.allocator, &.{abs_input});
+        defer testing.allocator.free(want);
+        const got = try toAbsolute(testing.allocator, abs_input);
         defer testing.allocator.free(got);
-        try testing.expectEqualStrings("/abs/path", got);
+        try testing.expectEqualStrings(want, got);
     }
     {
         const got = try toAbsolute(testing.allocator, "relative/path");
         defer testing.allocator.free(got);
-        const want = try std.fs.path.join(testing.allocator, &.{ cwd_path, "relative/path" });
+        const want = try std.fs.path.join(testing.allocator, &.{ cwd_path, "relative", "path" });
         defer testing.allocator.free(want);
         try testing.expectEqualStrings(want, got);
     }
@@ -477,9 +480,16 @@ test "toAbsolute: absolute input passes through, relative input joins the cwd" {
 }
 
 test "pathIsInside: lexical containment on resolved absolute paths" {
-    try testing.expect(pathIsInside("/a/b/c", "/a/b"));
-    try testing.expect(!pathIsInside("/a/bc", "/a/b"));
-    try testing.expect(pathIsInside("/a/b", "/a/b"));
+    const a_b = try std.fs.path.join(testing.allocator, &.{ "a", "b" });
+    defer testing.allocator.free(a_b);
+    const a_b_c = try std.fs.path.join(testing.allocator, &.{ "a", "b", "c" });
+    defer testing.allocator.free(a_b_c);
+    const a_bc = try std.fs.path.join(testing.allocator, &.{ "a", "bc" });
+    defer testing.allocator.free(a_bc);
+
+    try testing.expect(pathIsInside(a_b_c, a_b));
+    try testing.expect(!pathIsInside(a_bc, a_b));
+    try testing.expect(pathIsInside(a_b, a_b));
 }
 
 test "exists: true for a present path, false for a missing one" {
