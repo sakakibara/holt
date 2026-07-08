@@ -97,7 +97,7 @@ fn resolveWorktree(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []cons
     const alloc = ctx.alloc;
     const clone_path = (try resolveRepoPath(ctx, ws, project_query, repo_query)) orelse return 1;
     const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
-    const wt_path = try std.fs.path.join(alloc, &.{ worktrees_dir, branch });
+    const wt_path = try fsutil.joinSlashy(alloc, worktrees_dir, branch);
     if (!fsutil.exists(wt_path)) {
         try ctx.err_w.print("holt: no worktree for branch \"{s}\" in {s}/{s} (create it: holt worktree {s}/{s} {s})\n", .{ branch, project_query, repo_query, project_query, repo_query, branch });
         return 1;

@@ -58,6 +58,34 @@ pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.fs.path.join(alloc, segs.items);
 }
 
+/// Joins `base` with `rel`, a `/`-delimited relative path (e.g. a git branch
+/// name, which namespaces on '/' regardless of platform) - split first and
+/// rejoined so each segment nests with the platform separator rather than
+/// leaving a literal '/' embedded in a Windows path component. Caller owns
+/// the returned memory.
+pub fn joinSlashy(alloc: std.mem.Allocator, base: []const u8, rel: []const u8) ![]u8 {
+    var segs: std.ArrayList([]const u8) = .empty;
+    defer segs.deinit(alloc);
+    try segs.append(alloc, base);
+    var it = std.mem.splitScalar(u8, rel, '/');
+    while (it.next()) |s| try segs.append(alloc, s);
+    return std.fs.path.join(alloc, segs.items);
+}
+
+/// Forward-slashes `path` - git's own internals (worktree admin links,
+/// `insteadOf` config values, and other paths it later matches by string
+/// comparison) normalize on '/' even on Windows, so a native `\`-path handed
+/// to it can fail to match what it already has on file. A no-op (and thus
+/// the identical slice) on POSIX, where '\' never appears in a path, and
+/// whenever `path` already carries no backslash. Caller owns the returned
+/// memory only when a copy was actually made.
+pub fn forwardSlashed(alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, path, '\\') == null) return path;
+    const out = try alloc.dupe(u8, path);
+    std.mem.replaceScalar(u8, out, '\\', '/');
+    return out;
+}
+
 /// Creates `dir_path` and any missing parents; succeeds if it already
 /// exists as a directory.
 pub fn ensureDir(dir_path: []const u8) !void {

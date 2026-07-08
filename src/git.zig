@@ -90,12 +90,16 @@ pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, diag: 
 /// real cause (unknown branch, branch already checked out elsewhere).
 pub fn worktreeAdd(alloc: std.mem.Allocator, repo: []const u8, path: []const u8, branch: []const u8, diag: ?*diagnostic.Diagnostic) !void {
     if (std.fs.path.dirname(path)) |parent| try fsutil.ensureDir(parent);
+    // git's worktree admin links are recorded and matched on '/' even on
+    // Windows; a native `\`-path here can fail to match on a later
+    // `worktree remove`/`repair`, so forward-slash it before handing it off.
+    const git_path = try fsutil.forwardSlashed(alloc, path);
     // `worktree.useRelativePaths` (git 2.48+) records the worktree's admin
     // links relative to the clone, so moving the clone and its sibling
     // `@worktrees` dir together (see common.moveClone) keeps them working with
     // no repair. Older git silently ignores the unknown config and records
     // absolute paths, which moveClone then repairs - so this degrades cleanly.
-    const res = try run(alloc, &.{ "git", "-C", repo, "-c", "worktree.useRelativePaths=true", "worktree", "add", path, branch }, null);
+    const res = try run(alloc, &.{ "git", "-C", repo, "-c", "worktree.useRelativePaths=true", "worktree", "add", git_path, branch }, null);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) {
@@ -121,7 +125,8 @@ pub fn worktreeList(alloc: std.mem.Allocator, repo: []const u8) ![]u8 {
 /// `git -C repo worktree remove <path>`. git refuses a dirty worktree without
 /// --force, which is deliberately not passed: `diag` carries that refusal.
 pub fn worktreeRemove(alloc: std.mem.Allocator, repo: []const u8, path: []const u8, diag: ?*diagnostic.Diagnostic) !void {
-    const res = try run(alloc, &.{ "git", "-C", repo, "worktree", "remove", path }, null);
+    const git_path = try fsutil.forwardSlashed(alloc, path);
+    const res = try run(alloc, &.{ "git", "-C", repo, "worktree", "remove", git_path }, null);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) {
@@ -142,7 +147,7 @@ pub fn worktreeRepair(alloc: std.mem.Allocator, repo: []const u8, paths: []const
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(alloc);
     try argv.appendSlice(alloc, &.{ "git", "-C", repo, "worktree", "repair" });
-    try argv.appendSlice(alloc, paths);
+    for (paths) |p| try argv.append(alloc, try fsutil.forwardSlashed(alloc, p));
     const res = run(alloc, argv.items, null) catch return;
     alloc.free(res.stdout);
     alloc.free(res.stderr);

@@ -343,7 +343,15 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
         if (entry.kind != .directory) continue;
         const full = try std.fs.path.join(alloc, &.{ worktrees_dir, entry.path });
         if (fsutil.exists(try std.fs.path.join(alloc, &.{ full, ".git" }))) {
-            try out.append(alloc, try std.fmt.allocPrint(alloc, "{s}@{s}", .{ repo_sel, entry.path }));
+            // Branch names namespace on '/' (git's own separator, not the
+            // platform's); the walker reports nesting with the native
+            // separator, so translate it back for a round-trippable token.
+            const branch = if (std.fs.path.sep == '/') entry.path else blk: {
+                const buf = try alloc.dupe(u8, entry.path);
+                std.mem.replaceScalar(u8, buf, std.fs.path.sep, '/');
+                break :blk buf;
+            };
+            try out.append(alloc, try std.fmt.allocPrint(alloc, "{s}@{s}", .{ repo_sel, branch }));
         } else {
             try walker.enter(fsutil.io(), entry);
         }
