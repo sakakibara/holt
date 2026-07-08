@@ -61,9 +61,22 @@ fn classify(alloc: std.mem.Allocator, spec: []const u8) !Target {
 fn isSafeLocalName(name: []const u8) bool {
     if (name.len == 0) return false;
     if (name[0] == '.' or name[0] == '~') return false;
-    if (std.mem.eql(u8, name, "..")) return false;
     for (name) |c| if (c == '/' or c == '\\') return false;
     return true;
+}
+
+/// True if the identity's clone path would contain a `.` or `..` segment -
+/// which `std.fs.path.join` does NOT normalize, so `code_root/x/../y` would
+/// escape the code tree. The remote branch derives its path from a parsed URL
+/// that never rejects such segments; the local branch is vetted by
+/// isSafeLocalName instead.
+fn identityEscapes(alloc: std.mem.Allocator, id: identity.Identity) !bool {
+    const rel = try id.relPath(alloc);
+    var it = std.mem.splitScalar(u8, rel, '/');
+    while (it.next()) |seg| {
+        if (std.mem.eql(u8, seg, ".") or std.mem.eql(u8, seg, "..")) return true;
+    }
+    return false;
 }
 
 fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
@@ -73,8 +86,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const target = try classify(alloc, a.spec);
     const clone_path = try target.id.clonePath(alloc, ws.cfg.code_root);
 
-    if (target.id.isLocal() and !isSafeLocalName(a.spec)) {
-        try ctx.err_w.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
+    if (target.id.isLocal()) {
+        if (!isSafeLocalName(a.spec)) {
+            try ctx.err_w.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
+            return 1;
+        }
+    } else if (try identityEscapes(alloc, target.id)) {
+        try ctx.err_w.print("holt: \"{s}\" is not a valid repo url\n", .{a.spec});
         return 1;
     }
 
@@ -147,4 +165,34 @@ test "run: refuses when the target path already exists, pointing at adopt" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{"taken"});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "adopt") != null);
+}
+
+test "run: a traversal spec that looks remote is refused (does not init outside code_root)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    for ([_][]const u8{ "../foo", "../../etc/passwd" }) |bad| {
+        const got = try testutil.runCmd(arena, command.run, ws, &.{bad});
+        try testing.expectEqual(@as(u8, 1), got.code);
+    }
+}
+
+test "run: a normal owner/repo shorthand still creates at the identity path" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const expected_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "widget" });
+    try testing.expectEqualStrings(expected_path, std.mem.trim(u8, got.out, " \t\r\n"));
+    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ expected_path, ".git" })));
 }
