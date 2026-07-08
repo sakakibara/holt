@@ -66,16 +66,20 @@ fn isSafeLocalName(name: []const u8) bool {
     return true;
 }
 
-/// True if the identity's clone path would contain a `.` or `..` segment -
-/// which `std.fs.path.join` does NOT normalize, so `code_root/x/../y` would
-/// escape the code tree. The remote branch derives its path from a parsed URL
-/// that never rejects such segments; the local branch is vetted by
-/// isSafeLocalName instead.
+/// True if the identity's clone path would escape the code tree: a `.` or
+/// `..` segment (which `std.fs.path.join` does NOT normalize, so
+/// `code_root/x/../y` escapes), or a segment carrying a literal backslash.
+/// `relPath` is always a logical `/`-joined key, so a `\` inside a segment is
+/// a Windows path separator smuggled into a component; `clonePath` joins with
+/// the platform separator, so on Windows that `\` would let `..\` climb out
+/// of `code_root` even though no `/`-split segment is exactly "..". The local
+/// branch is vetted by isSafeLocalName instead.
 fn identityEscapes(alloc: std.mem.Allocator, id: identity.Identity) !bool {
     const rel = try id.relPath(alloc);
     var it = std.mem.splitScalar(u8, rel, '/');
     while (it.next()) |seg| {
         if (std.mem.eql(u8, seg, ".") or std.mem.eql(u8, seg, "..")) return true;
+        if (std.mem.indexOfScalar(u8, seg, '\\') != null) return true;
     }
     return false;
 }
@@ -211,6 +215,20 @@ test "run: a traversal spec that looks remote is refused (does not init outside 
         const got = try testutil.runCmd(arena, command.run, ws, &.{bad});
         try testing.expectEqual(@as(u8, 1), got.code);
     }
+}
+
+test "run: a backslash-traversal spec (Windows escape) is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // A segment carrying a literal backslash-dotdot would escape code_root on
+    // Windows (clonePath joins with the platform separator); refuse it.
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"a/..\\..\\..\\evil"});
+    try testing.expectEqual(@as(u8, 1), got.code);
 }
 
 test "run: a normal owner/repo shorthand still creates at the identity path with origin set" {
