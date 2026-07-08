@@ -73,6 +73,45 @@ pub const Workspace = struct {
         return items;
     }
 
+    /// Absolute paths of every clone in the code tree, sorted. A clone is a
+    /// directory holding a `.git` DIRECTORY; on finding one, it is emitted and
+    /// not descended into. Worktrees (whose `.git` is a FILE) and
+    /// `*.holt-tmp` staging dirs are skipped. No git is run; symlinks are not
+    /// followed. A missing or unreadable code_root yields an empty slice.
+    pub fn listClones(self: Workspace, alloc: std.mem.Allocator) ![]const []const u8 {
+        const code_root = self.cfg.code_root;
+        var out: std.ArrayList([]const u8) = .empty;
+
+        var root_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), code_root, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return &.{},
+            else => return err,
+        };
+        defer root_dir.close(fsutil.io());
+
+        var walker = try root_dir.walkSelectively(alloc);
+        defer walker.deinit();
+
+        while (try walker.next(fsutil.io())) |entry| {
+            if (entry.kind != .directory) continue;
+            // Never descend into a worktree bucket - it holds no clones, only
+            // checkouts whose `.git` is a file - or a clone-staging temp dir.
+            if (std.mem.endsWith(u8, entry.basename, "@worktrees")) continue;
+            if (std.mem.endsWith(u8, entry.basename, ".holt-tmp")) continue;
+
+            const abs = try std.fs.path.join(alloc, &.{ code_root, entry.path });
+            if (try hasGitDir(alloc, abs)) {
+                // A clone: emit and do not recurse into it.
+                try out.append(alloc, abs);
+            } else {
+                try walker.enter(fsutil.io(), entry);
+            }
+        }
+
+        const items = try out.toOwnedSlice(alloc);
+        std.mem.sort([]const u8, items, {}, lessThanPath);
+        return items;
+    }
+
     /// A project dir under `<synced>/projects/<org>/<name>` whose marker
     /// failed to parse: the path scanned and the diagnostic message.
     pub const MarkerFailure = struct { path: []const u8, message: []const u8 };
@@ -236,6 +275,19 @@ fn lessThanQualified(_: void, a: Project, b: Project) bool {
         .gt => false,
         .eq => std.mem.order(u8, a.name, b.name) == .lt,
     };
+}
+
+fn lessThanPath(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+/// True iff `dir/.git` exists AND is a directory (a clone), false for a
+/// missing `.git` or a `.git` file (a linked worktree/submodule).
+fn hasGitDir(alloc: std.mem.Allocator, dir: []const u8) !bool {
+    const git = try std.fs.path.join(alloc, &.{ dir, ".git" });
+    var d = std.Io.Dir.openDirAbsolute(fsutil.io(), git, .{}) catch return false;
+    d.close(fsutil.io());
+    return true;
 }
 
 /// True if every byte of `query`, lowercased, appears in `target` in order
@@ -659,4 +711,44 @@ test "projectsUsing: returns both projects sharing one identity" {
     try testing.expectEqual(@as(usize, 2), got.len);
     try testing.expectEqualStrings("dotfiles", got[0].name);
     try testing.expectEqualStrings("fe", got[1].name);
+}
+
+test "listClones: returns every clone dir under code_root, sorted, excluding worktrees and temp dirs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    const code = ws.cfg.code_root;
+
+    // A remote clone and a local clone: each a dir with a `.git` DIRECTORY.
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend", ".git" }));
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ code, "local", "mox", ".git" }));
+    // A worktree: `.git` is a FILE, under a sibling `<repo>@worktrees` dir.
+    const wt = try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend@worktrees", "feat" });
+    try fsutil.ensureDir(wt);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ wt, ".git" }), .data = "gitdir: x\n" });
+    // A clone-staging temp dir: skipped.
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend.holt-tmp", ".git" }));
+
+    const clones = try ws.listClones(arena);
+    try testing.expectEqual(@as(usize, 2), clones.len);
+    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend" }), clones[0]);
+    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ code, "local", "mox" }), clones[1]);
+}
+
+test "listClones: a missing code_root yields an empty list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root); // code_root under root, not created
+    const clones = try ws.listClones(arena);
+    try testing.expectEqual(@as(usize, 0), clones.len);
 }
