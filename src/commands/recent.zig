@@ -15,6 +15,7 @@ const parallel = @import("../parallel.zig");
 const json = @import("json");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
+const proc = @import("../proc.zig");
 
 const Spec = struct {
     count: args.Opt(usize, .{ .short = 'n', .value_name = "N", .help = "show only the N most recently committed projects (default 10)" }),
@@ -434,6 +435,28 @@ test "cloneTimestamp: matches a direct `git log -1 --format=%ct` for a valid clo
     const got = try cloneTimestamp({}, arena, work);
     try testing.expect(got != null);
     try testing.expectEqual(want_ts, got.?);
+}
+
+test "cloneTimestamp: reads a present clone's tip with exactly one git subprocess (was two)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    // recent reads each clone's tip with ONE git call (was two: inspectable +
+    // git log). A regression that re-adds the inspectable precheck fails here.
+    const before = proc.spawn_count.load(.monotonic);
+    const got = try cloneTimestamp({}, arena, work);
+    const after = proc.spawn_count.load(.monotonic);
+
+    try testing.expect(got != null);
+    try testing.expectEqual(@as(u64, 1), after - before);
 }
 
 test "cloneTimestamp: null for a clone with a corrupted .git (HEAD overwritten with garbage)" {

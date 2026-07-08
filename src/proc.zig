@@ -10,6 +10,11 @@ const testing = std.testing;
 
 pub const RunResult = struct { status: u8, stdout: []u8, stderr: []u8 };
 
+/// Total subprocesses spawned this process. Incremented once per real spawn so
+/// perf-regression tests can assert an operation's per-repo subprocess count
+/// stays reduced (e.g. status probes each repo with ONE git call, not four).
+pub var spawn_count: std.atomic.Value(u64) = .init(0);
+
 // fsutil.io() is backed by std.Io.Threaded.global_single_threaded, whose
 // allocator is hardcoded to `.failing`: Zig 0.16's spawnPosix builds the
 // child's argv/env blocks through an ArenaAllocator wrapping that allocator
@@ -47,6 +52,7 @@ pub fn runEnv(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const 
         .cwd = if (cwd) |c| .{ .path = c } else .inherit,
         .environ_map = environ_map,
     });
+    _ = spawn_count.fetchAdd(1, .monotonic);
     return .{
         .status = termStatus(result.term),
         .stdout = result.stdout,
@@ -77,6 +83,7 @@ pub fn spawnInherited(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?
         .stdout = .inherit,
         .stderr = .inherit,
     });
+    _ = spawn_count.fetchAdd(1, .monotonic);
     return termStatus(try child.wait(io));
 }
 

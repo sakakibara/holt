@@ -17,6 +17,7 @@ const ui = @import("../ui.zig");
 const json = @import("json");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
+const proc = @import("../proc.zig");
 
 const color_red = "31";
 const color_green = "32";
@@ -479,6 +480,29 @@ test "run: a corrupted clone reports unreadable instead of a benign branch" {
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "corrupt-repo: unreadable") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "branch=") == null);
+}
+
+test "probe: probes a present clone with exactly one git subprocess (was four)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(clone_path);
+
+    // status probes each present repo with exactly ONE git subprocess (was four:
+    // inspectable + currentBranch + isDirty + unpushed). A regression that
+    // re-splits the probe into multiple git calls fails here.
+    const before = proc.spawn_count.load(.monotonic);
+    const st = try probe({}, arena, clone_path);
+    const after = proc.spawn_count.load(.monotonic);
+
+    try testing.expectEqual(.ok, st.kind);
+    try testing.expectEqual(@as(u64, 1), after - before);
 }
 
 test "run: with no project argument, every project gets its own section" {
