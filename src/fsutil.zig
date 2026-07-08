@@ -76,7 +76,23 @@ pub fn writeFileAtomic(alloc: std.mem.Allocator, path: []const u8, data: []const
 /// True if `path` exists (file, directory, or symlink target). Any access
 /// error (permission denied, not found, etc.) counts as absent.
 pub fn exists(path: []const u8) bool {
+    if (builtin.os.tag == .windows) {
+        if (!windowsNameable(path)) return false;
+    }
     std.Io.Dir.accessAbsolute(io(), path, .{}) catch return false;
+    return true;
+}
+
+/// Windows rejects these in a path *name* with OBJECT_NAME_INVALID, which the
+/// std turns into an uncatchable panic rather than a lookup miss; a path
+/// carrying one (e.g. a URL mistaken for a local checkout) cannot exist.
+fn windowsNameable(path: []const u8) bool {
+    for (path, 0..) |c, i| switch (c) {
+        '<', '>', '"', '|', '?', '*' => return false,
+        0...31 => return false,
+        ':' => if (i != 1) return false, // only the drive-letter colon is legal
+        else => {},
+    };
     return true;
 }
 
