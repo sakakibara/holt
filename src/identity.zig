@@ -18,16 +18,29 @@ pub const Identity = struct {
         return std.mem.eql(u8, self.host, "local");
     }
 
-    /// "<host>/<owner>/<repo>" or "local/<repo>". Caller owns the returned memory.
+    /// "<host>/<owner>/<repo>" or "local/<repo>": a portable, display-only
+    /// logical key, always `/`-joined regardless of platform - never an
+    /// on-disk path. Caller owns the returned memory.
     pub fn relPath(self: Identity, alloc: std.mem.Allocator) ![]u8 {
-        if (self.isLocal()) return std.fs.path.join(alloc, &.{ "local", self.repo });
-        return std.fs.path.join(alloc, &.{ self.host, self.owner, self.repo });
+        if (self.isLocal()) return std.fmt.allocPrint(alloc, "local/{s}", .{self.repo});
+        return std.fmt.allocPrint(alloc, "{s}/{s}/{s}", .{ self.host, self.owner, self.repo });
     }
 
-    /// `code_root` joined with `relPath`. Caller owns the returned memory.
+    /// `code_root` joined with the native on-disk clone location. A GitLab
+    /// subgroup `owner` (itself `/`-separated, e.g. "a/b") is split so each
+    /// segment nests with the platform separator instead of leaving an
+    /// embedded `/` inside a single Windows path component. Caller owns the
+    /// returned memory.
     pub fn clonePath(self: Identity, alloc: std.mem.Allocator, code_root: []const u8) ![]u8 {
         if (self.isLocal()) return std.fs.path.join(alloc, &.{ code_root, "local", self.repo });
-        return std.fs.path.join(alloc, &.{ code_root, self.host, self.owner, self.repo });
+        var segs: std.ArrayList([]const u8) = .empty;
+        defer segs.deinit(alloc);
+        try segs.append(alloc, code_root);
+        try segs.append(alloc, self.host);
+        var it = std.mem.splitScalar(u8, self.owner, '/');
+        while (it.next()) |s| try segs.append(alloc, s);
+        try segs.append(alloc, self.repo);
+        return std.fs.path.join(alloc, segs.items);
     }
 
     pub fn eql(a: Identity, b: Identity) bool {
@@ -279,7 +292,9 @@ test "relPath and clonePath join host/owner/repo, including subgroup owners" {
 
     const clone = try id.clonePath(testing.allocator, "/code");
     defer testing.allocator.free(clone);
-    try testing.expectEqualStrings("/code/gitlab.com/a/b/c", clone);
+    const want_clone = try std.fs.path.join(testing.allocator, &.{ "/code", "gitlab.com", "a", "b", "c" });
+    defer testing.allocator.free(want_clone);
+    try testing.expectEqualStrings(want_clone, clone);
 }
 
 test "local: isLocal, relPath, and clonePath" {
@@ -292,5 +307,7 @@ test "local: isLocal, relPath, and clonePath" {
 
     const clone = try id.clonePath(testing.allocator, "/code");
     defer testing.allocator.free(clone);
-    try testing.expectEqualStrings("/code/local/scratch", clone);
+    const want_clone = try std.fs.path.join(testing.allocator, &.{ "/code", "local", "scratch" });
+    defer testing.allocator.free(want_clone);
+    try testing.expectEqualStrings(want_clone, clone);
 }
