@@ -13,6 +13,7 @@ const proc = @import("proc.zig");
 const fsutil = @import("fsutil.zig");
 const marker = @import("marker.zig");
 const workspace = @import("workspace.zig");
+const identity = @import("identity.zig");
 const cli = @import("cli.zig");
 const testing = std.testing;
 
@@ -162,6 +163,91 @@ pub fn testWorkspace(alloc: std.mem.Allocator, root: []const u8) !workspace.Work
         .code_root = try std.fs.path.join(alloc, &.{ root, "code" }),
         .hub_root = try std.fs.path.join(alloc, &.{ root, "hub" }),
     } };
+}
+
+/// `git init` plus one empty commit at `clone_path` (created if missing), so
+/// git-dependent read paths (branch, dirty, unpushed, log) execute against a
+/// real repository instead of short-circuiting on a missing `.git`.
+pub fn seedMinimalGitClone(alloc: std.mem.Allocator, env: *const HermeticEnv, clone_path: []const u8) !void {
+    try fsutil.ensureDir(clone_path);
+    try runGitEnv(alloc, env, clone_path, &.{ "init", "-q" });
+    try runGitEnv(alloc, env, clone_path, &.{ "commit", "--allow-empty", "-m", "seed" });
+}
+
+/// Runs `git <identity flags> <args>` against `env` in `cwd`. Split out from
+/// `runGit` so a caller with no `Sandbox` (a bare seeded root, not a
+/// sandbox-managed tmp dir) can still run hermetic git commands.
+fn runGitEnv(alloc: std.mem.Allocator, env: *const HermeticEnv, cwd: []const u8, args: []const []const u8) !void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(alloc);
+    try argv.append(alloc, "git");
+    try argv.appendSlice(alloc, &identity_flags);
+    try argv.appendSlice(alloc, args);
+
+    const res = try proc.runEnv(alloc, argv.items, cwd, &env.map);
+    defer alloc.free(res.stdout);
+    defer alloc.free(res.stderr);
+    if (res.status != 0) {
+        std.debug.print("git command failed (status {d}): {s}\n", .{ res.status, res.stderr });
+        return error.GitCommandFailed;
+    }
+}
+
+pub const SyntheticOpts = struct { orgs: usize, projects_per_org: usize, repos_per_project: usize, with_git: bool };
+
+/// Seeds a synthetic workspace under `root` for the performance harness and
+/// the regression budgets: `orgs * projects_per_org` projects, each with a
+/// valid `.holt.json` marker listing `repos_per_project` remote repos, and
+/// (when `with_git`) a minimal real clone per repo at the same path the app's
+/// own repo-identity resolution computes, so git-dependent read paths execute
+/// rather than short-circuit.
+pub fn seedSyntheticWorkspace(alloc: std.mem.Allocator, root: []const u8, opts: SyntheticOpts) !void {
+    const ws = try testWorkspace(alloc, root);
+    const projects_root = try ws.projectsRoot(alloc);
+
+    var git_env: ?HermeticEnv = if (opts.with_git) try hermeticGitEnv(alloc) else null;
+    defer if (git_env) |*e| e.deinit();
+
+    var o: usize = 0;
+    while (o < opts.orgs) : (o += 1) {
+        const org = try std.fmt.allocPrint(alloc, "org{d:0>4}", .{o});
+        var p: usize = 0;
+        while (p < opts.projects_per_org) : (p += 1) {
+            const name = try std.fmt.allocPrint(alloc, "proj{d:0>4}", .{p});
+            var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            var r: usize = 0;
+            while (r < opts.repos_per_project) : (r += 1) {
+                const rname = try std.fmt.allocPrint(alloc, "repo{d}", .{r});
+                const url = try std.fmt.allocPrint(alloc, "https://example.com/{s}/{s}.git", .{ org, rname });
+                try repos.put(alloc, rname, url);
+            }
+            try writeMarker(alloc, projects_root, org, name, .{ .version = marker.marker_version, .org = org, .name = name, .repos = repos });
+
+            if (git_env) |*env| {
+                for (repos.keys()) |rname| {
+                    const id = try identity.fromUrl(alloc, repos.get(rname).?);
+                    const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
+                    try seedMinimalGitClone(alloc, env, clone_path);
+                }
+            }
+        }
+    }
+}
+
+test "seedSyntheticWorkspace: seeds the requested org/project/repo counts" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(std.testing.io, &buf)]);
+
+    try seedSyntheticWorkspace(arena, root, .{ .orgs = 3, .projects_per_org = 4, .repos_per_project = 2, .with_git = false });
+
+    const ws = try testWorkspace(arena, root);
+    const projects = try ws.list(arena);
+    try std.testing.expectEqual(@as(usize, 12), projects.len); // 3 orgs * 4 projects
 }
 
 /// Not exposed by `std.os.windows.kernel32` (0.16 only binds the calls the

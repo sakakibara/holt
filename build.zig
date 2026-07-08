@@ -32,4 +32,28 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    const lib_module = b.createModule(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "json", .module = json_dep.module("json") },
+            .{ .name = "toml", .module = toml_dep.module("toml") },
+        },
+    });
+    lib_module.addOptions("build_options", options);
+
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "holt_lib", .module = lib_module },
+        },
+    });
+    const bench_exe = b.addExecutable(.{ .name = "holt-bench", .root_module = bench_mod });
+    const run_bench = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run the performance harness (synthetic workspace + timing baseline)");
+    bench_step.dependOn(&run_bench.step);
 }
