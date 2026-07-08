@@ -84,6 +84,18 @@ fn computeFor(alloc: std.mem.Allocator, cmd: cli.Command, rest: []const []const 
     const cur = rest[rest.len - 1];
     const prior = rest[0 .. rest.len - 1];
 
+    // A self-contained `--flag=value` word completes the flag's value against
+    // the part after `=`, not the flag name itself.
+    if (cur.len > 1 and cur[0] == '-') {
+        if (std.mem.indexOfScalar(u8, cur, '=')) |eq| {
+            const name = cur[0..eq];
+            const val = cur[eq + 1 ..];
+            if (pendingValueFlag(name, cmd.flags)) |f| {
+                return resolve(alloc, f.value, val, lastPositional(prior, cmd.flags), ws);
+            }
+        }
+    }
+
     // A dash-led word completes flag names, not a positional value.
     if (cur.len > 0 and cur[0] == '-') {
         return .{ .directive = .default, .candidates = try flagNames(alloc, cmd.flags, cur) };
@@ -535,6 +547,40 @@ test "computeFor: run --repo completes off the preceding project positional" {
     const got = try compute(arena, &table, &.{ "run", "widget", "--repo", "back" }, &ws);
     try testing.expectEqual(@as(usize, 1), got.candidates.len);
     try testing.expectEqualStrings("backend", got.candidates[0].value);
+}
+
+test "computeFor: --org=<partial> completes the flag value" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const table = [_]cli.Command{.{
+        .name = "list",
+        .summary = "",
+        .usage = "",
+        .group = .inspect,
+        .args = &.{},
+        .flags = &.{.{ .long = "org", .takes_value = true, .value = cat(.org) }},
+        .needs_workspace = true,
+        .run = struct {
+            fn run(_: *cli.Ctx) anyerror!u8 {
+                return 0;
+            }
+        }.run,
+    }};
+
+    const got = try compute(arena, &table, &.{ "list", "--org=ac" }, &ws);
+    try testing.expectEqual(@as(usize, 1), got.candidates.len);
+    try testing.expectEqualStrings("acme/", got.candidates[0].value);
+    try testing.expectEqual(Directive.nospace, got.directive);
 }
 
 test "reply: emits value<TAB>description; null description emits value only" {
