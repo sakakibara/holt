@@ -90,12 +90,10 @@ jobs:
       - name: build for ${{ matrix.target }}
         run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
 
-  # Runs the suite on real Windows to surface runtime gaps for the Windows port.
-  # Non-blocking (continue-on-error) until sub-project B makes it green.
+  # Runs the full suite on real Windows; a required gate like the other platforms.
   test-windows:
-    name: test (windows-latest, informational)
+    name: test (windows-latest)
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - name: install zig
