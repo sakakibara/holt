@@ -133,7 +133,10 @@ test "run: --paths appends a tab and the hub path" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--paths"});
 
     try testing.expectEqual(@as(u8, 0), got.code);
-    const want = try std.fmt.allocPrint(arena, "acme/gadget\t{s}/hub/acme/gadget\nacme/widget\t{s}/hub/acme/widget\nzebra/aardvark\t{s}/hub/zebra/aardvark\n", .{ ws.cfg.synced_root, ws.cfg.synced_root, ws.cfg.synced_root });
+    const gadget_hub = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "hub", "acme", "gadget" });
+    const widget_hub = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "hub", "acme", "widget" });
+    const aardvark_hub = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "hub", "zebra", "aardvark" });
+    const want = try std.fmt.allocPrint(arena, "acme/gadget\t{s}\nacme/widget\t{s}\nzebra/aardvark\t{s}\n", .{ gadget_hub, widget_hub, aardvark_hub });
     try testing.expectEqualStrings(want, got.out);
 }
 

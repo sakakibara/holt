@@ -132,14 +132,16 @@ test "run: golden output over a project with one present clone and one missing c
 
     const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    const absent_clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "absent" });
+    const present_clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
     const want = try std.fmt.allocPrint(arena,
         \\acme/proj
         \\content: {s}
         \\hub: {s}
-        \\  absent: github.com/acme/absent ({s}/github.com/acme/absent) [missing]
-        \\  present: github.com/acme/present ({s}/github.com/acme/present) [cloned]
+        \\  absent: github.com/acme/absent ({s}) [missing]
+        \\  present: github.com/acme/present ({s}) [cloned]
         \\
-    , .{ content_path, hub_path, ws.cfg.code_root, ws.cfg.code_root });
+    , .{ content_path, hub_path, absent_clone, present_clone });
     try testing.expectEqualStrings(want, got.out);
 }
 

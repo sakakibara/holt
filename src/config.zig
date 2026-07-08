@@ -659,7 +659,8 @@ test "configPath: an absolute XDG_CONFIG_HOME is used verbatim" {
     defer override.restore();
 
     const path = try configPath(arena);
-    try testing.expectEqualStrings("/somewhere/cfg/holt/config.toml", path);
+    const want = try std.fs.path.join(arena, &.{ "/somewhere/cfg", "holt", "config.toml" });
+    try testing.expectEqualStrings(want, path);
 }
 
 test "load: a relative synced_root errors RelativeRoot instead of panicking downstream, naming the root" {
