@@ -256,7 +256,8 @@ test "run: a project/repo query prints the real clone path, not the hub link" {
     try testing.expectEqual(@as(u8, 0), code);
 
     const got = out.written();
-    try testing.expectEqualStrings("/code/github.com/acme/backend\n", got);
+    const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), got);
 
     const hub_path = try std.fs.path.join(arena, &.{ root, "hub", "acme", "widget" });
     try testing.expect(std.mem.indexOf(u8, got, hub_path) == null);
@@ -285,7 +286,8 @@ test "run: repo resolves by unique subsequence when not an exact name" {
 
     const code = try command.run(&ctx);
     try testing.expectEqual(@as(u8, 0), code);
-    try testing.expectEqualStrings("/code/github.com/acme/backend\n", out.written());
+    const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), out.written());
 }
 
 test "run: no matching project exits 1 and reports on stderr" {
