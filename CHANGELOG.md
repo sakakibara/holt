@@ -6,6 +6,34 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-08
+
+### Added
+
+- **Windows support.** holt now runs on Windows (x86_64 and aarch64)
+  alongside macOS and Linux. The three-tree workspace model works there via
+  directory junctions - which need no special privilege - for the hub's
+  directory links. A synced content *file* surfaced at a hub root uses a
+  file symlink where the OS permits it (Developer Mode or an elevated
+  shell), and where it does not, `sync` and `doctor` report it as needing
+  Developer Mode rather than dropping it silently.
+- **Windows release assets and self-update.** Each release now ships
+  `holt-windows-{aarch64,x86_64}.zip`, and `holt upgrade` installs them on
+  Windows - extracting the archive and replacing the running `holt.exe`
+  despite the lock Windows holds on a running executable.
+- **PowerShell installer.** `irm
+  https://raw.githubusercontent.com/sakakibara/holt/main/scripts/install.ps1
+  | iex` installs the latest release to `%LOCALAPPDATA%\holt\bin` and adds
+  it to the user `PATH`, mirroring the existing `curl | sh` installer.
+
+### Changed
+
+- **`holt get` and the clone-backed commands stream git's progress** to the
+  terminal instead of capturing it, so a large clone shows live progress and
+  can prompt for credentials rather than appearing to hang.
+- `holt upgrade` extracts its release archive in process, dropping the
+  external `tar` dependency (macOS/Linux behavior is unchanged).
+
 ## [0.2.0] - 2026-07-07
 
 ### Added
@@ -115,5 +143,7 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sakakibara/holt/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/sakakibara/holt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sakakibara/holt/releases/tag/v0.1.0
