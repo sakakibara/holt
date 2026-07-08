@@ -144,19 +144,22 @@ fn coverageAllowed(allow: []const CoverageAllow, cmd: []const u8, field: []const
 
 /// Checks one command's own positionals and value-flags (not its
 /// subcommands - the caller walks those separately) against the allowlist,
-/// appending a description of each uncovered slot to `gaps`.
-fn coverageCheckCommand(alloc: std.mem.Allocator, command: cli.Command, allow: []const CoverageAllow, gaps: *std.ArrayList([]const u8)) !void {
+/// appending a description of each uncovered slot to `gaps`. `path` is the
+/// command's allowlist/report key: its bare name at the top level, or
+/// "<parent> <sub>" for a subcommand, so a subcommand slot cannot alias a
+/// same-named top-level one.
+fn coverageCheckCommand(alloc: std.mem.Allocator, command: cli.Command, path: []const u8, allow: []const CoverageAllow, gaps: *std.ArrayList([]const u8)) !void {
     for (command.args) |a| {
         if (a.variadic) continue;
         if (a.complete != .none) continue;
-        if (coverageAllowed(allow, command.name, a.name)) continue;
-        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s}.{s} (positional, no completion)", .{ command.name, a.name }));
+        if (coverageAllowed(allow, path, a.name)) continue;
+        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s}.{s} (positional, no completion)", .{ path, a.name }));
     }
     for (command.flags) |f| {
         if (!f.takes_value) continue;
         if (f.value != .none) continue;
-        if (coverageAllowed(allow, command.name, f.long)) continue;
-        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s} --{s} (value flag, no completion)", .{ command.name, f.long }));
+        if (coverageAllowed(allow, path, f.long)) continue;
+        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s} --{s} (value flag, no completion)", .{ path, f.long }));
     }
 }
 
@@ -182,8 +185,11 @@ test "coverage: every command positional and value-flag completes or is allowlis
     var gaps: std.ArrayList([]const u8) = .empty;
 
     for (command_table) |c| {
-        try coverageCheckCommand(arena, c, &allow, &gaps);
-        for (c.subcommands) |sub| try coverageCheckCommand(arena, sub, &allow, &gaps);
+        try coverageCheckCommand(arena, c, c.name, &allow, &gaps);
+        for (c.subcommands) |sub| {
+            const path = try std.fmt.allocPrint(arena, "{s} {s}", .{ c.name, sub.name });
+            try coverageCheckCommand(arena, sub, path, &allow, &gaps);
+        }
     }
 
     if (gaps.items.len > 0) {
@@ -304,4 +310,38 @@ test "integration: a broken (null) workspace still replies with the directive li
     var out: std.Io.Writer.Allocating = .init(arena);
     try completion.reply(arena, &command_table, &.{ "info", "wid" }, null, &out.writer);
     try testing.expectEqualStrings("default\n", out.written());
+}
+
+test "integration: adopt disambiguation, subsequence matching, and flag de-dup on the real table" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    const ws_ptr: ?*const workspace.Workspace = &ws;
+    try seedCompletionFixture(arena, &ws);
+
+    // `adopt`'s first positional (real spec: a project OR a clone path): a
+    // path-shaped word defers to file completion, a bare word completes
+    // projects.
+    const adopt_path = try completion.compute(arena, &command_table, &.{ "adopt", "./checkouts/wi" }, ws_ptr);
+    try testing.expectEqual(completion.Directive.files, adopt_path.directive);
+    const adopt_proj = try completion.compute(arena, &command_table, &.{ "adopt", "wid" }, ws_ptr);
+    try testing.expectEqual(completion.Directive.default, adopt_proj.directive);
+    try testing.expect(containsCandidate(adopt_proj.candidates, "widget"));
+
+    // Subsequence matching: "wdgt" is an abbreviation of "widget", so it
+    // resolves the same on TAB as it would on Enter.
+    const subseq = try completion.compute(arena, &command_table, &.{ "info", "wdgt" }, ws_ptr);
+    try testing.expect(containsCandidate(subseq.candidates, "widget"));
+
+    // Flag-name de-dup: an already-present flag is not re-offered. `--json` is
+    // on the line, so completing `--j` offers `--jobs` but not `--json`.
+    const flags = try completion.compute(arena, &command_table, &.{ "status", "--json", "--j" }, ws_ptr);
+    try testing.expect(containsCandidate(flags.candidates, "--jobs"));
+    try testing.expect(!containsCandidate(flags.candidates, "--json"));
 }
