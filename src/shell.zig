@@ -1,7 +1,8 @@
-//! Shell integration snippets for `holt init`: the `h`/`hi` navigation
+//! Shell integration snippets for `holt init`: the `h`/`hi`/`hir` navigation
 //! functions, one flavor per supported shell. `h` shells out to `holt path`
 //! and cds to whatever it printed, since a child process can't change its
-//! parent shell's directory; `hi` pipes `holt list` through fzf first.
+//! parent shell's directory; `hi` pipes `holt list` through fzf first; `hir`
+//! pipes `holt list --repos` through fzf and cds the picked line directly.
 
 const std = @import("std");
 const testing = std.testing;
@@ -34,6 +35,14 @@ const fish_snippet =
     \\    end
     \\    set -l dir (holt path $proj)
     \\    and cd $dir
+    \\end
+    \\
+    \\function hir
+    \\    set -l dir (holt list --repos | fzf)
+    \\    if test -z "$dir"
+    \\        return 1
+    \\    end
+    \\    cd $dir
     \\end
     \\
     \\# Tab-completion. `holt __complete` prints a directive line then one
@@ -70,6 +79,15 @@ const posix_hhi =
     \\    if [ $? -eq 0 ]; then
     \\        cd "$dir" || return 1
     \\    fi
+    \\}
+    \\
+    \\hir() {
+    \\    local dir
+    \\    dir="$(holt list --repos | fzf)"
+    \\    if [ -z "$dir" ]; then
+    \\        return 1
+    \\    fi
+    \\    cd "$dir" || return 1
     \\}
     \\
 ;
@@ -167,6 +185,14 @@ const powershell_snippet =
     \\    }
     \\}
     \\
+    \\function hir {
+    \\    $dir = holt list --repos | fzf
+    \\    if ([string]::IsNullOrEmpty($dir)) {
+    \\        return
+    \\    }
+    \\    Set-Location $dir
+    \\}
+    \\
     \\Register-ArgumentCompleter -Native -CommandName holt -ScriptBlock {
     \\    param($wordToComplete, $commandAst, $cursorPosition)
     \\    $tokens = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { "$_" })
@@ -242,4 +268,20 @@ test "snippet: bash strips the description at the tab and quotes the value" {
     const s = snippet(.bash);
     try testing.expect(std.mem.indexOf(u8, s, "%%$'\\t'") != null);
     try testing.expect(std.mem.indexOf(u8, s, "printf '%q'") != null);
+}
+
+test "snippet: every shell defines hir wired to `holt list --repos | fzf`" {
+    inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
+        const s = snippet(sh);
+        try testing.expect(std.mem.indexOf(u8, s, "hir") != null);
+        try testing.expect(std.mem.indexOf(u8, s, "holt list --repos") != null);
+    }
+}
+
+test "snippet: hir is argless and gets no completion registration" {
+    // Only `h` is registered for completion; hir/hi are fzf-driven.
+    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "complete -c hir") == null);
+    try testing.expect(std.mem.indexOf(u8, snippet(.bash), "complete -F _hir") == null);
+    try testing.expect(std.mem.indexOf(u8, snippet(.zsh), "compdef _hir") == null);
+    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "-CommandName hir") == null);
 }
