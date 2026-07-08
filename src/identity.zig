@@ -120,8 +120,9 @@ fn stripDotGit(s: []const u8) []const u8 {
 
 /// Normalizes a git remote URL (scp-like, ssh://, https://, http://, git://)
 /// into an Identity. Rejects fewer than two path segments, empty segments,
-/// and a host of "local" (reserved for `local()`). `host`, `owner`, and
-/// `repo` on the result are each allocator-owned; free them individually.
+/// a `.`/`..` segment, a segment carrying a backslash, and a host of "local"
+/// (reserved for `local()`). `host`, `owner`, and `repo` on the result are
+/// each allocator-owned; free them individually.
 pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl, OutOfMemory }!Identity {
     const parsed = try parseUrl(url);
 
@@ -129,6 +130,10 @@ pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl
     errdefer alloc.free(host);
     _ = std.ascii.lowerString(host, parsed.host);
     if (std.mem.eql(u8, host, "local")) return error.UnrecognizedUrl;
+    // A `.`/`..` host or one carrying a backslash would land in the same
+    // clone-path segment as owner/repo segments below; guard it identically.
+    if (std.mem.eql(u8, host, ".") or std.mem.eql(u8, host, "..")) return error.UnrecognizedUrl;
+    if (std.mem.indexOfScalar(u8, host, '\\') != null) return error.UnrecognizedUrl;
 
     var path = trimTrailingSlashes(parsed.path);
     path = trimTrailingSlashes(stripDotGit(path));
@@ -138,6 +143,11 @@ pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl
     var it = std.mem.splitScalar(u8, path, '/');
     while (it.next()) |seg| {
         if (seg.len == 0) return error.UnrecognizedUrl;
+        // `.`/`..` are not normalized by std.fs.path.join, and a smuggled
+        // backslash becomes a path separator on Windows - either would let
+        // the derived clone path escape code_root (code_root/x/../y).
+        if (std.mem.eql(u8, seg, ".") or std.mem.eql(u8, seg, "..")) return error.UnrecognizedUrl;
+        if (std.mem.indexOfScalar(u8, seg, '\\') != null) return error.UnrecognizedUrl;
         try segments.append(alloc, seg);
     }
     if (segments.items.len < 2) return error.UnrecognizedUrl;
@@ -262,6 +272,22 @@ test "fromUrl: rejects unrecognized or underspecified forms" {
     for (urls) |url| {
         try testing.expectError(error.UnrecognizedUrl, fromUrl(testing.allocator, url));
     }
+}
+
+test "fromUrl: rejects traversal and backslash segments, accepts dotted names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    for ([_][]const u8{
+        "https://github.com/../foo",
+        "https://github.com/acme/../evil",
+        "https://github.com/acme/..\\..\\evil",
+    }) |bad| {
+        try testing.expectError(error.UnrecognizedUrl, fromUrl(a, bad));
+    }
+    // dotted names and subgroups are fine (whole-segment check, not substring).
+    _ = try fromUrl(a, "https://github.com/acme/my.repo");
+    _ = try fromUrl(a, "https://gitlab.com/group/subgroup/repo");
 }
 
 test "fromUrl: different accepted forms of the same repo compare eql" {

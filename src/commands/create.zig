@@ -66,29 +66,17 @@ fn isSafeLocalName(name: []const u8) bool {
     return true;
 }
 
-/// True if the identity's clone path would escape the code tree: a `.` or
-/// `..` segment (which `std.fs.path.join` does NOT normalize, so
-/// `code_root/x/../y` escapes), or a segment carrying a literal backslash.
-/// `relPath` is always a logical `/`-joined key, so a `\` inside a segment is
-/// a Windows path separator smuggled into a component; `clonePath` joins with
-/// the platform separator, so on Windows that `\` would let `..\` climb out
-/// of `code_root` even though no `/`-split segment is exactly "..". The local
-/// branch is vetted by isSafeLocalName instead.
-fn identityEscapes(alloc: std.mem.Allocator, id: identity.Identity) !bool {
-    const rel = try id.relPath(alloc);
-    var it = std.mem.splitScalar(u8, rel, '/');
-    while (it.next()) |seg| {
-        if (std.mem.eql(u8, seg, ".") or std.mem.eql(u8, seg, "..")) return true;
-        if (std.mem.indexOfScalar(u8, seg, '\\') != null) return true;
-    }
-    return false;
-}
-
 fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const ws = ctx.ws.?;
     const alloc = ctx.alloc;
 
-    const target = try classify(alloc, a.spec);
+    const target = classify(alloc, a.spec) catch |err| switch (err) {
+        error.UnrecognizedUrl => {
+            try ctx.err_w.print("holt: \"{s}\" is not a valid repo url\n", .{a.spec});
+            return 1;
+        },
+        else => return err,
+    };
     const clone_path = try target.id.clonePath(alloc, ws.cfg.code_root);
 
     if (target.id.isLocal()) {
@@ -96,9 +84,6 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
             try ctx.err_w.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
             return 1;
         }
-    } else if (try identityEscapes(alloc, target.id)) {
-        try ctx.err_w.print("holt: \"{s}\" is not a valid repo url\n", .{a.spec});
-        return 1;
     }
 
     if (fsutil.exists(clone_path)) {

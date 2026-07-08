@@ -65,7 +65,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         else => return err,
     };
 
-    const id = try identity.fromUrl(alloc, url);
+    const id = identity.fromUrl(alloc, url) catch |err| switch (err) {
+        error.UnrecognizedUrl => {
+            try ctx.err_w.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
+            return 1;
+        },
+        else => return err,
+    };
 
     if (p.marker.repos.contains(id.repo)) {
         try ctx.err_w.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });

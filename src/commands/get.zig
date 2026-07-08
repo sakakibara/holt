@@ -68,7 +68,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         else => return err,
     };
 
-    const id = try identity.fromUrl(alloc, url);
+    const id = identity.fromUrl(alloc, url) catch |err| switch (err) {
+        error.UnrecognizedUrl => {
+            try ctx.err_w.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
+            return 1;
+        },
+        else => return err,
+    };
 
     const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
 
