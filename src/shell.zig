@@ -147,6 +147,7 @@ const bash_snippet = posix_hhi ++ bash_completion;
 const zsh_snippet = posix_hhi ++ zsh_completion;
 
 const powershell_snippet =
+    \\Remove-Item -Path Alias:h -Force -ErrorAction SilentlyContinue
     \\function h {
     \\    param([string]$Query)
     \\    $dir = holt path $Query
@@ -224,7 +225,7 @@ test "snippet: fish uses function/end, bash and zsh use POSIX name(), powershell
 }
 
 test "snippet: powershell registers a completer for h, not just holt" {
-    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "-CommandName h") != null);
+    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "-CommandName h -ParameterName Query") != null);
 }
 
 test "snippet: powershell splits the description off the tab for both completers" {
