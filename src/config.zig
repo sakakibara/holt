@@ -215,18 +215,18 @@ fn ensureAbsolute(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, path:
 
 /// A root that does not exist yet is fine (a fresh machine or an unmounted
 /// cloud). But a root that exists as a *file* would make every later
-/// `openDirAbsolute` fail with a bare `NotDir`; catch that here as a clear
-/// diagnostic instead. Any other access error is left for the operation that
-/// actually needs the path to report in its own context.
+/// `openDirAbsolute` fail; catch that here as a clear diagnostic instead.
+/// Statting rather than opening as a directory is what makes this
+/// cross-platform: Windows does not surface `error.NotDir` from opening a
+/// file as a directory the way POSIX does, so the kind has to be checked
+/// directly. Any other access error is left for the operation that actually
+/// needs the path to report in its own context.
 fn ensureDirOrAbsent(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, path: []const u8, label: []const u8, root: []const u8) !void {
-    var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), root, .{}) catch |err| switch (err) {
-        error.NotDir => {
-            if (diag) |d| d.set(alloc, "{s}: {s} \"{s}\" exists but is not a directory", .{ path, label, root });
-            return error.RootNotDirectory;
-        },
-        else => return,
-    };
-    dir.close(fsutil.io());
+    const st = std.Io.Dir.cwd().statFile(fsutil.io(), root, .{}) catch return;
+    if (st.kind != .directory) {
+        if (diag) |d| d.set(alloc, "{s}: {s} \"{s}\" exists but is not a directory", .{ path, label, root });
+        return error.RootNotDirectory;
+    }
 }
 
 /// Attributes a `toml.parseInto` failure to `path` with the most specific
