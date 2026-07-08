@@ -6,8 +6,52 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-09
+
+### Added
+
+- **`holt create`** makes a git repo from scratch. `holt create <name>` runs
+  `git init` at `<code_root>/local/<name>` (a local repo, no remote); a
+  `owner/repo` / `host/owner/repo` / url spec instead creates it at its
+  identity path with `origin` set (nothing pushed); `-p <project>` attaches it
+  as a project member (marker + hub) rather than standalone. This fills the gap
+  `new`/`add`/`get` left - they only clone an existing remote and reject a
+  from-scratch local repo. The created path is printed, so `cd $(holt create
+  foo)` works.
+
+### Changed
+
+- **Shell completion is smarter, complete, and consistent across all four
+  shells.** Candidates now match the same case-insensitive subsequence
+  (smartcase) rule the resolver uses, so any selector that resolves on Enter
+  also completes on TAB, ranked exact > prefix > subsequence. Candidates carry
+  descriptions where the shell supports them (fish, zsh, PowerShell): a
+  project's org, a member repo's clone state (`cloned`/`missing`/`local`), a
+  backend's synced root. A flag's value completes in context (`run --repo`
+  completes off the project), a glued `--flag=value` completes its value, and
+  `adopt` completes a path or a project by shape. Every command's positionals
+  and flags now complete or are explicitly free-form, guarded by a test:
+  `setup --backend` offers the builtin backends (fixing empty-on-fresh-install),
+  `worktree` completes existing branches, `org rename` completes orgs
+  (including archive-only ones), and `add`/`get`/`new` path args complete
+  files. PowerShell gains the `h` completer, bash quotes candidates containing
+  spaces, and an already-typed flag is not re-offered. No `git` runs on the TAB
+  path.
+- **`status`, `recent`, and `doctor` are substantially faster on large
+  workspaces** by cutting per-repo `git` subprocesses: `status` collapses its
+  four git calls per repo into one `git status --porcelain=v2`, and `recent`
+  drops a redundant repository check - roughly a 3x and 2x speedup respectively
+  across hundreds of projects, with byte-identical output.
+- Corrected the `holt doctor --full` help to describe its real effect (it
+  widens the symlink scan to the whole synced root), not a per-repo git check.
+
 ### Fixed
 
+- **Repo identity parsing rejects path-traversal segments** - a `.`, `..`, or
+  backslash in a url/shorthand's host or any path segment - so a crafted spec
+  can no longer place a clone outside the code tree (notably on Windows, where
+  the path separator differs). Applies to `create`, `add`, `get`, and every
+  command that derives a clone path from an identity.
 - The Windows PowerShell installer preserves expandable (`%VAR%`) entries when
   adding its directory to the user `PATH`, and renames an existing `holt.exe`
   aside so a reinstall over a running copy succeeds.
@@ -151,7 +195,8 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/sakakibara/holt/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sakakibara/holt/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sakakibara/holt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sakakibara/holt/releases/tag/v0.1.0
