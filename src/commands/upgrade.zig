@@ -394,21 +394,37 @@ test "extractArchive: unpacks a gzip tar into the destination" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    // Build a real holt-*.tar.gz containing a file named "holt" via the system
-    // tar (this is the FIXTURE, not the code under test), then extract it in
-    // process and assert the file lands in dest.
     const srcdir = try std.fs.path.join(arena, &.{ root, "src" });
     try fsutil.ensureDir(srcdir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ srcdir, "holt" }), .data = "BINARY" });
-    const archive = try std.fs.path.join(arena, &.{ root, "a.tar.gz" });
-    _ = try proc.run(arena, &.{ "tar", "-C", srcdir, "-czf", archive, "holt" }, null);
-
     const dest = try std.fs.path.join(arena, &.{ root, "dest" });
     try fsutil.ensureDir(dest);
-    try extractArchive(archive, dest, false);
 
-    const out = try std.fs.path.join(arena, &.{ dest, "holt" });
-    try testing.expectEqualStrings("BINARY", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), out, arena, .unlimited));
+    if (builtin.os.tag == .windows) {
+        // GNU tar on windows-latest misparses the C:\ drive-letter path and
+        // silently fails to write the archive, and .tar.gz isn't the format
+        // holt extracts on Windows anyway; stage the same .zip fixture the
+        // e2e tests use via stageFakeReleaseAsset and exercise the .zip arm
+        // of extractArchive instead.
+        const archive = try std.fs.path.join(arena, &.{ root, "a.zip" });
+        try stageFakeReleaseAsset(arena, srcdir, archive, "BINARY");
+
+        try extractArchive(archive, dest, true);
+
+        const out = try std.fs.path.join(arena, &.{ dest, "holt.exe" });
+        try testing.expectEqualStrings("BINARY", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), out, arena, .unlimited));
+    } else {
+        // Build a real holt-*.tar.gz containing a file named "holt" via the
+        // system tar (this is the FIXTURE, not the code under test), then
+        // extract it in process and assert the file lands in dest.
+        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ srcdir, "holt" }), .data = "BINARY" });
+        const archive = try std.fs.path.join(arena, &.{ root, "a.tar.gz" });
+        _ = try proc.run(arena, &.{ "tar", "-C", srcdir, "-czf", archive, "holt" }, null);
+
+        try extractArchive(archive, dest, false);
+
+        const out = try std.fs.path.join(arena, &.{ dest, "holt" });
+        try testing.expectEqualStrings("BINARY", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), out, arena, .unlimited));
+    }
 }
 
 test "downloadUrl: joins base, tag, and asset with slashes" {
@@ -420,7 +436,7 @@ test "downloadUrl: joins base, tag, and asset with slashes" {
     try testing.expectEqualStrings("https://example.invalid/download/v1.2.3/holt-macos-aarch64.tar.gz", got);
 }
 
-test "replaceBinary: swaps in the new binary's bytes and mode, leaving no .old behind" {
+test "replaceBinary: swaps in the new binary's bytes; leaves the old image aside on Windows, none on POSIX" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -446,7 +462,13 @@ test "replaceBinary: swaps in the new binary's bytes and mode, leaving no .old b
     }
 
     const old_path = try std.fmt.allocPrint(arena, "{s}.old", .{target_path});
-    try testing.expect(!fsutil.exists(old_path));
+    if (builtin.os.tag == .windows) {
+        // The locked running image can't be deleted, only renamed aside; a
+        // later run reaps it, so replaceBinary intentionally leaves it here.
+        try testing.expect(fsutil.exists(old_path));
+    } else {
+        try testing.expect(!fsutil.exists(old_path));
+    }
 }
 
 test "replaceBinary: a missing new binary leaves the original target intact" {
