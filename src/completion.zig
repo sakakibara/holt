@@ -10,6 +10,7 @@
 const std = @import("std");
 const cli = @import("cli.zig");
 const workspace = @import("workspace.zig");
+const project = @import("project.zig");
 const marker = @import("marker.zig");
 const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
@@ -29,19 +30,31 @@ pub const Directive = enum {
     }
 };
 
+/// One completion candidate: the value the shell inserts, and an optional
+/// human-readable annotation (an org, a repo's clone state, ...) shells that
+/// support it render alongside the value.
+pub const Candidate = struct { value: []const u8, description: ?[]const u8 = null };
+
 pub const Result = struct {
     directive: Directive,
-    candidates: []const []const u8,
+    candidates: []const Candidate,
 };
 
 /// Prints the completion reply for `words` (every token after the program
 /// name, the last being the possibly-empty word under the cursor): a
-/// directive line, then one candidate per line. Never fails the shell - a
+/// directive line, then one candidate per line as `value\tdescription`
+/// (just `value` when there is no description). Never fails the shell - a
 /// broken workspace just yields no dynamic candidates.
 pub fn reply(alloc: std.mem.Allocator, table: []const cli.Command, words: []const []const u8, ws: ?*const workspace.Workspace, w: *std.Io.Writer) !void {
     const r = try compute(alloc, table, words, ws);
     try w.print("{s}\n", .{r.directive.tag()});
-    for (r.candidates) |c| try w.print("{s}\n", .{c});
+    for (r.candidates) |c| {
+        if (c.description) |d| {
+            try w.print("{s}\t{s}\n", .{ c.value, d });
+        } else {
+            try w.print("{s}\n", .{c.value});
+        }
+    }
 }
 
 /// The engine. `words[0]` is the (maybe partial) command name; a bare-command
@@ -94,7 +107,7 @@ fn resolve(alloc: std.mem.Allocator, spec: cli.Complete, cur: []const u8, prev: 
     switch (spec) {
         .none => return empty(),
         .files => return .{ .directive = .files, .candidates = &.{} },
-        .choices => |cs| return .{ .directive = .default, .candidates = try filterPrefix(alloc, cs, cur) },
+        .choices => |cs| return .{ .directive = .default, .candidates = try filterPrefix(alloc, try plain(alloc, cs), cur) },
         .dynamic => |key| {
             // A `<project>/<repo>@<branch>` selector (for `h`/`holt path`)
             // completes the repo's worktree branches after the '@'.
@@ -138,20 +151,28 @@ fn empty() Result {
     return .{ .directive = .default, .candidates = &.{} };
 }
 
-fn commandNames(alloc: std.mem.Allocator, table: []const cli.Command, prefix: []const u8) ![]const []const u8 {
+fn commandNames(alloc: std.mem.Allocator, table: []const cli.Command, prefix: []const u8) ![]const Candidate {
     var out: std.ArrayList([]const u8) = .empty;
     for (table) |c| try out.append(alloc, c.name);
-    return filterMatches(alloc, try out.toOwnedSlice(alloc), prefix);
+    return filterMatches(alloc, try plain(alloc, try out.toOwnedSlice(alloc)), prefix);
 }
 
-fn flagNames(alloc: std.mem.Allocator, flags: []const cli.Flag, cur: []const u8) ![]const []const u8 {
+fn flagNames(alloc: std.mem.Allocator, flags: []const cli.Flag, cur: []const u8) ![]const Candidate {
     var out: std.ArrayList([]const u8) = .empty;
     for (flags) |f| try out.append(alloc, try std.fmt.allocPrint(alloc, "--{s}", .{f.long}));
-    return filterMatches(alloc, try out.toOwnedSlice(alloc), cur);
+    return filterMatches(alloc, try plain(alloc, try out.toOwnedSlice(alloc)), cur);
 }
 
-fn filterPrefix(alloc: std.mem.Allocator, all: []const []const u8, cur: []const u8) ![]const []const u8 {
+fn filterPrefix(alloc: std.mem.Allocator, all: []const Candidate, cur: []const u8) ![]const Candidate {
     return filterMatches(alloc, all, cur);
+}
+
+/// Wraps plain values as descriptionless candidates, for sources that don't
+/// (yet) carry an annotation.
+fn plain(alloc: std.mem.Allocator, values: []const []const u8) ![]const Candidate {
+    var out: std.ArrayList(Candidate) = .empty;
+    for (values) |v| try out.append(alloc, .{ .value = v });
+    return out.toOwnedSlice(alloc);
 }
 
 fn hasPrefixIgnoreCase(s: []const u8, prefix: []const u8) bool {
@@ -164,7 +185,9 @@ fn hasPrefixIgnoreCase(s: []const u8, prefix: []const u8) bool {
 /// subsequences too, so this is a superset of the old prefix test.
 fn matches(query: []const u8, target: []const u8) bool {
     if (query.len == 0) return true;
-    const cased = for (query) |c| { if (std.ascii.isUpper(c)) break true; } else false;
+    const cased = for (query) |c| {
+        if (std.ascii.isUpper(c)) break true;
+    } else false;
     if (cased) return isSubsequence(query, target);
     return workspace.isSubsequenceIgnoreCase(query, target);
 }
@@ -180,14 +203,15 @@ fn isSubsequence(query: []const u8, target: []const u8) bool {
 
 /// Rank: 0 exact, 1 prefix, 2 subsequence; drop non-matches. Within a rank,
 /// ties break on original index so ordering is deterministic regardless of
-/// whether the sort implementation is stable.
-fn filterMatches(alloc: std.mem.Allocator, all: []const []const u8, cur: []const u8) ![]const []const u8 {
+/// whether the sort implementation is stable. Matches (and ranks) on each
+/// candidate's `.value`; its description rides along unchanged.
+fn filterMatches(alloc: std.mem.Allocator, all: []const Candidate, cur: []const u8) ![]const Candidate {
     if (cur.len == 0) return all;
-    const Ranked = struct { rank: u8, idx: usize, val: []const u8 };
+    const Ranked = struct { rank: u8, idx: usize, val: Candidate };
     var ranked: std.ArrayList(Ranked) = .empty;
     for (all, 0..) |c, i| {
-        if (!matches(cur, c)) continue;
-        const rank: u8 = if (std.ascii.eqlIgnoreCase(c, cur)) 0 else if (hasPrefixIgnoreCase(c, cur)) 1 else 2;
+        if (!matches(cur, c.value)) continue;
+        const rank: u8 = if (std.ascii.eqlIgnoreCase(c.value, cur)) 0 else if (hasPrefixIgnoreCase(c.value, cur)) 1 else 2;
         try ranked.append(alloc, .{ .rank = rank, .idx = i, .val = c });
     }
     std.mem.sort(Ranked, ranked.items, {}, struct {
@@ -196,7 +220,7 @@ fn filterMatches(alloc: std.mem.Allocator, all: []const []const u8, cur: []const
             return a.idx < b.idx;
         }
     }.lt);
-    var out: std.ArrayList([]const u8) = .empty;
+    var out: std.ArrayList(Candidate) = .empty;
     for (ranked.items) |r| try out.append(alloc, r.val);
     return out.toOwnedSlice(alloc);
 }
@@ -285,17 +309,17 @@ pub fn cat(c: Category) cli.Complete {
 // by querying the workspace. This is the one holt-coupled function; the engine
 // above is generic. `prev` is the preceding positional (a project, for a repo
 // category). A null or unreadable workspace yields no candidates.
-fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, ws: ?*const workspace.Workspace) ![]const []const u8 {
+fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, ws: ?*const workspace.Workspace) ![]const Candidate {
     const w = ws orelse return &.{};
     const category = std.meta.stringToEnum(Category, key) orelse return &.{};
 
     switch (category) {
         .project, .project_repo => {
             const all = try w.list(alloc);
-            var out: std.ArrayList([]const u8) = .empty;
+            var out: std.ArrayList(Candidate) = .empty;
             for (all) |p| {
-                try out.append(alloc, try p.qualified(alloc));
-                try out.append(alloc, p.name);
+                try out.append(alloc, .{ .value = try p.qualified(alloc), .description = p.org });
+                try out.append(alloc, .{ .value = p.name, .description = p.org });
             }
             return out.toOwnedSlice(alloc);
         },
@@ -305,17 +329,19 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             for (all) |p| try seen.put(alloc, p.org, {});
             var out: std.ArrayList([]const u8) = .empty;
             for (seen.keys()) |org| try out.append(alloc, try std.fmt.allocPrint(alloc, "{s}/", .{org}));
-            return out.toOwnedSlice(alloc);
+            return plain(alloc, try out.toOwnedSlice(alloc));
         },
         .repo => {
-            const project = prev orelse return &.{};
-            const found = try w.find(alloc, project);
+            const project_query = prev orelse return &.{};
+            const found = try w.find(alloc, project_query);
             const p = switch (found) {
                 .one => |one| one,
                 else => return &.{},
             };
-            var out: std.ArrayList([]const u8) = .empty;
-            for (p.marker.repos.keys()) |name| try out.append(alloc, name);
+            var out: std.ArrayList(Candidate) = .empty;
+            for (p.marker.repos.keys()) |name| {
+                try out.append(alloc, .{ .value = name, .description = repoState(alloc, p, name, w.cfg.code_root) });
+            }
             return out.toOwnedSlice(alloc);
         },
         .local_repo => {
@@ -329,21 +355,32 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             }
             var out: std.ArrayList([]const u8) = .empty;
             for (seen.keys()) |name| try out.append(alloc, name);
-            return out.toOwnedSlice(alloc);
+            return plain(alloc, try out.toOwnedSlice(alloc));
         },
         .backend => {
-            var out: std.ArrayList([]const u8) = .empty;
-            for (w.cfg.presets) |preset| try out.append(alloc, preset.name);
+            var out: std.ArrayList(Candidate) = .empty;
+            for (w.cfg.presets) |preset| try out.append(alloc, .{ .value = preset.name, .description = preset.synced_root });
             return out.toOwnedSlice(alloc);
         },
         .archived => return archivedQueries(alloc, w),
     }
 }
 
+/// A repo's clone state, for the `.repo` category's description: `"local"`
+/// for a repo with no remote yet (a `local:` marker entry), else `"cloned"`
+/// or `"missing"` depending on whether its clone path exists on disk. One
+/// `fsutil.exists` check per repo - no git.
+fn repoState(alloc: std.mem.Allocator, p: project.Project, name: []const u8, code_root: []const u8) ?[]const u8 {
+    const id = p.repoIdentity(alloc, name) catch return null;
+    if (id.isLocal()) return "local";
+    const clone_path = id.clonePath(alloc, code_root) catch return null;
+    return if (fsutil.exists(clone_path)) "cloned" else "missing";
+}
+
 /// Worktree-branch candidates for a `<project>/<repo>@<branch>` selector: each
 /// worktree under the repo's `<clone>@worktrees` dir, as a full
 /// `<repo_sel>@<branch>` token (slashy branches kept, since git owns that tree).
-fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: ?*const workspace.Workspace) ![]const []const u8 {
+fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: ?*const workspace.Workspace) ![]const Candidate {
     const w = ws orelse return &.{};
     const slash = std.mem.lastIndexOfScalar(u8, repo_sel, '/') orelse return &.{};
 
@@ -366,7 +403,7 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
     const clone_path = try id.clonePath(alloc, w.cfg.code_root);
     const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
 
-    var out: std.ArrayList([]const u8) = .empty;
+    var out: std.ArrayList(Candidate) = .empty;
     var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), worktrees_dir, .{ .iterate = true }) catch return out.toOwnedSlice(alloc);
     defer dir.close(fsutil.io());
     var walker = try dir.walkSelectively(alloc);
@@ -378,12 +415,12 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
             // Branch names namespace on '/' (git's own separator, not the
             // platform's); the walker reports nesting with the native
             // separator, so translate it back for a round-trippable token.
-            const branch = if (std.fs.path.sep == '/') entry.path else blk: {
+            const branch = if (std.fs.path.sep == '/') try alloc.dupe(u8, entry.path) else blk: {
                 const buf = try alloc.dupe(u8, entry.path);
                 std.mem.replaceScalar(u8, buf, std.fs.path.sep, '/');
                 break :blk buf;
             };
-            try out.append(alloc, try std.fmt.allocPrint(alloc, "{s}@{s}", .{ repo_sel, branch }));
+            try out.append(alloc, .{ .value = try std.fmt.allocPrint(alloc, "{s}@{s}", .{ repo_sel, branch }), .description = branch });
         } else {
             try walker.enter(fsutil.io(), entry);
         }
@@ -392,9 +429,9 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
 }
 
 /// "org/name" for every archived project (a marker under `<synced>/archive`).
-fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const []const u8 {
+fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const Candidate {
     const root = try ws.archiveRoot(alloc);
-    var out: std.ArrayList([]const u8) = .empty;
+    var out: std.ArrayList(Candidate) = .empty;
 
     var root_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return &.{},
@@ -412,7 +449,7 @@ fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]
             if (name_entry.kind != .directory) continue;
             const marker_path = try std.fs.path.join(alloc, &.{ root, org_entry.name, name_entry.name, marker.marker_basename });
             if (!fsutil.exists(marker_path)) continue;
-            try out.append(alloc, try std.fmt.allocPrint(alloc, "{s}/{s}", .{ org_entry.name, name_entry.name }));
+            try out.append(alloc, .{ .value = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ org_entry.name, name_entry.name }), .description = "archived" });
         }
     }
     return out.toOwnedSlice(alloc);
@@ -423,18 +460,18 @@ test "filter: a subsequence abbreviation matches like the resolver, tiered exact
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const all: []const []const u8 = &.{ "backend", "broker", "acme/backend" };
+    const all = try plain(arena, &.{ "backend", "broker", "acme/backend" });
     // "bck" is a subsequence of "backend" (b-a-c-k-...) and, since "acme/backend"
     // contains "backend" verbatim, of that too; "broker" has no 'c' and drops out.
     // Both subsequence hits rank equally, so original order breaks the tie.
     const got = try filterMatches(arena, all, "bck");
     try testing.expectEqual(@as(usize, 2), got.len);
-    try testing.expectEqualStrings("backend", got[0]);
-    try testing.expectEqualStrings("acme/backend", got[1]);
+    try testing.expectEqualStrings("backend", got[0].value);
+    try testing.expectEqualStrings("acme/backend", got[1].value);
 
     // Tiering: exact and prefix sort before a subsequence-only match.
-    const tiered = try filterMatches(arena, &.{ "abxc", "ab", "abc" }, "abc");
-    try testing.expectEqualStrings("abc", tiered[0]); // exact first
+    const tiered = try filterMatches(arena, try plain(arena, &.{ "abxc", "ab", "abc" }), "abc");
+    try testing.expectEqualStrings("abc", tiered[0].value); // exact first
 }
 
 test "worktreeBranchCandidates: a repo's worktrees become <repo>@<branch> tokens" {
@@ -460,5 +497,41 @@ test "worktreeBranchCandidates: a repo's worktrees become <repo>@<branch> tokens
 
     const cands = try worktreeBranchCandidates(arena, "proj/backend", &ws);
     try testing.expectEqual(@as(usize, 1), cands.len);
-    try testing.expectEqualStrings("proj/backend@feature/x", cands[0]);
+    try testing.expectEqualStrings("proj/backend@feature/x", cands[0].value);
+    try testing.expectEqualStrings("feature/x", cands[0].description.?);
+}
+
+test "reply: emits value<TAB>description; null description emits value only" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // A project completion carries the org as a description.
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const table = [_]cli.Command{.{
+        .name = "info",
+        .summary = "",
+        .usage = "",
+        .group = .inspect,
+        .args = &.{.{ .name = "project", .complete = cat(.project) }},
+        .needs_workspace = true,
+        .run = struct {
+            fn run(_: *cli.Ctx) anyerror!u8 {
+                return 0;
+            }
+        }.run,
+    }};
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try reply(arena, &table, &.{ "info", "wid" }, &ws, &out.writer);
+    const got = out.written();
+    // directive line, then "acme/widget\tacme" and "widget\tacme".
+    try testing.expect(std.mem.indexOf(u8, got, "widget\tacme") != null);
 }
