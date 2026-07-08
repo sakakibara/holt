@@ -10,6 +10,7 @@ const cli = @import("../cli.zig");
 const args = @import("../args.zig");
 const comp = @import("../completion.zig");
 const common = @import("common.zig");
+const project_mod = @import("../project.zig");
 const identity = @import("../identity.zig");
 const marker = @import("../marker.zig");
 const projectlock = @import("../projectlock.zig");
@@ -101,6 +102,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
+    // Resolve -p BEFORE any filesystem work, so a bad project fails without
+    // leaving an orphaned git init behind.
+    var project: ?project_mod.Project = null;
+    if (a.project) |project_query| {
+        project = (try common.resolveOne(ctx, project_query)) orelse return 1;
+    }
+
     const res = try git.run(alloc, &.{ "git", "init", "-q", "-b", "main", clone_path }, null);
     if (res.status != 0) {
         const cause = std.mem.trim(u8, res.stderr, " \t\r\n");
@@ -117,8 +125,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         }
     }
 
-    if (a.project) |project_query| {
-        var p = (try common.resolveOne(ctx, project_query)) orelse return 1;
+    if (project) |*p| {
         var lock = try projectlock.acquire(alloc, p.content_path);
         defer lock.release();
         p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
@@ -130,7 +137,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
         try p.marker.repos.put(alloc, target.id.repo, member_value);
         try marker.save(&p.marker, try p.markerPath(alloc));
-        _ = try hub.reconcile(alloc, &ws, &p, false);
+        _ = try hub.reconcile(alloc, &ws, p, false);
     }
 
     try ctx.out.print("{s}\n", .{clone_path});
@@ -250,4 +257,19 @@ test "run: -p attaches a local member (marker local:<name> + hub) and doctor doe
     const doctor = @import("../doctor.zig");
     const report = try doctor.run(arena, &ws, .{ .full = false, .fix = false, .jobs = 1 });
     try testing.expectEqual(@as(usize, 0), report.broken_clones.len);
+}
+
+test "run: -p to a nonexistent project fails without creating the repo" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "tool", "-p", "no/such" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    // No orphaned repo left behind.
+    const clone_path = try identity.local("tool").clonePath(arena, ws.cfg.code_root);
+    try testing.expect(!fsutil.exists(clone_path));
 }
