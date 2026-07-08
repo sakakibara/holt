@@ -56,12 +56,32 @@ fn classify(alloc: std.mem.Allocator, spec: []const u8) !Target {
     return .{ .id = try identity.fromUrl(alloc, url), .origin = url };
 }
 
+/// A local repo name must be a single safe path segment: no separator, no
+/// `..`, no leading `.`/`~` (each would escape or shadow the `local/` bucket).
+fn isSafeLocalName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    if (name[0] == '.' or name[0] == '~') return false;
+    if (std.mem.eql(u8, name, "..")) return false;
+    for (name) |c| if (c == '/' or c == '\\') return false;
+    return true;
+}
+
 fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const ws = ctx.ws.?;
     const alloc = ctx.alloc;
 
     const target = try classify(alloc, a.spec);
     const clone_path = try target.id.clonePath(alloc, ws.cfg.code_root);
+
+    if (target.id.isLocal() and !isSafeLocalName(a.spec)) {
+        try ctx.err_w.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
+        return 1;
+    }
+
+    if (fsutil.exists(clone_path)) {
+        try ctx.err_w.print("holt: {s} already exists; use `holt adopt` to register an existing clone\n", .{clone_path});
+        return 1;
+    }
 
     const res = try git.run(alloc, &.{ "git", "init", "-q", "-b", "main", clone_path }, null);
     if (res.status != 0) {
@@ -96,4 +116,35 @@ test "run: a bare name creates a local repo at code_root/local/<name>, prints th
     // No marker and no hub for a standalone create.
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "local", "scratch", marker.marker_basename });
     try testing.expect(!fsutil.exists(marker_path));
+}
+
+test "run: an unsafe local name is rejected" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    for ([_][]const u8{ "..", ".hidden", "~x" }) |bad| {
+        const got = try testutil.runCmd(arena, command.run, ws, &.{bad});
+        try testing.expectEqual(@as(u8, 1), got.code);
+    }
+}
+
+test "run: refuses when the target path already exists, pointing at adopt" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // Pre-create the target path.
+    const target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "taken" });
+    try fsutil.ensureDir(target);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"taken"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "adopt") != null);
 }
