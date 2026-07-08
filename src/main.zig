@@ -13,6 +13,7 @@ const list_cmd = @import("commands/list.zig");
 const new_cmd = @import("commands/new.zig");
 const add_cmd = @import("commands/add.zig");
 const get_cmd = @import("commands/get.zig");
+const create_cmd = @import("commands/create.zig");
 const rm_cmd = @import("commands/rm.zig");
 const alias_cmd = @import("commands/alias.zig");
 const sync_cmd = @import("commands/sync.zig");
@@ -45,6 +46,7 @@ pub const command_table = [_]cli.Command{
     new_cmd.command,
     add_cmd.command,
     get_cmd.command,
+    create_cmd.command,
     rm_cmd.command,
     alias_cmd.command,
     adopt_cmd.command,
@@ -107,6 +109,7 @@ test {
     _ = @import("commands/new.zig");
     _ = @import("commands/add.zig");
     _ = @import("commands/get.zig");
+    _ = @import("commands/create.zig");
     _ = @import("commands/rm.zig");
     _ = @import("commands/alias.zig");
     _ = @import("commands/sync.zig");
@@ -180,6 +183,7 @@ test "coverage: every command positional and value-flag completes or is allowlis
         .{ .cmd = "restore", .field = "jobs" }, // numeric concurrency count
         .{ .cmd = "doctor", .field = "jobs" }, // numeric concurrency count
         .{ .cmd = "run", .field = "jobs" }, // numeric concurrency count
+        .{ .cmd = "create", .field = "spec" }, // a new repo name / url the user types
     };
 
     var gaps: std.ArrayList([]const u8) = .empty;
