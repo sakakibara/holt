@@ -16,7 +16,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    backend: args.Opt([]const u8, .{ .value_name = "name", .complete = comp.cat(.backend), .help = "activate a seeded preset (e.g. dropbox, icloud)" }),
+    backend: args.Opt([]const u8, .{ .value_name = "name", .complete = comp.cat(.backend_seed), .help = "activate a seeded preset (e.g. dropbox, icloud)" }),
     synced_root: args.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "use this path directly instead of a preset" }),
     code_root: args.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Code" }),
     hub_root: args.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Projects" }),

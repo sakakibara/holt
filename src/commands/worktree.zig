@@ -20,7 +20,7 @@ const testutil = @import("../testutil.zig");
 
 const Spec = struct {
     repo: args.Pos([]const u8, .{ .complete = comp.cat(.project_repo), .help = "the <project>/<repo> whose worktrees to manage" }),
-    branch: args.Pos(?[]const u8, .{ .value_name = "branch", .help = "branch to check out in a new worktree; omit to list" }),
+    branch: args.Pos(?[]const u8, .{ .value_name = "branch", .complete = comp.cat(.worktree_branch), .help = "branch to check out in a new worktree; omit to list" }),
     remove: args.Flag(.{ .short = 'r', .help = "remove the worktree for <branch> instead of creating it" }),
 };
 

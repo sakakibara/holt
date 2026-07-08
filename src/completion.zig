@@ -10,6 +10,7 @@
 const std = @import("std");
 const cli = @import("cli.zig");
 const workspace = @import("workspace.zig");
+const config = @import("config.zig");
 const project = @import("project.zig");
 const marker = @import("marker.zig");
 const fsutil = @import("fsutil.zig");
@@ -346,6 +347,10 @@ pub const Category = enum {
     local_repo,
     /// Configured backend preset names.
     backend,
+    /// Builtin backend seeds (`holt setup --backend`), independent of config.
+    backend_seed,
+    /// A repo's existing worktree branches (bare, no `<repo>@` prefix).
+    worktree_branch,
 };
 
 /// Builds a schema field's completion spec from a typed `Category`. The
@@ -360,8 +365,18 @@ pub fn cat(c: Category) cli.Complete {
 // above is generic. `prev` is the preceding positional (a project, for a repo
 // category). A null or unreadable workspace yields no candidates.
 fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, ws: ?*const workspace.Workspace) ![]const Candidate {
-    const w = ws orelse return &.{};
     const category = std.meta.stringToEnum(Category, key) orelse return &.{};
+
+    // Builtin seeds are fixed data, not config - offered even before a
+    // config.toml exists, so `holt setup --backend <TAB>` works on a fresh
+    // install where the workspace fails to load.
+    if (category == .backend_seed) {
+        var out: std.ArrayList(Candidate) = .empty;
+        for (config.builtin_seeds) |seed| try out.append(alloc, .{ .value = seed.name, .description = seed.synced_root });
+        return out.toOwnedSlice(alloc);
+    }
+
+    const w = ws orelse return &.{};
 
     switch (category) {
         .project, .project_repo => {
@@ -377,6 +392,7 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             const all = try w.list(alloc);
             var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
             for (all) |p| try seen.put(alloc, p.org, {});
+            for (try archivedOrgNames(alloc, w)) |org| try seen.put(alloc, org, {});
             var out: std.ArrayList([]const u8) = .empty;
             for (seen.keys()) |org| try out.append(alloc, try std.fmt.allocPrint(alloc, "{s}/", .{org}));
             return plain(alloc, try out.toOwnedSlice(alloc));
@@ -413,6 +429,18 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             return out.toOwnedSlice(alloc);
         },
         .archived => return archivedQueries(alloc, w),
+        .worktree_branch => {
+            const repo_sel = prev orelse return &.{};
+            const full = try worktreeBranchCandidates(alloc, repo_sel, ws);
+            const prefix_len = repo_sel.len + 1; // "<repo_sel>@"
+            var out: std.ArrayList(Candidate) = .empty;
+            for (full) |c| {
+                if (c.value.len < prefix_len) continue;
+                try out.append(alloc, .{ .value = c.value[prefix_len..], .description = c.description });
+            }
+            return out.toOwnedSlice(alloc);
+        },
+        .backend_seed => unreachable, // handled above, before a workspace is required
     }
 }
 
@@ -474,6 +502,40 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
         } else {
             try walker.enter(fsutil.io(), entry);
         }
+    }
+    return out.toOwnedSlice(alloc);
+}
+
+/// Org dir names under the archive root holding at least one archived
+/// project marker - orgs an `org` completion must offer even when every
+/// project under them has been archived (no active project keeps them alive
+/// in `w.list`).
+fn archivedOrgNames(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const []const u8 {
+    const root = try ws.archiveRoot(alloc);
+    var out: std.ArrayList([]const u8) = .empty;
+
+    var root_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), root, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return &.{},
+        else => return err,
+    };
+    defer root_dir.close(fsutil.io());
+
+    var org_it = root_dir.iterate();
+    while (try org_it.next(fsutil.io())) |org_entry| {
+        if (org_entry.kind != .directory) continue;
+        var org_dir = try root_dir.openDir(fsutil.io(), org_entry.name, .{ .iterate = true });
+        defer org_dir.close(fsutil.io());
+        var name_it = org_dir.iterate();
+        var has_marker = false;
+        while (try name_it.next(fsutil.io())) |name_entry| {
+            if (name_entry.kind != .directory) continue;
+            const marker_path = try std.fs.path.join(alloc, &.{ root, org_entry.name, name_entry.name, marker.marker_basename });
+            if (fsutil.exists(marker_path)) {
+                has_marker = true;
+                break;
+            }
+        }
+        if (has_marker) try out.append(alloc, org_entry.name);
     }
     return out.toOwnedSlice(alloc);
 }
@@ -548,6 +610,85 @@ test "worktreeBranchCandidates: a repo's worktrees become <repo>@<branch> tokens
     const cands = try worktreeBranchCandidates(arena, "proj/backend", &ws);
     try testing.expectEqual(@as(usize, 1), cands.len);
     try testing.expectEqualStrings("proj/backend@feature/x", cands[0].value);
+    try testing.expectEqualStrings("feature/x", cands[0].description.?);
+}
+
+test "candidatesFor: backend_seed lists the builtin seeds with their synced_root, workspace-free" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // No workspace at all - the state before `holt setup` has ever run.
+    const no_ws = try candidatesFor(arena, "backend_seed", null, null);
+    try testing.expectEqual(config.builtin_seeds.len, no_ws.len);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root); // presets = &.{}, a fresh install
+
+    const cands = try candidatesFor(arena, "backend_seed", null, &ws);
+    try testing.expectEqual(config.builtin_seeds.len, cands.len);
+    var found_dropbox = false;
+    for (cands) |c| {
+        if (std.mem.eql(u8, c.value, "dropbox")) {
+            found_dropbox = true;
+            try testing.expect(c.description != null);
+        }
+    }
+    try testing.expect(found_dropbox);
+}
+
+test "candidatesFor: org includes an org with only archived projects" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // "acme" has an active project; "gone" exists only in the archive.
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "gone", "old", .{ .version = 1, .org = "gone", .name = "old", .repos = .empty });
+
+    const cands = try candidatesFor(arena, "org", null, &ws);
+    var found_acme = false;
+    var found_gone = false;
+    for (cands) |c| {
+        if (std.mem.eql(u8, c.value, "acme/")) found_acme = true;
+        if (std.mem.eql(u8, c.value, "gone/")) found_gone = true;
+    }
+    try testing.expect(found_acme);
+    try testing.expect(found_gone);
+}
+
+test "candidatesFor: worktree_branch returns bare branch names, not the full <repo>@<branch> token" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    const leaf = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature", "x" });
+    try fsutil.ensureDir(leaf);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ leaf, ".git" }), .data = "gitdir: x\n" });
+
+    const cands = try candidatesFor(arena, "worktree_branch", "proj/backend", &ws);
+    try testing.expectEqual(@as(usize, 1), cands.len);
+    try testing.expectEqualStrings("feature/x", cands[0].value);
     try testing.expectEqualStrings("feature/x", cands[0].description.?);
 }
 
