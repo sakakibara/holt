@@ -571,6 +571,27 @@ test "run: an unreachable HOLT_UPGRADE_API degrades cleanly to no releases found
     try testing.expectEqualStrings("no releases found\n", got.out);
 }
 
+/// Stages a fake release asset at `asset_path` containing `assetBinaryName`
+/// with `contents`, matching what the real release pipeline serves for the
+/// current platform: a `.tar.gz` with a `holt` entry via the system `tar` on
+/// unix, a `.zip` with a `holt.exe` entry via PowerShell `Compress-Archive`
+/// on Windows (`std.zip` cannot write archives, and a bare `tar` on
+/// windows-latest may resolve to GNU tar, which cannot write zip).
+fn stageFakeReleaseAsset(arena: std.mem.Allocator, pkg_dir: []const u8, asset_path: []const u8, contents: []const u8) !void {
+    const bin_name = assetBinaryName(builtin.os.tag);
+    const bin_path = try std.fs.path.join(arena, &.{ pkg_dir, bin_name });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = bin_path, .data = contents });
+
+    if (builtin.os.tag == .windows) {
+        const cmd = try std.fmt.allocPrint(arena, "Compress-Archive -Path '{s}' -DestinationPath '{s}' -Force", .{ bin_path, asset_path });
+        const res = try proc.run(arena, &.{ "powershell", "-NoProfile", "-Command", cmd }, null);
+        try testing.expectEqual(@as(u8, 0), res.status);
+    } else {
+        const res = try proc.run(arena, &.{ "tar", "-czf", asset_path, "-C", pkg_dir, bin_name }, null);
+        try testing.expectEqual(@as(u8, 0), res.status);
+    }
+}
+
 test "run: a newer release fetched via HOLT_UPGRADE_API downloads, extracts, and installs the binary with --yes" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -591,13 +612,11 @@ test "run: a newer release fetched via HOLT_UPGRADE_API downloads, extracts, and
     const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
     const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
     try fsutil.ensureDir(pkg_dir);
-    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = try std.fs.path.join(arena, &.{ pkg_dir, "holt" }), .data = "NEW" });
 
     const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
     try fsutil.ensureDir(dl_dir);
     const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
-    const tar_res = try proc.run(arena, &.{ "tar", "-czf", asset_path, "-C", pkg_dir, "holt" }, null);
-    try testing.expectEqual(@as(u8, 0), tar_res.status);
+    try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
 
     const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
     const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});
@@ -673,13 +692,11 @@ test "run: an explicit older version installs, allowing a downgrade with --yes" 
     const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
     const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
     try fsutil.ensureDir(pkg_dir);
-    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = try std.fs.path.join(arena, &.{ pkg_dir, "holt" }), .data = "NEW" });
 
     const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
     try fsutil.ensureDir(dl_dir);
     const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
-    const tar_res = try proc.run(arena, &.{ "tar", "-czf", asset_path, "-C", pkg_dir, "holt" }, null);
-    try testing.expectEqual(@as(u8, 0), tar_res.status);
+    try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
 
     const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
     const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
