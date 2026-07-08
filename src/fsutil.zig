@@ -50,12 +50,7 @@ pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     const home = try homeDirAlloc(alloc);
     defer alloc.free(home);
     if (path.len == 1) return alloc.dupe(u8, home);
-    var segs: std.ArrayList([]const u8) = .empty;
-    defer segs.deinit(alloc);
-    try segs.append(alloc, home);
-    var it = std.mem.splitScalar(u8, path[2..], '/');
-    while (it.next()) |s| if (s.len > 0) try segs.append(alloc, s);
-    return std.fs.path.join(alloc, segs.items);
+    return joinSlashy(alloc, home, path[2..]);
 }
 
 /// Joins `base` with `rel`, a `/`-delimited relative path (e.g. a git branch
@@ -122,6 +117,10 @@ pub fn exists(path: []const u8) bool {
 /// Windows rejects these in a path *name* with OBJECT_NAME_INVALID, which the
 /// std turns into an uncatchable panic rather than a lookup miss; a path
 /// carrying one (e.g. a URL mistaken for a local checkout) cannot exist.
+/// Contract: `path` is one of holt's own logical paths (config roots joined
+/// via `path.join`), not an arbitrary Win32 form - a `\\?\`-prefixed long
+/// path carries a literal `?` that this would reject as unnameable even
+/// though the filesystem accepts it.
 fn windowsNameable(path: []const u8) bool {
     for (path, 0..) |c, i| switch (c) {
         '<', '>', '"', '|', '?', '*' => return false,

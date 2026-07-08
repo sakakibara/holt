@@ -230,18 +230,6 @@ fn sweepDir(
     }
 }
 
-/// Turns a `/`-joined logical rel-key ("code/backend") into an on-disk path
-/// under `hub_path` using the platform separator, so a hub link's physical
-/// path is native on Windows while `rel` stays a stable `/`-joined key for
-/// desired-set comparison.
-fn relToPath(alloc: std.mem.Allocator, hub_path: []const u8, rel: []const u8) ![]u8 {
-    var segments: std.ArrayList([]const u8) = .empty;
-    try segments.append(alloc, hub_path);
-    var it = std.mem.splitScalar(u8, rel, '/');
-    while (it.next()) |seg| try segments.append(alloc, seg);
-    return std.fs.path.join(alloc, segments.items);
-}
-
 /// Points `link_path` at `link.target`, threading `link.kind` through to
 /// `fsutil.replaceLink` so a directory gets a junction on Windows. Honors
 /// `force_skip_file_links_for_test` to exercise the skip path on any
@@ -279,11 +267,11 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
             if (std.mem.eql(u8, earlier.rel, link.rel)) dup = true;
         }
         if (dup) {
-            try conflicts.append(alloc, try relToPath(alloc, p.hub_path, link.rel));
+            try conflicts.append(alloc, try fsutil.joinSlashy(alloc, p.hub_path, link.rel));
             continue;
         }
 
-        const link_path = try relToPath(alloc, p.hub_path, link.rel);
+        const link_path = try fsutil.joinSlashy(alloc, p.hub_path, link.rel);
         const state = try fsutil.linkState(alloc, link_path);
         switch (state) {
             .missing => {
@@ -1013,12 +1001,12 @@ test "removeHub: a real file left behind keeps the hub dir but drops the links" 
     try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(arena, docs_link));
 }
 
-test "relToPath joins a slash-keyed rel under the hub using the platform separator" {
+test "fsutil.joinSlashy joins a slash-keyed rel under the hub using the platform separator" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const got = try relToPath(arena, "/hub/acme/proj", "code/backend");
+    const got = try fsutil.joinSlashy(arena, "/hub/acme/proj", "code/backend");
     const want = try std.fs.path.join(arena, &.{ "/hub/acme/proj", "code", "backend" });
     try testing.expectEqualStrings(want, got);
 }

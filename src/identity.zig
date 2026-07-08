@@ -3,6 +3,7 @@
 //! subprocess I/O.
 
 const std = @import("std");
+const fsutil = @import("fsutil.zig");
 const testing = std.testing;
 
 /// `host`/`owner`/`repo` are allocator-owned when built by `fromUrl` and
@@ -26,21 +27,16 @@ pub const Identity = struct {
         return std.fmt.allocPrint(alloc, "{s}/{s}/{s}", .{ self.host, self.owner, self.repo });
     }
 
-    /// `code_root` joined with the native on-disk clone location. A GitLab
-    /// subgroup `owner` (itself `/`-separated, e.g. "a/b") is split so each
-    /// segment nests with the platform separator instead of leaving an
+    /// `code_root` joined with the native on-disk clone location. `relPath`
+    /// is already the `/`-joined logical key (including a GitLab subgroup
+    /// `owner`, itself `/`-separated), so re-splitting it via `joinSlashy`
+    /// nests each segment with the platform separator instead of leaving an
     /// embedded `/` inside a single Windows path component. Caller owns the
     /// returned memory.
     pub fn clonePath(self: Identity, alloc: std.mem.Allocator, code_root: []const u8) ![]u8 {
-        if (self.isLocal()) return std.fs.path.join(alloc, &.{ code_root, "local", self.repo });
-        var segs: std.ArrayList([]const u8) = .empty;
-        defer segs.deinit(alloc);
-        try segs.append(alloc, code_root);
-        try segs.append(alloc, self.host);
-        var it = std.mem.splitScalar(u8, self.owner, '/');
-        while (it.next()) |s| try segs.append(alloc, s);
-        try segs.append(alloc, self.repo);
-        return std.fs.path.join(alloc, segs.items);
+        const rel = try self.relPath(alloc);
+        defer alloc.free(rel);
+        return fsutil.joinSlashy(alloc, code_root, rel);
     }
 
     pub fn eql(a: Identity, b: Identity) bool {
