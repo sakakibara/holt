@@ -1,0 +1,26 @@
+name: install-smoke
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  windows:
+    name: install.ps1 smoke (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: run install.ps1
+        shell: pwsh
+        run: ./scripts/install.ps1
+
+      - name: verify holt installed and runs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $holt = Join-Path $env:LOCALAPPDATA 'holt\bin\holt.exe'
+          if (-not (Test-Path $holt)) { throw "holt.exe not installed at $holt" }
+          $v = & $holt version
+          Write-Host "installed: $v"
