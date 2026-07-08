@@ -62,6 +62,29 @@ fn pickBackupPath(alloc: std.mem.Allocator, backups_root: []const u8, org: []con
     }
 }
 
+/// Runs a `tar` invocation, retrying once with `--force-local` if it looks
+/// like GNU tar misparsed a Windows drive-letter path ("C:\...") as a
+/// `host:path` remote-archive spec ("Cannot connect to C: resolve failed") -
+/// a long-standing GNU tar quirk that Git for Windows' bundled tar hits on
+/// every plain `-f <drive>:\...` invocation. Windows' own bsdtar (bundled
+/// since Windows 10) never had this bug and does not recognize the flag, so
+/// it is added only on that exact failure, never unconditionally - a no-op
+/// on POSIX, where the drive-letter shape never occurs and this never fires.
+fn runTar(alloc: std.mem.Allocator, argv: []const []const u8) !proc.RunResult {
+    const res = try proc.run(alloc, argv, null);
+    if (builtin.os.tag != .windows or res.status == 0) return res;
+    if (std.mem.indexOf(u8, res.stderr, "resolve failed") == null) return res;
+    alloc.free(res.stdout);
+    alloc.free(res.stderr);
+
+    var retry: std.ArrayList([]const u8) = .empty;
+    defer retry.deinit(alloc);
+    try retry.append(alloc, argv[0]);
+    try retry.append(alloc, "--force-local");
+    try retry.appendSlice(alloc, argv[1..]);
+    return proc.run(alloc, retry.items, null);
+}
+
 fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
 
@@ -85,7 +108,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     // where the error path never runs) thus leaves at most a ".partial" that
     // never masquerades as a complete backup under the real name.
     const partial_path = try std.fmt.allocPrint(alloc, "{s}.partial", .{out_path});
-    const res = proc.run(alloc, &.{ "tar", "-czf", partial_path, "-C", org_dir, p.name }, null) catch |err| switch (err) {
+    const res = runTar(alloc, &.{ "tar", "-czf", partial_path, "-C", org_dir, p.name }) catch |err| switch (err) {
         error.FileNotFound => return error.TarNotFound,
         else => return err,
     };
@@ -157,7 +180,7 @@ test "run: creates a tar.gz under backups/ whose contents list the marker" {
     try testing.expect(std.mem.endsWith(u8, entry.name, ".tar.gz"));
 
     const tar_path = try std.fs.path.join(arena, &.{ backups_root, entry.name });
-    const list_res = try proc.run(arena, &.{ "tar", "-tzf", tar_path }, null);
+    const list_res = try runTar(arena, &.{ "tar", "-tzf", tar_path });
     try testing.expectEqual(@as(u8, 0), list_res.status);
     try testing.expect(std.mem.indexOf(u8, list_res.stdout, marker.marker_basename) != null);
 }
