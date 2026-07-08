@@ -172,8 +172,10 @@ test "run: an emptied @worktrees dir (raw git removal) drops the hub link on rec
     // empty @worktrees dir behind. A reconcile must drop the stale hub link.
     // git's own worktree admin links are recorded on '/' even on Windows, so
     // this raw call - unlike holt's own git.worktreeAdd/Remove - must forward-
-    // slash the path itself to match what `worktree add` registered.
-    try testutil.runGit(&sb, clone_path, &.{ "worktree", "remove", try fsutil.forwardSlashed(arena, wt_path) });
+    // slash the path itself to match what `worktree add` registered. --force
+    // because a fresh checkout reads as dirty under Windows git's line-ending
+    // defaults; the simulated external removal only needs the worktree gone.
+    try testutil.runGit(&sb, clone_path, &.{ "worktree", "remove", "--force", try fsutil.forwardSlashed(arena, wt_path) });
     const p = switch (try ws.find(arena, "proj")) {
         .one => |one| one,
         else => return error.TestUnexpectedResult,
