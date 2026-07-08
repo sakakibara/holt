@@ -136,16 +136,38 @@ pub fn realPathOrSelf(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = std.Io.Dir.realPathFileAbsolute(io(), path, &buf) catch |err| switch (err) {
         error.FileNotFound => return alloc.dupe(u8, path),
-        // Windows opens `path` through a non-directory handle here, which
-        // NT refuses for a directory; re-resolve through a directory handle
-        // instead, which still yields the symlink-free canonical path.
-        // Never fires on POSIX, where a directory resolves through the
-        // call above just fine.
-        error.IsDir => {
-            var dir = try std.Io.Dir.openDirAbsolute(io(), path, .{});
-            defer dir.close(io());
-            const dn = try dir.realPath(io(), &buf);
-            return alloc.dupe(u8, buf[0..dn]);
+        // Windows opens `path` through a non-directory handle here, which NT
+        // refuses for a directory. A plain directory (no reparse point of its
+        // own) resolves fine through a directory handle instead
+        // (openDirAbsolute + Dir.realPath). But a directory symlink or
+        // junction is typed at creation (Windows, unlike POSIX, distinguishes
+        // a "file" reparse point from a "directory" one), and a mistyped one
+        // - e.g. `replaceSymlink` always creates a non-directory-typed
+        // symlink, even for a directory target - refuses that same
+        // directory-handle open of the reparse point itself even though its
+        // target is a real directory. Reading the reparse point's raw target
+        // via `linkState` (which opens it untyped, without following it) and
+        // resolving that instead sidesteps the mismatch entirely. Never
+        // fires on POSIX, where a directory resolves through the call above
+        // just fine.
+        error.IsDir => switch (try linkState(alloc, path)) {
+            .symlink => |raw_target| {
+                defer alloc.free(raw_target);
+                const target = try normalizeTarget(alloc, raw_target);
+                defer if (builtin.os.tag == .windows) alloc.free(target);
+                const resolved = if (std.fs.path.isAbsolute(target))
+                    try alloc.dupe(u8, target)
+                else
+                    try std.fs.path.join(alloc, &.{ std.fs.path.dirname(path) orelse path, target });
+                defer alloc.free(resolved);
+                return realPathOrSelf(alloc, resolved);
+            },
+            else => {
+                var dir = try std.Io.Dir.openDirAbsolute(io(), path, .{});
+                defer dir.close(io());
+                const dn = try dir.realPath(io(), &buf);
+                return alloc.dupe(u8, buf[0..dn]);
+            },
         },
         else => return err,
     };
