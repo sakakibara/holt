@@ -510,46 +510,14 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
     return out.toOwnedSlice(alloc);
 }
 
-/// Org dir names under the archive root holding at least one archived
-/// project marker - orgs an `org` completion must offer even when every
-/// project under them has been archived (no active project keeps them alive
-/// in `w.list`).
-fn archivedOrgNames(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const []const u8 {
+const ArchivedProject = struct { org: []const u8, name: []const u8 };
+
+/// Every archived project (a marker under `<synced>/archive/<org>/<name>`).
+/// `org`/`name` are duped: the directory iterators reuse their name buffers
+/// across `next()`, so the raw entry slices do not outlive the walk.
+fn archivedProjects(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const ArchivedProject {
     const root = try ws.archiveRoot(alloc);
-    var out: std.ArrayList([]const u8) = .empty;
-
-    var root_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), root, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound, error.NotDir => return &.{},
-        else => return err,
-    };
-    defer root_dir.close(fsutil.io());
-
-    var org_it = root_dir.iterate();
-    while (try org_it.next(fsutil.io())) |org_entry| {
-        if (org_entry.kind != .directory) continue;
-        var org_dir = try root_dir.openDir(fsutil.io(), org_entry.name, .{ .iterate = true });
-        defer org_dir.close(fsutil.io());
-        var name_it = org_dir.iterate();
-        var has_marker = false;
-        while (try name_it.next(fsutil.io())) |name_entry| {
-            if (name_entry.kind != .directory) continue;
-            const marker_path = try std.fs.path.join(alloc, &.{ root, org_entry.name, name_entry.name, marker.marker_basename });
-            if (fsutil.exists(marker_path)) {
-                has_marker = true;
-                break;
-            }
-        }
-        // `org_entry.name` aliases the iterator's buffer, reused on the next
-        // `next()`; dupe it since it outlives this iteration.
-        if (has_marker) try out.append(alloc, try alloc.dupe(u8, org_entry.name));
-    }
-    return out.toOwnedSlice(alloc);
-}
-
-/// "org/name" for every archived project (a marker under `<synced>/archive`).
-fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const Candidate {
-    const root = try ws.archiveRoot(alloc);
-    var out: std.ArrayList(Candidate) = .empty;
+    var out: std.ArrayList(ArchivedProject) = .empty;
 
     var root_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return &.{},
@@ -567,8 +535,27 @@ fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]
             if (name_entry.kind != .directory) continue;
             const marker_path = try std.fs.path.join(alloc, &.{ root, org_entry.name, name_entry.name, marker.marker_basename });
             if (!fsutil.exists(marker_path)) continue;
-            try out.append(alloc, .{ .value = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ org_entry.name, name_entry.name }), .description = "archived" });
+            try out.append(alloc, .{ .org = try alloc.dupe(u8, org_entry.name), .name = try alloc.dupe(u8, name_entry.name) });
         }
+    }
+    return out.toOwnedSlice(alloc);
+}
+
+/// Distinct org dir names under the archive holding at least one archived
+/// project - orgs an `org` completion must offer even when every project
+/// under them has been archived (no active project keeps them alive in
+/// `w.list`).
+fn archivedOrgNames(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const []const u8 {
+    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+    for (try archivedProjects(alloc, ws)) |p| try seen.put(alloc, p.org, {});
+    return alloc.dupe([]const u8, seen.keys());
+}
+
+/// "org/name" for every archived project.
+fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const Candidate {
+    var out: std.ArrayList(Candidate) = .empty;
+    for (try archivedProjects(alloc, ws)) |p| {
+        try out.append(alloc, .{ .value = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ p.org, p.name }), .description = "archived" });
     }
     return out.toOwnedSlice(alloc);
 }
