@@ -12,6 +12,7 @@ const main = @import("main.zig");
 const marker = @import("marker.zig");
 const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
+const config = @import("config.zig");
 const testing = std.testing;
 
 const Result = struct { code: u8, out: []const u8, err: []const u8 };
@@ -33,7 +34,11 @@ fn writeConfig(alloc: std.mem.Allocator, xdg_config_home: []const u8, synced_roo
         \\code_root = "{s}"
         \\hub_root = "{s}"
         \\
-    , .{ synced_root, code_root, hub_root });
+    , .{
+        try config.tomlEscape(alloc, synced_root),
+        try config.tomlEscape(alloc, code_root),
+        try config.tomlEscape(alloc, hub_root),
+    });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = config_path, .data = content });
 }
 

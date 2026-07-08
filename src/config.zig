@@ -65,6 +65,21 @@ pub const builtin_seeds: []const Seed = &.{
     .{ .name = "box", .synced_root = "~/Library/CloudStorage/Box-Box/workspace", .commented = true },
 };
 
+/// Escapes `\` and `"` so `s` is safe to embed as a basic TOML string value.
+/// Those are the two bytes that break a basic string; a filesystem path
+/// never needs any other TOML escape. A no-op (and thus byte-identical
+/// output) on POSIX, where paths carry neither byte. Caller owns the
+/// returned memory.
+pub fn tomlEscape(alloc: std.mem.Allocator, s: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (s) |c| switch (c) {
+        '\\' => try out.appendSlice(alloc, "\\\\"),
+        '"' => try out.appendSlice(alloc, "\\\""),
+        else => try out.append(alloc, c),
+    };
+    return out.toOwnedSlice(alloc);
+}
+
 /// Renders a fresh `config.toml` body for `holt setup`: `active` picks the
 /// backend preset (or, when null, `direct_root` is written as
 /// workspace.synced_root instead - exactly one of the two is ever set). The
@@ -81,12 +96,12 @@ pub fn renderConfig(alloc: std.mem.Allocator, active: ?[]const u8, direct_root: 
         \\
     );
     if (active) |name| {
-        try w.print("backend = \"{s}\"\n", .{name});
+        try w.print("backend = \"{s}\"\n", .{try tomlEscape(alloc, name)});
     } else {
-        try w.print("synced_root = \"{s}\"\n", .{direct_root.?});
+        try w.print("synced_root = \"{s}\"\n", .{try tomlEscape(alloc, direct_root.?)});
     }
-    try w.print("code_root = \"{s}\"\n", .{code_root});
-    try w.print("hub_root = \"{s}\"\n", .{hub_root});
+    try w.print("code_root = \"{s}\"\n", .{try tomlEscape(alloc, code_root)});
+    try w.print("hub_root = \"{s}\"\n", .{try tomlEscape(alloc, hub_root)});
 
     try w.writeAll(
         \\
@@ -96,7 +111,7 @@ pub fn renderConfig(alloc: std.mem.Allocator, active: ?[]const u8, direct_root: 
     );
     for (builtin_seeds) |seed| {
         if (seed.commented) continue;
-        try w.print("[backends.{s}]\nsynced_root = \"{s}\"\n", .{ seed.name, seed.synced_root });
+        try w.print("[backends.{s}]\nsynced_root = \"{s}\"\n", .{ seed.name, try tomlEscape(alloc, seed.synced_root) });
     }
 
     try w.writeAll(
@@ -106,7 +121,7 @@ pub fn renderConfig(alloc: std.mem.Allocator, active: ?[]const u8, direct_root: 
     );
     for (builtin_seeds) |seed| {
         if (!seed.commented) continue;
-        try w.print("# [backends.{s}]\n# synced_root = \"{s}\"\n", .{ seed.name, seed.synced_root });
+        try w.print("# [backends.{s}]\n# synced_root = \"{s}\"\n", .{ seed.name, try tomlEscape(alloc, seed.synced_root) });
     }
 
     return aw.toOwnedSlice();
@@ -681,7 +696,7 @@ test "load: a root that exists as a file errors RootNotDirectory instead of a ba
     const file_root = try std.fs.path.join(arena, &.{ root, "not-a-dir" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = file_root, .data = "x" });
 
-    const path = try writeFixture(&tmp, try std.fmt.allocPrint(arena, "[workspace]\nsynced_root = \"{s}\"\n", .{file_root}));
+    const path = try writeFixture(&tmp, try std.fmt.allocPrint(arena, "[workspace]\nsynced_root = \"{s}\"\n", .{try tomlEscape(arena, file_root)}));
     defer testing.allocator.free(path);
 
     var d: diagnostic.Diagnostic = .{};
