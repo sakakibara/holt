@@ -240,11 +240,23 @@ pub const GitInsteadOfPair = struct { url: []const u8, bare: []const u8 };
 pub fn gitInsteadOf(alloc: std.mem.Allocator, gitconfig_path: []const u8, pairs: []const GitInsteadOfPair) !EnvOverride {
     var content: std.ArrayList(u8) = .empty;
     for (pairs) |pair| {
-        try content.appendSlice(alloc, try std.fmt.allocPrint(alloc, "[url \"{s}\"]\n\tinsteadOf = {s}\n", .{ pair.bare, pair.url }));
+        const bare_slashed = try forwardSlashed(alloc, pair.bare);
+        try content.appendSlice(alloc, try std.fmt.allocPrint(alloc, "[url \"{s}\"]\n\tinsteadOf = {s}\n", .{ bare_slashed, pair.url }));
     }
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gitconfig_path, .data = content.items });
 
     return EnvOverride.install(alloc, "GIT_CONFIG_GLOBAL", gitconfig_path);
+}
+
+/// Git accepts forward slashes in paths/URLs on Windows, but a `\`-path
+/// written as a git-config VALUE is parsed for backslash escapes (`\a`,
+/// `\U`, ...) and comes out mangled. Any local filesystem path handed to
+/// git as a URL/config value goes through this first. Identity on POSIX,
+/// where paths never carry backslashes.
+fn forwardSlashed(alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const out = try alloc.dupe(u8, path);
+    std.mem.replaceScalar(u8, out, '\\', '/');
+    return out;
 }
 
 pub const RunResult = struct { code: u8, out: []const u8, err: []const u8 };
