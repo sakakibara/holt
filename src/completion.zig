@@ -98,7 +98,7 @@ fn computeFor(alloc: std.mem.Allocator, cmd: cli.Command, rest: []const []const 
 
     // A dash-led word completes flag names, not a positional value.
     if (cur.len > 0 and cur[0] == '-') {
-        return .{ .directive = .default, .candidates = try flagNames(alloc, cmd.flags, cur) };
+        return .{ .directive = .default, .candidates = try flagNames(alloc, cmd.flags, cur, prior) };
     }
 
     // The word right after a value-taking flag completes that flag's value,
@@ -169,10 +169,28 @@ fn commandNames(alloc: std.mem.Allocator, table: []const cli.Command, prefix: []
     return filterMatches(alloc, try plain(alloc, try out.toOwnedSlice(alloc)), prefix);
 }
 
-fn flagNames(alloc: std.mem.Allocator, flags: []const cli.Flag, cur: []const u8) ![]const Candidate {
+fn flagNames(alloc: std.mem.Allocator, flags: []const cli.Flag, cur: []const u8, prior: []const []const u8) ![]const Candidate {
     var out: std.ArrayList([]const u8) = .empty;
-    for (flags) |f| try out.append(alloc, try std.fmt.allocPrint(alloc, "--{s}", .{f.long}));
+    for (flags) |f| {
+        if (flagPresent(prior, f)) continue;
+        try out.append(alloc, try std.fmt.allocPrint(alloc, "--{s}", .{f.long}));
+    }
     return filterMatches(alloc, try plain(alloc, try out.toOwnedSlice(alloc)), cur);
+}
+
+/// Whether `f` already appears in `prior` as `--long` (with or without
+/// `=value`) or as its `-s` short form - so the completer does not re-offer a
+/// flag the user already typed.
+fn flagPresent(prior: []const []const u8, f: cli.Flag) bool {
+    for (prior) |tok| {
+        if (std.mem.startsWith(u8, tok, "--")) {
+            const name = if (std.mem.indexOfScalar(u8, tok, '=')) |e| tok[2..e] else tok[2..];
+            if (std.mem.eql(u8, name, f.long)) return true;
+        } else if (f.short) |s| {
+            if (tok.len == 2 and tok[0] == '-' and tok[1] == s) return true;
+        }
+    }
+    return false;
 }
 
 fn filterPrefix(alloc: std.mem.Allocator, all: []const Candidate, cur: []const u8) ![]const Candidate {
@@ -616,4 +634,32 @@ test "reply: emits value<TAB>description; null description emits value only" {
     const got = out.written();
     // directive line, then "acme/widget\tacme" and "widget\tacme".
     try testing.expect(std.mem.indexOf(u8, got, "widget\tacme") != null);
+}
+
+test "flagNames: an already-present flag is not offered again" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const table = [_]cli.Command{.{
+        .name = "archive",
+        .summary = "",
+        .usage = "",
+        .group = .maintain,
+        .args = &.{.{ .name = "project" }},
+        .flags = &.{
+            .{ .long = "yes", .short = 'y' },
+            .{ .long = "yolo" },
+        },
+        .needs_workspace = false,
+        .run = struct {
+            fn run(_: *cli.Ctx) anyerror!u8 {
+                return 0;
+            }
+        }.run,
+    }};
+
+    const got = try compute(arena, &table, &.{ "archive", "proj", "--yes", "--y" }, null);
+    try testing.expectEqual(@as(usize, 1), got.candidates.len);
+    try testing.expectEqualStrings("--yolo", got.candidates[0].value);
 }
