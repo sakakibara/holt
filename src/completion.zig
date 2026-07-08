@@ -140,33 +140,65 @@ fn empty() Result {
 
 fn commandNames(alloc: std.mem.Allocator, table: []const cli.Command, prefix: []const u8) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
-    for (table) |c| {
-        if (hasPrefixIgnoreCase(c.name, prefix)) try out.append(alloc, c.name);
-    }
-    return out.toOwnedSlice(alloc);
+    for (table) |c| try out.append(alloc, c.name);
+    return filterMatches(alloc, try out.toOwnedSlice(alloc), prefix);
 }
 
 fn flagNames(alloc: std.mem.Allocator, flags: []const cli.Flag, cur: []const u8) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
-    for (flags) |f| {
-        const long = try std.fmt.allocPrint(alloc, "--{s}", .{f.long});
-        if (hasPrefixIgnoreCase(long, cur)) try out.append(alloc, long);
-    }
-    return out.toOwnedSlice(alloc);
+    for (flags) |f| try out.append(alloc, try std.fmt.allocPrint(alloc, "--{s}", .{f.long}));
+    return filterMatches(alloc, try out.toOwnedSlice(alloc), cur);
 }
 
 fn filterPrefix(alloc: std.mem.Allocator, all: []const []const u8, cur: []const u8) ![]const []const u8 {
-    if (cur.len == 0) return all;
-    var out: std.ArrayList([]const u8) = .empty;
-    for (all) |c| {
-        if (hasPrefixIgnoreCase(c, cur)) try out.append(alloc, c);
-    }
-    return out.toOwnedSlice(alloc);
+    return filterMatches(alloc, all, cur);
 }
 
 fn hasPrefixIgnoreCase(s: []const u8, prefix: []const u8) bool {
     if (prefix.len > s.len) return false;
     return std.ascii.eqlIgnoreCase(s[0..prefix.len], prefix);
+}
+
+/// Match like the resolver: case-insensitive subsequence (smartcase: a query
+/// with an uppercase letter matches case-sensitively). Prefix and exact are
+/// subsequences too, so this is a superset of the old prefix test.
+fn matches(query: []const u8, target: []const u8) bool {
+    if (query.len == 0) return true;
+    const cased = for (query) |c| { if (std.ascii.isUpper(c)) break true; } else false;
+    if (cased) return isSubsequence(query, target);
+    return workspace.isSubsequenceIgnoreCase(query, target);
+}
+
+fn isSubsequence(query: []const u8, target: []const u8) bool {
+    var qi: usize = 0;
+    for (target) |tc| {
+        if (qi == query.len) break;
+        if (tc == query[qi]) qi += 1;
+    }
+    return qi == query.len;
+}
+
+/// Rank: 0 exact, 1 prefix, 2 subsequence; drop non-matches. Within a rank,
+/// ties break on original index so ordering is deterministic regardless of
+/// whether the sort implementation is stable.
+fn filterMatches(alloc: std.mem.Allocator, all: []const []const u8, cur: []const u8) ![]const []const u8 {
+    if (cur.len == 0) return all;
+    const Ranked = struct { rank: u8, idx: usize, val: []const u8 };
+    var ranked: std.ArrayList(Ranked) = .empty;
+    for (all, 0..) |c, i| {
+        if (!matches(cur, c)) continue;
+        const rank: u8 = if (std.ascii.eqlIgnoreCase(c, cur)) 0 else if (hasPrefixIgnoreCase(c, cur)) 1 else 2;
+        try ranked.append(alloc, .{ .rank = rank, .idx = i, .val = c });
+    }
+    std.mem.sort(Ranked, ranked.items, {}, struct {
+        fn lt(_: void, a: Ranked, b: Ranked) bool {
+            if (a.rank != b.rank) return a.rank < b.rank;
+            return a.idx < b.idx;
+        }
+    }.lt);
+    var out: std.ArrayList([]const u8) = .empty;
+    for (ranked.items) |r| try out.append(alloc, r.val);
+    return out.toOwnedSlice(alloc);
 }
 
 /// How many positional args appear in `prior`, so the cursor word is the
@@ -384,6 +416,25 @@ fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]
         }
     }
     return out.toOwnedSlice(alloc);
+}
+
+test "filter: a subsequence abbreviation matches like the resolver, tiered exact>prefix>subsequence" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const all: []const []const u8 = &.{ "backend", "broker", "acme/backend" };
+    // "bck" is a subsequence of "backend" (b-a-c-k-...) and, since "acme/backend"
+    // contains "backend" verbatim, of that too; "broker" has no 'c' and drops out.
+    // Both subsequence hits rank equally, so original order breaks the tie.
+    const got = try filterMatches(arena, all, "bck");
+    try testing.expectEqual(@as(usize, 2), got.len);
+    try testing.expectEqualStrings("backend", got[0]);
+    try testing.expectEqualStrings("acme/backend", got[1]);
+
+    // Tiering: exact and prefix sort before a subsequence-only match.
+    const tiered = try filterMatches(arena, &.{ "abxc", "ab", "abc" }, "abc");
+    try testing.expectEqualStrings("abc", tiered[0]); // exact first
 }
 
 test "worktreeBranchCandidates: a repo's worktrees become <repo>@<branch> tokens" {
