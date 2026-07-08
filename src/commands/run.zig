@@ -29,7 +29,7 @@ const testutil = @import("../testutil.zig");
 
 const Spec = struct {
     org: args.Opt([]const u8, .{ .value_name = "org", .complete = comp.cat(.org), .help = "run in every member repo of every project in this org" }),
-    repo: args.Opt([]const u8, .{ .value_name = "repo", .help = "run in only this member repo (single-project form only)" }),
+    repo: args.Opt([]const u8, .{ .value_name = "repo", .complete = comp.cat(.repo), .help = "run in only this member repo (single-project form only)" }),
     jobs: args.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "run in up to N repos concurrently (default 1: serial, streaming live)" }),
     all: args.Flag(.{ .help = "run in every member repo of every project in the workspace" }),
     project: args.Pos(?[]const u8, .{ .complete = comp.cat(.project), .help = "the project whose member repos to run in" }),

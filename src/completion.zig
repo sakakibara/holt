@@ -93,7 +93,7 @@ fn computeFor(alloc: std.mem.Allocator, cmd: cli.Command, rest: []const []const 
     // not a positional (`--org <cur>`).
     if (prior.len > 0) {
         if (pendingValueFlag(prior[prior.len - 1], cmd.flags)) |f| {
-            return resolve(alloc, f.value, cur, null, ws);
+            return resolve(alloc, f.value, cur, lastPositional(prior[0 .. prior.len - 1], cmd.flags), ws);
         }
     }
 
@@ -499,6 +499,42 @@ test "worktreeBranchCandidates: a repo's worktrees become <repo>@<branch> tokens
     try testing.expectEqual(@as(usize, 1), cands.len);
     try testing.expectEqualStrings("proj/backend@feature/x", cands[0].value);
     try testing.expectEqualStrings("feature/x", cands[0].description.?);
+}
+
+test "computeFor: run --repo completes off the preceding project positional" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
+    try repos.put(arena, "frontend", "https://holt-test.invalid/acme/frontend");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
+
+    const table = [_]cli.Command{.{
+        .name = "run",
+        .summary = "",
+        .usage = "",
+        .group = .maintain,
+        .args = &.{.{ .name = "project", .complete = cat(.project) }},
+        .flags = &.{.{ .long = "repo", .takes_value = true, .value = cat(.repo) }},
+        .needs_workspace = true,
+        .run = struct {
+            fn run(_: *cli.Ctx) anyerror!u8 {
+                return 0;
+            }
+        }.run,
+    }};
+
+    const got = try compute(arena, &table, &.{ "run", "widget", "--repo", "back" }, &ws);
+    try testing.expectEqual(@as(usize, 1), got.candidates.len);
+    try testing.expectEqualStrings("backend", got.candidates[0].value);
 }
 
 test "reply: emits value<TAB>description; null description emits value only" {
