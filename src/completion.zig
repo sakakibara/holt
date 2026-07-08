@@ -539,7 +539,9 @@ fn archivedOrgNames(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![
                 break;
             }
         }
-        if (has_marker) try out.append(alloc, org_entry.name);
+        // `org_entry.name` aliases the iterator's buffer, reused on the next
+        // `next()`; dupe it since it outlives this iteration.
+        if (has_marker) try out.append(alloc, try alloc.dupe(u8, org_entry.name));
     }
     return out.toOwnedSlice(alloc);
 }
@@ -655,19 +657,27 @@ test "candidatesFor: org includes an org with only archived projects" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    // "acme" has an active project; "gone" exists only in the archive.
+    // "acme" has an active project; "gone" and "past" exist only in the
+    // archive. Two archive-only orgs make the outer iterator advance past the
+    // first collected name, so a name that aliased the iterator buffer (rather
+    // than being duped) would read as garbage - the platform-independent shape
+    // of the buffer-reuse regression.
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
     try testutil.writeMarker(arena, try ws.archiveRoot(arena), "gone", "old", .{ .version = 1, .org = "gone", .name = "old", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "past", "older", .{ .version = 1, .org = "past", .name = "older", .repos = .empty });
 
     const cands = try candidatesFor(arena, "org", null, &ws);
     var found_acme = false;
     var found_gone = false;
+    var found_past = false;
     for (cands) |c| {
         if (std.mem.eql(u8, c.value, "acme/")) found_acme = true;
         if (std.mem.eql(u8, c.value, "gone/")) found_gone = true;
+        if (std.mem.eql(u8, c.value, "past/")) found_past = true;
     }
     try testing.expect(found_acme);
     try testing.expect(found_gone);
+    try testing.expect(found_past);
 }
 
 test "candidatesFor: worktree_branch returns bare branch names, not the full <repo>@<branch> token" {
