@@ -47,11 +47,17 @@ try {
   if (-not (Test-Path $extracted)) { Fail "archive did not contain $Bin" }
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  Move-Item -Force $extracted (Join-Path $InstallDir $Bin)
+  $dest = Join-Path $InstallDir $Bin
+  if (Test-Path $dest) {
+    $old = "$dest.old"
+    Remove-Item -Force $old -ErrorAction SilentlyContinue
+    Move-Item -Force $dest $old   # renaming a locked running exe aside is permitted
+  }
+  Move-Item -Force $extracted $dest
 
-  try { $installed = & (Join-Path $InstallDir $Bin) version 2>$null } catch { $installed = $null }
-  if ($installed) { Write-Host "Installed $installed to $InstallDir\$Bin" }
-  else { Write-Host "Installed holt to $InstallDir\$Bin" }
+  try { $installed = & $dest version 2>$null } catch { $installed = $null }
+  if ($installed) { Write-Host "Installed $installed to $dest" }
+  else { Write-Host "Installed holt to $dest" }
 
   # Add InstallDir to the USER PATH (idempotent), preserving REG_EXPAND_SZ so
   # existing %VAR% entries are not flattened to literal paths.
