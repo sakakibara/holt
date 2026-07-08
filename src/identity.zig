@@ -120,9 +120,9 @@ fn stripDotGit(s: []const u8) []const u8 {
 
 /// Normalizes a git remote URL (scp-like, ssh://, https://, http://, git://)
 /// into an Identity. Rejects fewer than two path segments, empty segments,
-/// a `.`/`..` segment, a segment carrying a backslash, and a host of "local"
-/// (reserved for `local()`). `host`, `owner`, and `repo` on the result are
-/// each allocator-owned; free them individually.
+/// a `.`/`..`/backslash in the host or any path segment, and a host of
+/// "local" (reserved for `local()`). `host`, `owner`, and `repo` on the
+/// result are each allocator-owned; free them individually.
 pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl, OutOfMemory }!Identity {
     const parsed = try parseUrl(url);
 
@@ -282,6 +282,8 @@ test "fromUrl: rejects traversal and backslash segments, accepts dotted names" {
         "https://github.com/../foo",
         "https://github.com/acme/../evil",
         "https://github.com/acme/..\\..\\evil",
+        "https://../foo/bar", // host is ".."
+        "..:acme/widget", // scp-like: authority (host) is ".."
     }) |bad| {
         try testing.expectError(error.UnrecognizedUrl, fromUrl(a, bad));
     }

@@ -216,6 +216,23 @@ test "run: a backslash-traversal spec (Windows escape) is refused" {
     try testing.expectEqual(@as(u8, 1), got.code);
 }
 
+test "run: a scheme'd url with a traversal segment is refused via fromUrl" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // A full URL bypasses expand's shorthand path and reaches fromUrl, which
+    // rejects the ".." segment - proving create's classify/run error routing
+    // (not isSafeLocalName, which only guards the bare-name local branch).
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"https://github.com/acme/../evil"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    // Nothing created on refusal.
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme" })));
+}
+
 test "run: a normal owner/repo shorthand still creates at the identity path with origin set" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
