@@ -126,6 +126,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
+    if (builtin.os.tag == .windows) {
+        // A `.old` can be left behind when a prior upgrade's own process was
+        // still running at replace time; reap it here so it never accumulates.
+        const old = try std.fmt.allocPrint(alloc, "{s}.old", .{target_path});
+        std.Io.Dir.deleteFileAbsolute(fsutil.io(), old) catch {};
+    }
+
     try replaceBinary(alloc, target_path, extracted_bin);
 
     try ctx.out.print("upgraded to {s}\n", .{tag});
@@ -272,12 +279,19 @@ fn makeTempDir(alloc: std.mem.Allocator, environ: std.process.Environ) ![]const 
     return path;
 }
 
-/// Atomically swaps `target_path` for the contents of `new_binary_path`:
-/// writes the new bytes to a sibling `<target_path>.new` with mode 0755,
-/// then renames it onto `target_path` in one syscall. `target_path` is never
-/// touched until that rename, so a failure reading or writing the staged
-/// copy leaves the original binary at `target_path` completely intact - no
-/// half-written target, nothing left missing.
+/// Swaps `target_path` for the contents of `new_binary_path`: writes the new
+/// bytes to a sibling `<target_path>.new` with mode 0755, then puts it in
+/// place at `target_path`. `target_path` is never touched until the staged
+/// copy is fully written, so a failure reading or writing it leaves the
+/// original binary at `target_path` completely intact - no half-written
+/// target, nothing left missing.
+///
+/// On POSIX this is one atomic rename onto `target_path`. On Windows the
+/// running `target_path` is locked and can't be renamed over, but it can be
+/// renamed aside: `target_path` -> `<target_path>.old`, then
+/// `<target_path>.new` -> `target_path`. If that second rename fails, the
+/// `.old` is restored so `target_path` is never left missing; if it
+/// succeeds, the now-locked `.old` is left for a later run to reap.
 pub fn replaceBinary(alloc: std.mem.Allocator, target_path: []const u8, new_binary_path: []const u8) !void {
     const io = fsutil.io();
     const staged_path = try std.fmt.allocPrint(alloc, "{s}.new", .{target_path});
@@ -287,10 +301,24 @@ pub fn replaceBinary(alloc: std.mem.Allocator, target_path: []const u8, new_bina
         return err;
     };
 
-    std.Io.Dir.renameAbsolute(staged_path, target_path, io) catch |err| {
-        std.Io.Dir.deleteFileAbsolute(io, staged_path) catch {};
-        return err;
-    };
+    if (builtin.os.tag == .windows) {
+        const old_path = try std.fmt.allocPrint(alloc, "{s}.old", .{target_path});
+        std.Io.Dir.deleteFileAbsolute(io, old_path) catch {};
+        std.Io.Dir.renameAbsolute(target_path, old_path, io) catch |err| {
+            std.Io.Dir.deleteFileAbsolute(io, staged_path) catch {};
+            return err;
+        };
+        std.Io.Dir.renameAbsolute(staged_path, target_path, io) catch |err| {
+            std.Io.Dir.renameAbsolute(old_path, target_path, io) catch {};
+            std.Io.Dir.deleteFileAbsolute(io, staged_path) catch {};
+            return err;
+        };
+    } else {
+        std.Io.Dir.renameAbsolute(staged_path, target_path, io) catch |err| {
+            std.Io.Dir.deleteFileAbsolute(io, staged_path) catch {};
+            return err;
+        };
+    }
 }
 
 fn installBinary(io: std.Io, alloc: std.mem.Allocator, new_binary_path: []const u8, staged_path: []const u8) !void {
