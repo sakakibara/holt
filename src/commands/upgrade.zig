@@ -103,7 +103,9 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const tmp_dir = try makeTempDir(alloc, environ);
     defer std.Io.Dir.cwd().deleteTree(fsutil.io(), tmp_dir) catch {};
 
-    const archive_path = try std.fs.path.join(alloc, &.{ tmp_dir, "asset.tar.gz" });
+    const is_zip = builtin.os.tag == .windows;
+    const archive_name: []const u8 = if (is_zip) "asset.zip" else "asset.tar.gz";
+    const archive_path = try std.fs.path.join(alloc, &.{ tmp_dir, archive_name });
     const dl_res = proc.run(alloc, &.{ "curl", "-fsSL", "-o", archive_path, url }, null) catch |err| switch (err) {
         error.FileNotFound => return error.CurlNotFound,
         else => return err,
@@ -113,16 +115,12 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
-    const extract_res = proc.run(alloc, &.{ "tar", "-xzf", archive_path, "-C", tmp_dir }, null) catch |err| switch (err) {
-        error.FileNotFound => return error.TarNotFound,
-        else => return err,
-    };
-    if (extract_res.status != 0) {
+    extractArchive(alloc, archive_path, tmp_dir, is_zip) catch {
         try ctx.err_w.writeAll("holt: extract failed\n");
         return 1;
-    }
+    };
 
-    const extracted_bin = try std.fs.path.join(alloc, &.{ tmp_dir, "holt" });
+    const extracted_bin = try std.fs.path.join(alloc, &.{ tmp_dir, assetBinaryName(builtin.os.tag) });
     if (!fsutil.exists(extracted_bin)) {
         try ctx.err_w.writeAll("holt: extracted archive did not contain a holt binary\n");
         return 1;
@@ -225,6 +223,29 @@ pub fn assetName(alloc: std.mem.Allocator, os_tag: std.Target.Os.Tag, arch: std.
 /// `holt` elsewhere.
 pub fn assetBinaryName(os_tag: std.Target.Os.Tag) []const u8 {
     return if (os_tag == .windows) "holt.exe" else "holt";
+}
+
+/// Extracts `archive_path` into `dest_dir` in process. A `.zip` (Windows) via
+/// `std.zip`; a `.tar.gz` (unix) via gzip-decompress + `std.tar`. Replaces the
+/// prior external `tar -xzf`, so holt no longer depends on a `tar` binary.
+fn extractArchive(alloc: std.mem.Allocator, archive_path: []const u8, dest_dir: []const u8, is_zip: bool) !void {
+    _ = alloc;
+    const io = fsutil.io();
+    var dest = try std.Io.Dir.openDirAbsolute(io, dest_dir, .{});
+    defer dest.close(io);
+    var file = try std.Io.Dir.openFileAbsolute(io, archive_path, .{});
+    defer file.close(io);
+
+    var file_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(io, &file_buf);
+
+    if (is_zip) {
+        try std.zip.extract(dest, &file_reader, .{});
+    } else {
+        var flate_buf: [std.compress.flate.max_window_len]u8 = undefined;
+        var decompress: std.compress.flate.Decompress = .init(&file_reader.interface, .gzip, &flate_buf);
+        try std.tar.extract(io, dest, &decompress.reader, .{});
+    }
 }
 
 /// `<base>/<tag>/<asset>`, the GitHub release-asset download URL layout.
@@ -341,6 +362,33 @@ test "assetBinaryName: holt.exe on windows, holt elsewhere" {
     try testing.expectEqualStrings("holt.exe", assetBinaryName(.windows));
     try testing.expectEqualStrings("holt", assetBinaryName(.macos));
     try testing.expectEqualStrings("holt", assetBinaryName(.linux));
+}
+
+test "extractArchive: unpacks a gzip tar into the destination" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    // Build a real holt-*.tar.gz containing a file named "holt" via the system
+    // tar (this is the FIXTURE, not the code under test), then extract it in
+    // process and assert the file lands in dest.
+    const srcdir = try std.fs.path.join(arena, &.{ root, "src" });
+    try fsutil.ensureDir(srcdir);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ srcdir, "holt" }), .data = "BINARY" });
+    const archive = try std.fs.path.join(arena, &.{ root, "a.tar.gz" });
+    _ = try proc.run(arena, &.{ "tar", "-C", srcdir, "-czf", archive, "holt" }, null);
+
+    const dest = try std.fs.path.join(arena, &.{ root, "dest" });
+    try fsutil.ensureDir(dest);
+    try extractArchive(arena, archive, dest, false);
+
+    const out = try std.fs.path.join(arena, &.{ dest, "holt" });
+    try testing.expectEqualStrings("BINARY", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), out, arena, .unlimited));
 }
 
 test "downloadUrl: joins base, tag, and asset with slashes" {
