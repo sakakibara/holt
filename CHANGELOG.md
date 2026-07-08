@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-09
+
+### Added
+
+- **`hir`** - an interactive fuzzy jump to a code repo's clone, the
+  counterpart to `hi` (which jumps to a project hub). It pipes the code tree
+  through `fzf` and `cd`s into the picked clone, reaching every repo including
+  standalone `get`-clones and `local/` repos that `hi` cannot. Emitted by
+  `holt init` for fish, zsh, bash, and PowerShell. The nav family is now `h`
+  (jump by name), `hi` (fuzzy project -> hub), `hir` (fuzzy repo -> clone).
+- **`holt list --repos`** lists every clone in the code tree
+  (`<host>/<owner>/<repo>` and `local/<name>`), one absolute path per line (a
+  JSON array with `--json`). It backs `hir` and is independently scriptable;
+  worktrees and clone-staging temp dirs are excluded.
+
 ## [0.4.0] - 2026-07-09
 
 ### Added
@@ -195,7 +210,8 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/sakakibara/holt/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/sakakibara/holt/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sakakibara/holt/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sakakibara/holt/compare/v0.1.0...v0.2.0
