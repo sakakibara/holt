@@ -169,6 +169,18 @@ pub fn worktreeCount(alloc: std.mem.Allocator, repo: []const u8) !usize {
     return n;
 }
 
+/// A process-environment map with GIT_CEILING_DIRECTORIES pinned to `repo`'s
+/// parent, so a git command run in `repo` is judged on its own merits and
+/// never walks up to resolve an ancestor repository above it. Caller owns the
+/// returned map and must deinit it.
+fn ceilingEnviron(alloc: std.mem.Allocator, repo: []const u8) !std.process.Environ.Map {
+    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
+    var map = try std.process.Environ.createMap(real_env, alloc);
+    errdefer map.deinit();
+    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
+    return map;
+}
+
 /// True iff `repo` is a readable git repository (`git -C repo rev-parse
 /// --git-dir` exits 0). A nonzero exit means the directory cannot be
 /// trusted to inspect further - callers gate on this before treating any
@@ -181,10 +193,8 @@ pub fn worktreeCount(alloc: std.mem.Allocator, repo: []const u8) !usize {
 /// walking up and finding an unrelated ancestor repository (e.g. `repo`
 /// sitting inside a developer's own checkout of this project).
 pub fn inspectable(alloc: std.mem.Allocator, repo: []const u8) !bool {
-    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    var map = try std.process.Environ.createMap(real_env, alloc);
+    var map = try ceilingEnviron(alloc, repo);
     defer map.deinit();
-    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
 
     const res = try runEnv(alloc, &.{ "git", "-C", repo, "rev-parse", "--git-dir" }, null, &map);
     defer alloc.free(res.stdout);
@@ -202,10 +212,8 @@ pub fn inspectable(alloc: std.mem.Allocator, repo: []const u8) !bool {
 /// as `inspectable`: a non-repo `repo` must be judged on its own merits, not
 /// resolve HEAD from some ancestor repository.
 pub fn isCompleteClone(alloc: std.mem.Allocator, repo: []const u8) !bool {
-    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    var map = try std.process.Environ.createMap(real_env, alloc);
+    var map = try ceilingEnviron(alloc, repo);
     defer map.deinit();
-    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
 
     const res = try runEnv(alloc, &.{ "git", "-C", repo, "rev-parse", "-q", "--verify", "HEAD" }, null, &map);
     defer alloc.free(res.stdout);
@@ -219,10 +227,8 @@ pub fn isCompleteClone(alloc: std.mem.Allocator, repo: []const u8) !bool {
 /// stay scoped to the clone at `repo` without a separate `inspectable`
 /// precheck.
 pub fn runInRepo(alloc: std.mem.Allocator, args: []const []const u8, repo: []const u8) !proc.RunResult {
-    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    var map = try std.process.Environ.createMap(real_env, alloc);
+    var map = try ceilingEnviron(alloc, repo);
     defer map.deinit();
-    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(alloc);
@@ -294,10 +300,8 @@ pub const RepoStatus = struct { branch: ?[]u8, dirty: bool, unpushed: Unpushed }
 /// Returns `error.NotInspectable` on a nonzero git exit (corrupt/non-repo) so
 /// the caller maps it to unreadable, preserving corrupted-repo detection.
 pub fn repoStatus(alloc: std.mem.Allocator, repo: []const u8) !RepoStatus {
-    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    var map = try std.process.Environ.createMap(real_env, alloc);
+    var map = try ceilingEnviron(alloc, repo);
     defer map.deinit();
-    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
 
     const res = try runEnv(alloc, &.{ "git", "-C", repo, "status", "--porcelain=v2", "--branch" }, null, &map);
     defer alloc.free(res.stdout);
