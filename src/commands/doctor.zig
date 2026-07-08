@@ -20,7 +20,7 @@ const testutil = @import("../testutil.zig");
 
 const Spec = struct {
     fix: args.Flag(.{ .help = "repair hub drift; never touches CONTENT or deletes a clone" }),
-    full: args.Flag(.{ .help = "also check every member repo's git state" }),
+    full: args.Flag(.{ .help = "extend the D1 symlink scan to the whole synced root, not just projects/ and archive/" }),
     jobs: args.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "check clone integrity in up to N clones concurrently (default: auto; 1 = serial)" }),
 };
 
