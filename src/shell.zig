@@ -38,11 +38,12 @@ const fish_snippet =
     \\end
     \\
     \\function hir
-    \\    set -l dir (holt list --repos | fzf)
-    \\    if test -z "$dir"
+    \\    set -l root (holt config | string match -rg '^code_root = (.*)')
+    \\    set -l key (holt list --repos | fzf)
+    \\    if test -z "$key"
     \\        return 1
     \\    end
-    \\    cd $dir
+    \\    cd "$root/$key"
     \\end
     \\
     \\# Tab-completion. `holt __complete` prints a directive line then one
@@ -82,12 +83,13 @@ const posix_hhi =
     \\}
     \\
     \\hir() {
-    \\    local dir
-    \\    dir="$(holt list --repos | fzf)"
-    \\    if [ -z "$dir" ]; then
+    \\    local root key
+    \\    root="$(holt config | sed -n 's/^code_root = //p')"
+    \\    key="$(holt list --repos | fzf)"
+    \\    if [ -z "$key" ]; then
     \\        return 1
     \\    fi
-    \\    cd "$dir" || return 1
+    \\    cd "$root/$key" || return 1
     \\}
     \\
 ;
@@ -186,11 +188,12 @@ const powershell_snippet =
     \\}
     \\
     \\function hir {
-    \\    $dir = holt list --repos | fzf
-    \\    if ([string]::IsNullOrEmpty($dir)) {
+    \\    $root = (holt config | Select-String '^code_root = (.*)').Matches.Groups[1].Value
+    \\    $key = holt list --repos | fzf
+    \\    if ([string]::IsNullOrEmpty($key)) {
     \\        return
     \\    }
-    \\    Set-Location $dir
+    \\    Set-Location (Join-Path $root $key)
     \\}
     \\
     \\Register-ArgumentCompleter -Native -CommandName holt -ScriptBlock {
@@ -275,6 +278,12 @@ test "snippet: every shell defines hir wired to `holt list --repos | fzf`" {
         const s = snippet(sh);
         try testing.expect(std.mem.indexOf(u8, s, "hir") != null);
         try testing.expect(std.mem.indexOf(u8, s, "holt list --repos") != null);
+    }
+}
+
+test "snippet: hir resolves the relative key via code_root from holt config" {
+    inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt config") != null);
     }
 }
 

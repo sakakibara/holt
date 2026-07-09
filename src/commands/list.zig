@@ -23,14 +23,15 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     if (a.repos) {
         const clones = try ws.listClones(ctx.alloc);
+        const prefix_len = ws.cfg.code_root.len + 1; // strip "<code_root>/"
         if (a.json) {
             var items: std.ArrayList(json.Value) = .empty;
-            for (clones) |c| try items.append(ctx.alloc, .{ .string = c });
+            for (clones) |c| try items.append(ctx.alloc, .{ .string = c[prefix_len..] });
             try json.encode(ctx.out, .{ .array = try items.toOwnedSlice(ctx.alloc) }, .{});
             try ctx.out.writeByte('\n');
             return 0;
         }
-        for (clones) |c| try ctx.out.print("{s}\n", .{c});
+        for (clones) |c| try ctx.out.print("{s}\n", .{c[prefix_len..]});
         return 0;
     }
 
@@ -217,7 +218,7 @@ test "run: --json emits a parseable array with the right orgs, names, and repos"
     try testing.expectEqual(@as(usize, 0), parsed[1].repos.len);
 }
 
-test "list --repos: prints the sorted absolute clone paths" {
+test "list --repos: prints the sorted relative code-tree keys, not absolute paths" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -230,11 +231,11 @@ test "list --repos: prints the sorted absolute clone paths" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--repos"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    const clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox" });
-    try testing.expect(std.mem.indexOf(u8, got.out, clone) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "local/mox") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, ws.cfg.code_root) == null);
 }
 
-test "list --repos --json: emits a JSON array of clone paths" {
+test "list --repos --json: emits a JSON array of relative code-tree keys" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -249,7 +250,8 @@ test "list --repos --json: emits a JSON array of clone paths" {
     try testing.expectEqual(@as(u8, 0), got.code);
     const trimmed = std.mem.trim(u8, got.out, " \t\r\n");
     try testing.expect(trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']');
-    try testing.expect(std.mem.indexOf(u8, got.out, "mox") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "local/mox") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, ws.cfg.code_root) == null);
 }
 
 test "run: --json on an empty workspace emits [] on stdout, not the human hint" {
