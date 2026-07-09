@@ -18,6 +18,17 @@ const Spec = struct {
     repos: args.Flag(.{ .help = "list every clone in the code tree instead of projects" }),
 };
 
+/// A clone's code-tree key: its path relative to `code_root`, always
+/// `/`-joined (like `identity.relPath`) so `holt list --repos` output is a
+/// portable logical key on every platform, not a native-separator path.
+/// Windows `cd`/`Set-Location` accept `/`, so `hir`'s `code_root/<key>` still
+/// resolves. `relative` handles a trailing slash on `code_root`.
+fn repoKey(alloc: std.mem.Allocator, code_root: []const u8, clone: []const u8) ![]u8 {
+    const rel = try std.fs.path.relative(alloc, "", null, code_root, clone);
+    std.mem.replaceScalar(u8, rel, '\\', '/');
+    return rel;
+}
+
 fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const ws = ctx.ws.?;
 
@@ -25,18 +36,12 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         const clones = try ws.listClones(ctx.alloc);
         if (a.json) {
             var items: std.ArrayList(json.Value) = .empty;
-            for (clones) |c| {
-                const rel = try std.fs.path.relative(ctx.alloc, "", null, ws.cfg.code_root, c);
-                try items.append(ctx.alloc, .{ .string = rel });
-            }
+            for (clones) |c| try items.append(ctx.alloc, .{ .string = try repoKey(ctx.alloc, ws.cfg.code_root, c) });
             try json.encode(ctx.out, .{ .array = try items.toOwnedSlice(ctx.alloc) }, .{});
             try ctx.out.writeByte('\n');
             return 0;
         }
-        for (clones) |c| {
-            const rel = try std.fs.path.relative(ctx.alloc, "", null, ws.cfg.code_root, c);
-            try ctx.out.print("{s}\n", .{rel});
-        }
+        for (clones) |c| try ctx.out.print("{s}\n", .{try repoKey(ctx.alloc, ws.cfg.code_root, c)});
         return 0;
     }
 
@@ -238,6 +243,9 @@ test "list --repos: prints the sorted relative code-tree keys, not absolute path
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "local/mox") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, ws.cfg.code_root) == null);
+    // The key is a portable `/`-joined logical key on every platform, never a
+    // native-separator path (a backslash would break this on Windows).
+    try testing.expect(std.mem.indexOf(u8, got.out, "\\") == null);
 }
 
 test "list --repos --json: emits a JSON array of relative code-tree keys" {
