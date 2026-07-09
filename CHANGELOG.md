@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-09
+
+### Fixed
+
+- `holt list --repos` (and therefore `hir`) emit forward-slash code-tree keys
+  (`<host>/<owner>/<repo>`, `local/<name>`) on every platform. v0.5.1 emitted
+  native-separator keys on Windows (backslashes), which broke the display and
+  the tests; the key is now a portable `/`-joined logical key everywhere, and
+  Windows still resolves it via `cd`/`Set-Location`.
+
 ## [0.5.1] - 2026-07-09
 
 ### Fixed
@@ -221,7 +231,8 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/sakakibara/holt/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/sakakibara/holt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/sakakibara/holt/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/sakakibara/holt/compare/v0.3.0...v0.4.0
