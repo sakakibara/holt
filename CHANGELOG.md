@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-09
+
+### Fixed
+
+- **`holt list --repos` and `hir` show clean relative code-tree keys**
+  (`<host>/<owner>/<repo>`, `local/<name>`) instead of full absolute paths, so
+  the `hir` picker reads like `hi`'s project list rather than repeating the
+  `code_root` prefix on every line. `hir` resolves the key back to the clone
+  via `code_root`; the key is computed safely even when `code_root` carries a
+  trailing slash.
+
 ## [0.5.0] - 2026-07-09
 
 ### Added
@@ -210,7 +221,8 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/sakakibara/holt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/sakakibara/holt/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/sakakibara/holt/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sakakibara/holt/compare/v0.2.0...v0.3.0
