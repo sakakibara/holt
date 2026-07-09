@@ -23,15 +23,20 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     if (a.repos) {
         const clones = try ws.listClones(ctx.alloc);
-        const prefix_len = ws.cfg.code_root.len + 1; // strip "<code_root>/"
         if (a.json) {
             var items: std.ArrayList(json.Value) = .empty;
-            for (clones) |c| try items.append(ctx.alloc, .{ .string = c[prefix_len..] });
+            for (clones) |c| {
+                const rel = try std.fs.path.relative(ctx.alloc, "", null, ws.cfg.code_root, c);
+                try items.append(ctx.alloc, .{ .string = rel });
+            }
             try json.encode(ctx.out, .{ .array = try items.toOwnedSlice(ctx.alloc) }, .{});
             try ctx.out.writeByte('\n');
             return 0;
         }
-        for (clones) |c| try ctx.out.print("{s}\n", .{c[prefix_len..]});
+        for (clones) |c| {
+            const rel = try std.fs.path.relative(ctx.alloc, "", null, ws.cfg.code_root, c);
+            try ctx.out.print("{s}\n", .{rel});
+        }
         return 0;
     }
 
@@ -252,6 +257,27 @@ test "list --repos --json: emits a JSON array of relative code-tree keys" {
     try testing.expect(trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']');
     try testing.expect(std.mem.indexOf(u8, got.out, "local/mox") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, ws.cfg.code_root) == null);
+}
+
+test "list --repos: a trailing slash on code_root does not corrupt the relative key" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    var ws = try testutil.testWorkspace(arena, root);
+    // Force a trailing slash on code_root (a real config typo / tab-completion artifact).
+    ws.cfg.code_root = try std.fmt.allocPrint(arena, "{s}/", .{ws.cfg.code_root});
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "backend", ".git" }));
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"--repos"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    // Exact match, not a substring check: "github.com" contains "ithub.com"
+    // as a substring, so a corrupted (over-stripped) key would slip past
+    // std.mem.indexOf(..., "ithub.com") even though it's plainly wrong.
+    try testing.expectEqualStrings("github.com/acme/backend\n", got.out);
 }
 
 test "run: --json on an empty workspace emits [] on stdout, not the human hint" {
