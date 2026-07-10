@@ -156,7 +156,7 @@ fn pruneClones(ctx: *cli.Ctx, ws: *const workspace.Workspace, members: []const M
             fsutil.rmdirIfEmpty(owner_dir);
             if (std.fs.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
         }
-        try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, m.clone_path });
+        try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, try fsutil.contractTilde(alloc, m.clone_path) });
     }
 }
 

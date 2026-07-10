@@ -53,6 +53,27 @@ pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     return joinSlashy(alloc, home, path[2..]);
 }
 
+/// Contracts a leading $HOME into "~" for display: the inverse of expandTilde.
+/// `/Users/me/Code` becomes `~/Code`; a path outside $HOME (or any path when
+/// $HOME is unset) is duped unchanged. The byte after the matched $HOME must
+/// be a path separator, so `/Users/meXY` is left alone rather than mangled to
+/// `~XY`. For human-facing prose ONLY - a whole-line path meant for
+/// `cd $(holt ...)` must stay absolute, since neither fish nor bash expands a
+/// tilde that arrives from a command substitution. Caller owns the result.
+pub fn contractTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    const home_raw = homeDirAlloc(alloc) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return alloc.dupe(u8, path),
+        else => return err,
+    };
+    defer alloc.free(home_raw);
+    const home = std.mem.trimEnd(u8, home_raw, "/\\");
+    if (home.len == 0 or !std.mem.startsWith(u8, path, home)) return alloc.dupe(u8, path);
+    const rest = path[home.len..];
+    if (rest.len == 0) return alloc.dupe(u8, "~");
+    if (rest[0] != '/' and rest[0] != std.fs.path.sep) return alloc.dupe(u8, path);
+    return std.fmt.allocPrint(alloc, "~{s}", .{rest});
+}
+
 /// Joins `base` with `rel`, a `/`-delimited relative path (e.g. a git branch
 /// name, which namespaces on '/' regardless of platform) - split first and
 /// rejoined so each segment nests with the platform separator rather than
@@ -514,6 +535,40 @@ test "expandTilde: ~ and ~/x expand via $HOME, other paths pass through" {
         defer testing.allocator.free(got);
         try testing.expectEqualStrings("relative/path", got);
     }
+}
+
+test "contractTilde: $HOME prefix becomes ~, boundary and outside paths are untouched" {
+    // Arena: EnvOverride copies the whole environment and its restore does not
+    // free it (it is built for arena callers), so bind it to one here.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const override = try testutil.EnvOverride.install(arena, "HOME", "/home/me");
+    defer override.restore();
+
+    const cases = [_]struct { in: []const u8, want: []const u8 }{
+        .{ .in = "/home/me", .want = "~" },
+        .{ .in = "/home/me/Code/x", .want = "~/Code/x" },
+        // Boundary: a sibling that merely shares the prefix is not under $HOME.
+        .{ .in = "/home/mext/x", .want = "/home/mext/x" },
+        // Outside $HOME entirely.
+        .{ .in = "/etc/passwd", .want = "/etc/passwd" },
+    };
+    for (cases) |c| {
+        try testing.expectEqualStrings(c.want, try contractTilde(arena, c.in));
+    }
+}
+
+test "contractTilde: a trailing separator on $HOME does not defeat the match" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const override = try testutil.EnvOverride.install(arena, "HOME", "/home/me/");
+    defer override.restore();
+
+    try testing.expectEqualStrings("~/Code", try contractTilde(arena, "/home/me/Code"));
 }
 
 test "toAbsolute: absolute input passes through, relative input joins the cwd" {

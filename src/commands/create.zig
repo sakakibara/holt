@@ -130,6 +130,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     }
 
     try ctx.out.print("{s}\n", .{clone_path});
+    try ctx.err_w.print("created {s}\n", .{try fsutil.contractTilde(alloc, clone_path)});
     return 0;
 }
 
@@ -146,8 +147,9 @@ test "run: a bare name creates a local repo at code_root/local/<name>, prints th
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const expected_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
-    // stdout is the created path (sole line).
+    // stdout is the created path (sole line); the "created" note is stderr.
     try testing.expectEqualStrings(expected_path, std.mem.trim(u8, got.out, " \t\r\n"));
+    try testing.expect(std.mem.indexOf(u8, got.err, "created") != null);
     // It is a git repo (has a .git) ...
     try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ expected_path, ".git" })));
     // ... but commitless (unborn HEAD): no commit reachable from HEAD.

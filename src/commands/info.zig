@@ -47,14 +47,14 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     if (a.json) return runJson(ctx, &ws, &p);
 
     try ctx.out.print("{s}/{s}\n", .{ p.org, p.name });
-    try ctx.out.print("content: {s}\n", .{p.content_path});
-    try ctx.out.print("hub: {s}\n", .{p.hub_path});
+    try ctx.out.print("content: {s}\n", .{try fsutil.contractTilde(alloc, p.content_path)});
+    try ctx.out.print("hub: {s}\n", .{try fsutil.contractTilde(alloc, p.hub_path)});
 
     for (p.marker.repos.keys()) |repo_name| {
         const id = try p.repoIdentity(alloc, repo_name);
         const rel = try id.relPath(alloc);
         const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-        try ctx.out.print("  {s}: {s} ({s}) [", .{ repo_name, rel, clone_path });
+        try ctx.out.print("  {s}: {s} ({s}) [", .{ repo_name, rel, try fsutil.contractTilde(alloc, clone_path) });
         if (!fsutil.exists(clone_path)) {
             try ui.color(ctx.color, ctx.out, color_red, "missing");
         } else if (!try git.inspectable(alloc, clone_path)) {
@@ -130,10 +130,11 @@ test "run: golden output over a project with one present clone and one missing c
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
-    const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
-    const absent_clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "absent" });
-    const present_clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
+    // info renders paths for humans, so each is tilde-abbreviated on display.
+    const content_path = try fsutil.contractTilde(arena, try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" }));
+    const hub_path = try fsutil.contractTilde(arena, try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" }));
+    const absent_clone = try fsutil.contractTilde(arena, try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "absent" }));
+    const present_clone = try fsutil.contractTilde(arena, try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" }));
     const want = try std.fmt.allocPrint(arena,
         \\acme/proj
         \\content: {s}

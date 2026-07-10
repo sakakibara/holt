@@ -98,11 +98,12 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     _ = try hub.reconcile(alloc, &ws, &p, false);
 
+    const shown = try fsutil.contractTilde(alloc, clone_path);
     try ctx.out.print("added {s} to {s}/{s}\n", .{ id.repo, p.org, p.name });
     if (cloned) {
-        try ctx.out.print("cloned {s} -> {s}\n", .{ url, clone_path });
+        try ctx.out.print("cloned {s} -> {s}\n", .{ url, shown });
     } else {
-        try ctx.out.print("using existing clone at {s}\n", .{clone_path});
+        try ctx.out.print("using existing clone at {s}\n", .{shown});
     }
     return 0;
 }

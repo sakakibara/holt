@@ -80,7 +80,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         const others = try ws.projectsUsing(alloc, id);
         if (others.len == 0) {
             const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-            try ctx.out.print("clone at {s} is now unreferenced; remove it manually if no longer needed\n", .{clone_path});
+            try ctx.out.print("clone at {s} is now unreferenced; remove it manually if no longer needed\n", .{try fsutil.contractTilde(alloc, clone_path)});
         }
     }
 
@@ -159,7 +159,8 @@ test "run: --yes deletes content and hub, keeps the clone, and reports it unrefe
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "deleted acme/widget") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, clone_path) != null);
+    // The unreferenced-clone note tilde-abbreviates the path for display.
+    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, clone_path)) != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "unreferenced") != null);
 
     try testing.expect(!fsutil.exists(p.content_path));

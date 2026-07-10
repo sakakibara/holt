@@ -190,7 +190,8 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     };
 
     const rel = try id.relPath(alloc);
-    try ctx.out.print("adopted {s} -> {s}\n", .{ rel, final_path });
+    try ctx.out.print("{s}\n", .{final_path});
+    try ctx.err_w.print("adopted {s} -> {s}\n", .{ rel, try fsutil.contractTilde(alloc, final_path) });
     return 0;
 }
 

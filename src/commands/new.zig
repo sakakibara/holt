@@ -28,6 +28,10 @@ pub const command = args.command(Spec, .{
     .usage = "holt new <org>/<name> [url]",
     .group = .create,
     .details =
+    \\Creates the project's content dirs, marker, and hub; with a url it also
+    \\clones the repo as the first member. The hub path is the sole line on
+    \\stdout, so `cd $(holt new acme/widget)` drops you into the new project.
+    \\
     \\Example:
     \\  holt new acme/widget https://github.com/acme/widget.git
     ,
@@ -106,12 +110,18 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     };
     _ = try hub.reconcile(alloc, &ws, &p, false);
 
-    try ctx.out.print("created {s}/{s}\n", .{ on.org, on.name });
+    // The hub path is the sole line on stdout (cd-friendly, matching `create`
+    // and `get`), so `cd $(holt new acme/widget)` lands in the project hub.
+    // Human-facing status goes to stderr, where its tilde-abbreviated paths
+    // cannot leak into a command substitution.
+    try ctx.out.print("{s}\n", .{hub_path});
+    try ctx.err_w.print("created {s}/{s}\n", .{ on.org, on.name });
     if (clone_path) |cp| {
+        const shown = try fsutil.contractTilde(alloc, cp);
         if (cloned) {
-            try ctx.out.print("cloned {s} -> {s}\n", .{ url.?, cp });
+            try ctx.err_w.print("cloned {s} -> {s}\n", .{ url.?, shown });
         } else {
-            try ctx.out.print("using existing clone at {s}\n", .{cp});
+            try ctx.err_w.print("using existing clone at {s}\n", .{shown});
         }
     }
     return 0;
@@ -178,6 +188,11 @@ test "run: new without a url writes an empty-repos marker and no clone" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/scratch"});
     try testing.expectEqual(@as(u8, 0), got.code);
+
+    // stdout is the hub path alone (cd-friendly); the "created" note is stderr.
+    const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "scratch" });
+    try testing.expectEqualStrings(hub_path, std.mem.trim(u8, got.out, " \t\r\n"));
+    try testing.expect(std.mem.indexOf(u8, got.err, "created acme/scratch") != null);
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "scratch", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
