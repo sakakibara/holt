@@ -5,23 +5,23 @@
 //! treated as one impossible binary name.
 
 const std = @import("std");
-const cli = @import("cli.zig");
+const app = @import("app.zig");
 const proc = @import("proc.zig");
 const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
 
 /// Opens `path` in $EDITOR (child cwd `cwd`, or the process cwd when null),
-/// returning the editor's exit code. Reports on ctx.err_w and returns 1 when
+/// returning the editor's exit code. Reports on ctx.err and returns 1 when
 /// $EDITOR is unset or blank, its binary is not on PATH, or it exits nonzero -
 /// an interactive editor needs the real terminal, so stdio is inherited.
-pub fn open(ctx: *cli.Ctx, path: []const u8, cwd: ?[]const u8) !u8 {
+pub fn open(ctx: *app.Ctx, path: []const u8, cwd: ?[]const u8) !u8 {
     const alloc = ctx.alloc;
 
     const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
     const raw = std.process.Environ.getAlloc(environ, alloc, "EDITOR") catch |err| switch (err) {
         error.EnvironmentVariableMissing => {
-            try ctx.err_w.writeAll("holt: $EDITOR is not set\n");
+            try ctx.err.writeAll("holt: $EDITOR is not set\n");
             return 1;
         },
         else => return err,
@@ -29,7 +29,7 @@ pub fn open(ctx: *cli.Ctx, path: []const u8, cwd: ?[]const u8) !u8 {
     // An EDITOR of "" (set but empty) means the same as unset, not a spawn of
     // the empty string.
     if (std.mem.trim(u8, raw, " \t").len == 0) {
-        try ctx.err_w.writeAll("holt: $EDITOR is not set\n");
+        try ctx.err.writeAll("holt: $EDITOR is not set\n");
         return 1;
     }
 
@@ -40,20 +40,20 @@ pub fn open(ctx: *cli.Ctx, path: []const u8, cwd: ?[]const u8) !u8 {
 
     const status = proc.spawnInherited(alloc, argv.items, cwd) catch |err| switch (err) {
         error.FileNotFound => {
-            try ctx.err_w.print("holt: editor \"{s}\" was not found on your PATH\n", .{argv.items[0]});
+            try ctx.err.print("holt: editor \"{s}\" was not found on your PATH\n", .{argv.items[0]});
             return 1;
         },
         else => return err,
     };
     if (status != 0) {
-        try ctx.err_w.print("holt: {s} exited with status {d}\n", .{ raw, status });
+        try ctx.err.print("holt: {s} exited with status {d}\n", .{ raw, status });
         return 1;
     }
     return 0;
 }
 
-fn testCtx(arena: std.mem.Allocator, out: *std.Io.Writer.Allocating, err_w: *std.Io.Writer.Allocating, args: *cli.Args) cli.Ctx {
-    return .{ .alloc = arena, .ws = null, .args = args, .out = &out.writer, .err_w = &err_w.writer };
+fn testCtx(arena: std.mem.Allocator, out: *std.Io.Writer.Allocating, err_w: *std.Io.Writer.Allocating) app.Ctx {
+    return .{ .alloc = arena, .io = testing.io, .context = null, .out = &out.writer, .err = &err_w.writer };
 }
 
 test "open: a multi-word $EDITOR is split into a command plus the path" {
@@ -77,10 +77,9 @@ test "open: a multi-word $EDITOR is split into a command plus the path" {
 
     const target = try std.fs.path.join(arena, &.{ root, "file.txt" });
 
-    var args = try cli.Args.init(arena, &.{});
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx = testCtx(arena, &out, &err_w, &args);
+    var ctx = testCtx(arena, &out, &err_w);
 
     try testing.expectEqual(@as(u8, 0), try open(&ctx, target, null));
 
@@ -98,10 +97,9 @@ test "open: a blank $EDITOR is treated as unset, never spawned" {
     const override = try testutil.EnvOverride.install(arena, "EDITOR", "   ");
     defer override.restore();
 
-    var args = try cli.Args.init(arena, &.{});
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx = testCtx(arena, &out, &err_w, &args);
+    var ctx = testCtx(arena, &out, &err_w);
 
     try testing.expectEqual(@as(u8, 1), try open(&ctx, "/tmp/whatever", null));
     try testing.expect(std.mem.indexOf(u8, err_w.written(), "EDITOR") != null);
@@ -115,10 +113,9 @@ test "open: an editor binary that is not on PATH is reported by name, not a bare
     const override = try testutil.EnvOverride.install(arena, "EDITOR", "holt-no-such-editor-xyz");
     defer override.restore();
 
-    var args = try cli.Args.init(arena, &.{});
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx = testCtx(arena, &out, &err_w, &args);
+    var ctx = testCtx(arena, &out, &err_w);
 
     try testing.expectEqual(@as(u8, 1), try open(&ctx, "/tmp/whatever", null));
     try testing.expect(std.mem.indexOf(u8, err_w.written(), "holt-no-such-editor-xyz") != null);

@@ -4,21 +4,20 @@
 //! leaving every comment, blank line, and `[backends.*]` block untouched.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const config = @import("../config.zig");
 const fsutil = @import("../fsutil.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    name: args.Pos(?[]const u8, .{ .complete = comp.cat(.backend), .help = "switch to this backend preset" }),
+    name: cli.spec.Pos([]const u8, .{ .complete = app.cat(.backend), .optional = true, .help = "switch to this backend preset" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "backend",
-    .about = "Show or switch the active backend preset",
+    .summary = "Show or switch the active backend preset",
     .usage = "holt backend [<name>]",
     .group = .maintain,
     .details =
@@ -33,7 +32,7 @@ pub const command = args.command(Spec, .{
     \\  holt backend
     \\  holt backend dropbox
     ,
-    .needs_workspace = true,
+    .needs_context = true,
 }, run);
 
 fn hasPreset(presets: []const config.Preset, name: []const u8) bool {
@@ -43,10 +42,10 @@ fn hasPreset(presets: []const config.Preset, name: []const u8) bool {
     return false;
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const name_opt = a.name;
 
-    const cfg = ctx.ws.?.cfg;
+    const cfg = ctx.context.?.ws.cfg;
 
     const name = name_opt orelse {
         if (cfg.backend) |b| {
@@ -58,7 +57,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     };
 
     if (!hasPreset(cfg.presets, name)) {
-        try ctx.err_w.print("holt: backend \"{s}\" is not defined; run \"holt backends\"\n", .{name});
+        try ctx.err.print("holt: backend \"{s}\" is not defined; run \"holt backends\"\n", .{name});
         return 1;
     }
 
@@ -67,7 +66,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     const rewritten = switchBackendLine(ctx.alloc, src, name) catch |err| switch (err) {
         error.NoBackendLine => {
-            try ctx.err_w.writeAll("holt: config uses a direct synced_root, not a backend; edit the file or run \"holt setup\"\n");
+            try ctx.err.writeAll("holt: config uses a direct synced_root, not a backend; edit the file or run \"holt setup\"\n");
             return 1;
         },
         else => return err,

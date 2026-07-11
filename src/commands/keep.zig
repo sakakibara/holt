@@ -3,8 +3,8 @@
 //! now syncs to the cloud. The project is inferred from the working directory.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const fsutil = @import("../fsutil.zig");
 const marker = @import("../marker.zig");
@@ -13,14 +13,15 @@ const testutil = @import("../testutil.zig");
 const testing = std.testing;
 
 const Spec = struct {
-    path: args.Pos([]const u8, .{ .complete = .files, .help = "the loose file or dir at the hub root to keep in synced content" }),
+    path: cli.spec.Pos([]const u8, .{ .complete = .files, .help = "the loose file or dir at the hub root to keep in synced content" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "keep",
-    .about = "Promote a loose hub-root file into synced content",
+    .summary = "Promote a loose hub-root file into synced content",
     .usage = "holt keep <path>",
     .group = .create,
+    .needs_context = true,
     .details =
     \\Run from inside a project's hub. Moves the loose local entry into the
     \\project's synced content and leaves a symlink at the hub root, so it now
@@ -28,11 +29,11 @@ pub const command = args.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const alloc = ctx.alloc;
 
     const p = (try common.projectFromCwd(ctx)) orelse {
-        try ctx.err_w.writeAll("holt: run \"holt keep\" from inside a project hub\n");
+        try ctx.err.writeAll("holt: run \"holt keep\" from inside a project hub\n");
         return 1;
     };
 
@@ -40,20 +41,20 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const base = std.fs.path.basename(abs);
 
     if (std.mem.eql(u8, base, "code") or std.mem.eql(u8, base, marker.marker_basename)) {
-        try ctx.err_w.print("holt: {s} is reserved and cannot be kept\n", .{base});
+        try ctx.err.print("holt: {s} is reserved and cannot be kept\n", .{base});
         return 1;
     }
 
     const parent_real = try fsutil.realPathOrSelf(alloc, std.fs.path.dirname(abs) orelse abs);
     const hub_real = try fsutil.realPathOrSelf(alloc, p.hub_path);
     if (!std.mem.eql(u8, parent_real, hub_real)) {
-        try ctx.err_w.print("holt: keep only accepts an entry at the project root ({s})\n", .{p.hub_path});
+        try ctx.err.print("holt: keep only accepts an entry at the project root ({s})\n", .{p.hub_path});
         return 1;
     }
 
     switch (try fsutil.linkState(alloc, abs)) {
         .missing => {
-            try ctx.err_w.print("holt: no such entry {s}\n", .{abs});
+            try ctx.err.print("holt: no such entry {s}\n", .{abs});
             return 1;
         },
         .symlink => {
@@ -65,7 +66,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     const dest = try std.fs.path.join(alloc, &.{ p.content_path, base });
     if (fsutil.exists(dest)) {
-        try ctx.err_w.print("holt: content already has {s}; refusing to overwrite\n", .{base});
+        try ctx.err.print("holt: content already has {s}; refusing to overwrite\n", .{base});
         return 1;
     }
 
@@ -78,7 +79,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     try ctx.out.print("kept {s} -> content\n", .{base});
     if (result == .skipped_unprivileged) {
-        try ctx.err_w.print("holt: warning: {s} is in content but not surfaced at the hub root (needs Developer Mode for file links); run \"holt sync\" after enabling it\n", .{base});
+        try ctx.err.print("holt: warning: {s} is in content but not surfaced at the hub root (needs Developer Mode for file links); run \"holt sync\" after enabling it\n", .{base});
     }
     return 0;
 }

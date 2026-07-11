@@ -4,9 +4,8 @@
 //! restore <project>` reverses this exact move.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const hub = @import("../hub.zig");
 const fsutil = @import("../fsutil.zig");
@@ -20,16 +19,17 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to archive" }),
-    prune: args.Flag(.{ .help = "also reclaim member clones that are safe to re-fetch" }),
-    yes: args.Flag(.{ .short = 'y', .help = "skip the prune confirmation prompt" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to archive" }),
+    prune: cli.spec.Flag(.{ .help = "also reclaim member clones that are safe to re-fetch" }),
+    yes: cli.spec.Flag(.{ .short = 'y', .help = "skip the prune confirmation prompt" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "archive",
-    .about = "Move a project's content out of projects/ into archive/ and drop its hub",
+    .summary = "Move a project's content out of projects/ into archive/ and drop its hub",
     .usage = "holt archive <project> [--prune] [--yes]",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\With --prune, after archiving, each member clone that is clean, in sync
     \\with its remote, and no longer used by any active project is deleted to
@@ -44,10 +44,10 @@ pub const command = args.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const p = (try common.resolveOne(ctx, project_query)) orelse return 1;
@@ -71,7 +71,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const archive_root = try ws.archiveRoot(alloc);
     const dest = try std.fs.path.join(alloc, &.{ archive_root, p.org, p.name });
     if (fsutil.exists(dest)) {
-        try ctx.err_w.print("holt: {s}/{s} already exists in archive\n", .{ p.org, p.name });
+        try ctx.err.print("holt: {s}/{s} already exists in archive\n", .{ p.org, p.name });
         return 1;
     }
 
@@ -96,7 +96,7 @@ const Member = struct { repo: []const u8, id: identity.Identity, clone_path: []c
 /// clean + in sync with its remote (so nothing is lost that isn't already
 /// pushed). Everything else is kept and reported with the reason. Never fails
 /// the command: the archive already succeeded.
-fn pruneClones(ctx: *cli.Ctx, ws: *const workspace.Workspace, members: []const Member, yes: bool) !void {
+fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const Member, yes: bool) !void {
     const alloc = ctx.alloc;
 
     var eligible: std.ArrayList(Member) = .empty;
@@ -149,7 +149,7 @@ fn pruneClones(ctx: *cli.Ctx, ws: *const workspace.Workspace, members: []const M
             continue;
         }
         std.Io.Dir.cwd().deleteTree(fsutil.io(), m.clone_path) catch |err| {
-            try ctx.err_w.print("holt: could not reclaim {s}: {s}\n", .{ m.clone_path, @errorName(err) });
+            try ctx.err.print("holt: could not reclaim {s}: {s}\n", .{ m.clone_path, @errorName(err) });
             continue;
         };
         if (std.fs.path.dirname(m.clone_path)) |owner_dir| {
@@ -191,12 +191,8 @@ test "run: archive moves content into archive/, drops the hub, and restore round
     try testing.expect(fsutil.exists(archived_content));
     try testing.expect(!fsutil.exists(p.hub_path));
 
-    var restore_args = try cli.Args.init(arena, &.{"acme/widget"});
-    var restore_out: std.Io.Writer.Allocating = .init(arena);
-    var restore_err: std.Io.Writer.Allocating = .init(arena);
-    var restore_ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &restore_args, .out = &restore_out.writer, .err_w = &restore_err.writer };
-    const restore_code = try restore_cmd.command.run(&restore_ctx);
-    try testing.expectEqual(@as(u8, 0), restore_code);
+    const restore_got = try testutil.runCmd(arena, restore_cmd.command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), restore_got.code);
 
     try testing.expect(fsutil.exists(projects_content));
     try testing.expect(!fsutil.exists(archived_content));

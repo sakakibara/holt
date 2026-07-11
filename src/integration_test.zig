@@ -1,14 +1,13 @@
 //! End-to-end integration test: drives the real command table (the same one
-//! `main.zig` registers with the process) through `cli.dispatchTo`, with a
-//! config file loaded from disk exactly as a real invocation would. Every
-//! other test in this tree calls a command's `run` directly against a
-//! hand-built `Ctx`, which never exercises command-table registration or
+//! `main.zig` registers with the process) through `app.run`, with a config
+//! file loaded from disk exactly as a real invocation would. Every other
+//! test in this tree calls a command's `run` directly against a hand-built
+//! `Ctx`, which never exercises command-table registration or
 //! `config.loadDefault` - this is the one seam that catches a command
 //! missing from the table or a broken cross-command filesystem contract.
 
 const std = @import("std");
-const cli = @import("cli.zig");
-const main = @import("main.zig");
+const app = @import("app.zig");
 const marker = @import("marker.zig");
 const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
@@ -17,10 +16,26 @@ const testing = std.testing;
 
 const Result = struct { code: u8, out: []const u8, err: []const u8 };
 
-fn dispatch(arena: std.mem.Allocator, argv: []const []const u8) Result {
+fn dispatch(arena: std.mem.Allocator, argv: []const []const u8) !Result {
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
-    const code = cli.dispatchTo(testing.allocator, argv, &main.command_table, &out.writer, &err_w.writer, false);
+
+    const call_argv = try arena.alloc([]const u8, argv.len + 1);
+    call_argv[0] = "holt";
+    @memcpy(call_argv[1..], argv);
+
+    // Unlike `command()`'s trampoline (which scopes argv-parsing to its own
+    // arena), `Cli(cfg).run` uses `ctx.alloc` as given for the command body
+    // itself - fine for `main.zig`'s one-shot process, but this test process
+    // stays up for the whole suite, so `testing.allocator`'s leak detector
+    // would flag every one of those allocations. Scope them to a
+    // dispatch-local arena instead, mirroring the old dispatcher's own
+    // per-dispatch arena; `out`/`err_w` stay on the caller's longer-lived
+    // `arena` so the returned slices remain valid.
+    var dispatch_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer dispatch_arena.deinit();
+
+    const code = try app.run(dispatch_arena.allocator(), testing.io, call_argv, &app.command_table, &out.writer, &err_w.writer);
     return .{ .code = code, .out = out.written(), .err = err_w.written() };
 }
 
@@ -92,7 +107,7 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
 
     // new acme/proj <urlA>: creates the project, clones alpha, builds the hub.
     {
-        const got = dispatch(arena, &.{ "new", "acme/proj", url_a });
+        const got = try dispatch(arena, &.{ "new", "acme/proj", url_a });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     {
@@ -109,7 +124,7 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
 
     // add acme/proj <urlB>: second repo, second clone + hub link.
     {
-        const got = dispatch(arena, &.{ "add", "acme/proj", url_b });
+        const got = try dispatch(arena, &.{ "add", "acme/proj", url_b });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     {
@@ -121,14 +136,14 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
 
     // new acme/other (no url): a second project to later share alpha with.
     {
-        const got = dispatch(arena, &.{ "new", "acme/other" });
+        const got = try dispatch(arena, &.{ "new", "acme/other" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
 
     // add acme/other <urlA>: shares proj's existing clone, no re-clone.
     const stat_before = try std.Io.Dir.cwd().statFile(fsutil.io(), clone_alpha, .{});
     {
-        const got = dispatch(arena, &.{ "add", "acme/other", url_a });
+        const got = try dispatch(arena, &.{ "add", "acme/other", url_a });
         try testing.expectEqual(@as(u8, 0), got.code);
         try testing.expect(std.mem.indexOf(u8, got.out, "using existing clone") != null);
     }
@@ -145,13 +160,13 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
 
     // status / info: cross-project read paths, still mid-lifecycle (proj has both repos).
     {
-        const got = dispatch(arena, &.{"status"});
+        const got = try dispatch(arena, &.{"status"});
         try testing.expectEqual(@as(u8, 0), got.code);
         try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
         try testing.expect(std.mem.indexOf(u8, got.out, "acme/other") != null);
     }
     {
-        const got = dispatch(arena, &.{ "info", "acme/proj" });
+        const got = try dispatch(arena, &.{ "info", "acme/proj" });
         try testing.expectEqual(@as(u8, 0), got.code);
         try testing.expect(std.mem.indexOf(u8, got.out, "alpha:") != null);
         try testing.expect(std.mem.indexOf(u8, got.out, "beta:") != null);
@@ -159,7 +174,7 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
 
     // rm acme/proj beta: back to 1 repo, hub link swept, clone kept on disk.
     {
-        const got = dispatch(arena, &.{ "rm", "acme/proj", "beta" });
+        const got = try dispatch(arena, &.{ "rm", "acme/proj", "beta" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     {
@@ -172,7 +187,7 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
 
     // archive acme/proj: content moves out of projects/ into archive/, hub torn down.
     {
-        const got = dispatch(arena, &.{ "archive", "acme/proj" });
+        const got = try dispatch(arena, &.{ "archive", "acme/proj" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     try testing.expect(!fsutil.exists(proj_content));
@@ -181,7 +196,7 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
 
     // restore acme/proj: content moves back, hub rebuilt.
     {
-        const got = dispatch(arena, &.{ "restore", "acme/proj" });
+        const got = try dispatch(arena, &.{ "restore", "acme/proj" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     try testing.expect(fsutil.exists(proj_content));
@@ -192,7 +207,7 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
     // delete acme/proj --yes: content + hub gone, clones untouched (alpha still
     // used by acme/other; beta is never deleted regardless of references).
     {
-        const got = dispatch(arena, &.{ "delete", "acme/proj", "--yes" });
+        const got = try dispatch(arena, &.{ "delete", "acme/proj", "--yes" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     try testing.expect(!fsutil.exists(proj_content));

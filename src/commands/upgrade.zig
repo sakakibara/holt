@@ -16,8 +16,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const json = @import("json");
 const build_options = @import("build_options");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const proc = @import("../proc.zig");
 const ui = @import("../ui.zig");
 const fsutil = @import("../fsutil.zig");
@@ -25,26 +25,26 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    version: args.Pos(?[]const u8, .{ .help = "install this version instead of the latest release" }),
-    yes: args.Flag(.{ .help = "skip the confirmation prompt" }),
+    version: cli.spec.Pos([]const u8, .{ .optional = true, .help = "install this version instead of the latest release" }),
+    yes: cli.spec.Flag(.{ .help = "skip the confirmation prompt" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "upgrade",
-    .about = "Download and install a newer holt release",
+    .summary = "Download and install a newer holt release",
     .usage = "holt upgrade [<version>] [--yes]",
     .group = .system,
     .details =
     \\Example:
     \\  holt upgrade --yes
     ,
-    .needs_workspace = false,
+    .needs_context = false,
 }, run);
 
 const default_api_url = "https://api.github.com/repos/sakakibara/holt/releases/latest";
 const default_download_base = "https://github.com/sakakibara/holt/releases/download";
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const version_arg = a.version;
     const auto_yes = a.yes;
     const alloc = ctx.alloc;
@@ -78,7 +78,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     const asset = assetName(alloc, builtin.target.os.tag, builtin.target.cpu.arch) catch |err| switch (err) {
         error.UnsupportedPlatform => {
-            try ctx.err_w.writeAll("holt: upgrade is not supported on this platform\n");
+            try ctx.err.writeAll("holt: upgrade is not supported on this platform\n");
             return 1;
         },
         else => return err,
@@ -111,18 +111,18 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         else => return err,
     };
     if (dl_res.status != 0) {
-        try ctx.err_w.print("holt: download failed: {s} ({s})\n", .{ tag, url });
+        try ctx.err.print("holt: download failed: {s} ({s})\n", .{ tag, url });
         return 1;
     }
 
     extractArchive(archive_path, tmp_dir, is_zip) catch {
-        try ctx.err_w.writeAll("holt: extract failed\n");
+        try ctx.err.writeAll("holt: extract failed\n");
         return 1;
     };
 
     const extracted_bin = try std.fs.path.join(alloc, &.{ tmp_dir, assetBinaryName(builtin.os.tag) });
     if (!fsutil.exists(extracted_bin)) {
-        try ctx.err_w.writeAll("holt: extracted archive did not contain a holt binary\n");
+        try ctx.err.writeAll("holt: extracted archive did not contain a holt binary\n");
         return 1;
     }
 

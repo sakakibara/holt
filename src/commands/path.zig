@@ -3,9 +3,8 @@
 //! prints the repo's real clone path under code_root, never the hub link.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
 const identity = @import("../identity.zig");
@@ -15,26 +14,27 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    query: args.Pos(?[]const u8, .{ .complete = comp.cat(.project_repo), .help = "the project or project/repo to resolve" }),
+    query: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project_repo), .optional = true, .help = "the project or project/repo to resolve" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "path",
-    .about = "Print the filesystem path for a project or project/repo",
+    .summary = "Print the filesystem path for a project or project/repo",
     .usage = "holt path [<project>|<project>/<repo>]",
     .group = .navigate,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt path myproj/backend
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     // An empty query (bare `holt path`, or `h` with no argument via the
     // shell function) means "the hub root itself", not a usage error - the
     // shell function relies on this to make bare `h` cd there.
     const query = a.query orelse "";
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
 
     if (query.len == 0) {
         try ctx.out.print("{s}\n", .{ws.cfg.hub_root});
@@ -44,7 +44,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     return resolve(ctx, ws, query);
 }
 
-fn resolve(ctx: *cli.Ctx, ws: workspace.Workspace, query: []const u8) anyerror!u8 {
+fn resolve(ctx: *app.Ctx, ws: workspace.Workspace, query: []const u8) anyerror!u8 {
     const alloc = ctx.alloc;
 
     // `<project>/<repo>@<branch>` resolves to that branch's worktree checkout.
@@ -84,7 +84,7 @@ fn resolve(ctx: *cli.Ctx, ws: workspace.Workspace, query: []const u8) anyerror!u
     return common.reportProjectFailure(ctx, query, whole);
 }
 
-fn resolveRepo(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8) anyerror!u8 {
+fn resolveRepo(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8) anyerror!u8 {
     const clone_path = (try resolveRepoPath(ctx, ws, project_query, repo_query)) orelse return 1;
     try ctx.out.print("{s}\n", .{clone_path});
     return 0;
@@ -93,13 +93,13 @@ fn resolveRepo(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []const u8
 /// Resolves `<project>/<repo>@<branch>` to that branch's worktree path under
 /// the repo's sibling `<clone>@worktrees/` dir; null (after reporting) when the
 /// repo does not resolve or has no such worktree.
-fn resolveWorktree(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8, branch: []const u8) anyerror!u8 {
+fn resolveWorktree(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8, branch: []const u8) anyerror!u8 {
     const alloc = ctx.alloc;
     const clone_path = (try resolveRepoPath(ctx, ws, project_query, repo_query)) orelse return 1;
     const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
     const wt_path = try fsutil.joinSlashy(alloc, worktrees_dir, branch);
     if (!fsutil.exists(wt_path)) {
-        try ctx.err_w.print("holt: no worktree for branch \"{s}\" in {s}/{s} (create it: holt worktree {s}/{s} {s})\n", .{ branch, project_query, repo_query, project_query, repo_query, branch });
+        try ctx.err.print("holt: no worktree for branch \"{s}\" in {s}/{s} (create it: holt worktree {s}/{s} {s})\n", .{ branch, project_query, repo_query, project_query, repo_query, branch });
         return 1;
     }
     try ctx.out.print("{s}\n", .{wt_path});
@@ -107,9 +107,9 @@ fn resolveWorktree(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []cons
 }
 
 /// Resolves a `<project>/<repo>` pair to the repo's identity; null (after
-/// reporting why on ctx.err_w) for no project match, an ambiguous one, or no
+/// reporting why on ctx.err) for no project match, an ambiguous one, or no
 /// matching repo. Callers wanting the clone path use `resolveRepoPath`.
-pub fn resolveRepoId(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8) anyerror!?identity.Identity {
+pub fn resolveRepoId(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8) anyerror!?identity.Identity {
     _ = ws;
     const alloc = ctx.alloc;
 
@@ -117,7 +117,7 @@ pub fn resolveRepoId(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []co
 
     const repo_name = findRepo(p, repo_query) orelse {
         const qualified = try p.qualified(alloc);
-        try ctx.err_w.print("holt: no repo matches \"{s}\" in {s}\n", .{ repo_query, qualified });
+        try ctx.err.print("holt: no repo matches \"{s}\" in {s}\n", .{ repo_query, qualified });
         return null;
     };
 
@@ -126,7 +126,7 @@ pub fn resolveRepoId(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []co
 
 /// Resolves a `<project>/<repo>` pair to the repo's real clone path under
 /// code_root, never a hub link; null (after reporting) on any resolution miss.
-pub fn resolveRepoPath(ctx: *cli.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8) anyerror!?[]const u8 {
+pub fn resolveRepoPath(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8) anyerror!?[]const u8 {
     const id = (try resolveRepoId(ctx, ws, project_query, repo_query)) orelse return null;
     return try id.clonePath(ctx.alloc, ws.cfg.code_root);
 }
@@ -196,14 +196,9 @@ test "run: bare query (empty positional) prints the hub root" {
 
     const ws = testWorkspace(arena, root, "/code");
 
-    var cli_args = try cli.Args.init(arena, &.{});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    const code = try command.run(&ctx);
-    try testing.expectEqual(@as(u8, 0), code);
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{ws.cfg.hub_root}), out.written());
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{ws.cfg.hub_root}), got.out);
 }
 
 test "run: a project query prints the hub path" {
@@ -219,16 +214,11 @@ test "run: a project query prints the hub path" {
     const ws = testWorkspace(arena, root, "/code");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
 
-    var cli_args = try cli.Args.init(arena, &.{"widget"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    const code = try command.run(&ctx);
-    try testing.expectEqual(@as(u8, 0), code);
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"widget"});
+    try testing.expectEqual(@as(u8, 0), got.code);
 
     const want_hub = try std.fs.path.join(arena, &.{ root, "hub", "acme", "widget" });
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_hub}), out.written());
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_hub}), got.out);
 }
 
 test "run: a project/repo query prints the real clone path, not the hub link" {
@@ -247,15 +237,10 @@ test "run: a project/repo query prints the real clone path, not the hub link" {
     const ws = testWorkspace(arena, root, "/code");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
 
-    var cli_args = try cli.Args.init(arena, &.{"widget/backend"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
+    const result = try testutil.runCmd(arena, command.run, ws, &.{"widget/backend"});
+    try testing.expectEqual(@as(u8, 0), result.code);
 
-    const code = try command.run(&ctx);
-    try testing.expectEqual(@as(u8, 0), code);
-
-    const got = out.written();
+    const got = result.out;
     const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
     try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), got);
 
@@ -279,15 +264,10 @@ test "run: repo resolves by unique subsequence when not an exact name" {
     const ws = testWorkspace(arena, root, "/code");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
 
-    var cli_args = try cli.Args.init(arena, &.{"widget/bck"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    const code = try command.run(&ctx);
-    try testing.expectEqual(@as(u8, 0), code);
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/bck"});
+    try testing.expectEqual(@as(u8, 0), got.code);
     const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), out.written());
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), got.out);
 }
 
 test "run: no matching project exits 1 and reports on stderr" {
@@ -302,14 +282,9 @@ test "run: no matching project exits 1 and reports on stderr" {
 
     const ws = testWorkspace(arena, root, "/code");
 
-    var cli_args = try cli.Args.init(arena, &.{"nope"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    const code = try command.run(&ctx);
-    try testing.expectEqual(@as(u8, 1), code);
-    try testing.expect(std.mem.indexOf(u8, err_w.written(), "nope") != null);
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
 }
 
 test "run: ambiguous project exits 1 and lists every candidate" {
@@ -326,14 +301,9 @@ test "run: ambiguous project exits 1 and lists every candidate" {
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", .{ .version = 1, .org = "other", .name = "widget", .repos = .empty });
 
-    var cli_args = try cli.Args.init(arena, &.{"widget"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    const code = try command.run(&ctx);
-    try testing.expectEqual(@as(u8, 1), code);
-    const got = err_w.written();
+    const result = try testutil.runCmd(arena, command.run, ws, &.{"widget"});
+    try testing.expectEqual(@as(u8, 1), result.code);
+    const got = result.err;
     try testing.expect(std.mem.indexOf(u8, got, "acme/widget") != null);
     try testing.expect(std.mem.indexOf(u8, got, "other/widget") != null);
 }

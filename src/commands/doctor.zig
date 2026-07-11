@@ -6,8 +6,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const doctor = @import("../doctor.zig");
 const marker = @import("../marker.zig");
 const hub = @import("../hub.zig");
@@ -19,36 +19,36 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    fix: args.Flag(.{ .help = "repair hub drift; never touches CONTENT or deletes a clone" }),
-    full: args.Flag(.{ .help = "extend the D1 symlink scan to the whole synced root, not just projects/ and archive/" }),
-    jobs: args.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "check clone integrity in up to N clones concurrently (default: auto; 1 = serial)" }),
+    fix: cli.spec.Flag(.{ .help = "repair hub drift; never touches CONTENT or deletes a clone" }),
+    full: cli.spec.Flag(.{ .help = "extend the D1 symlink scan to the whole synced root, not just projects/ and archive/" }),
+    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "check clone integrity in up to N clones concurrently (default: auto; 1 = serial)" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "doctor",
-    .about = "Check the workspace for invariant violations and drift",
+    .summary = "Check the workspace for invariant violations and drift",
     .usage = "holt doctor [--fix] [--full]",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt doctor --fix --full
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const fix = a.fix;
     const full = a.full;
     if (a.jobs) |n| {
         if (n == 0) {
-            ctx.args.message = "-j/--jobs must be at least 1";
-            return error.UsageError;
+            return app.usageError(ctx, "-j/--jobs must be at least 1", .{});
         }
     }
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const report = try doctor.run(ctx.alloc, &ws, .{ .full = full, .fix = fix, .jobs = a.jobs });
     try renderBackend(ctx.out, &ws.cfg);
-    try render(ctx.out, &report, ctx.color);
+    try render(ctx.out, &report, ctx.context.?.color);
     return if (report.ok()) 0 else 1;
 }
 

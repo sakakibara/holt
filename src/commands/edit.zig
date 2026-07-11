@@ -3,9 +3,8 @@
 //! Errors cleanly when `$EDITOR` isn't set rather than guessing an editor.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
 const common = @import("common.zig");
 const path = @import("path.zig");
@@ -15,14 +14,15 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project_repo), .help = "the project or project/repo to open" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project_repo), .help = "the project or project/repo to open" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "edit",
-    .about = "Open a project's docs directory (or a repo's clone) in $EDITOR",
+    .summary = "Open a project's docs directory (or a repo's clone) in $EDITOR",
     .usage = "holt edit <project>|<project>/<repo>",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\A bare <project> opens its docs directory; <project>/<repo> opens that
     \\member repo's real clone path under code_root.
@@ -33,10 +33,10 @@ pub const command = args.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const query = a.project;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
 
     const target = (try resolveTarget(ctx, ws, query)) orelse return 1;
 
@@ -47,10 +47,10 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
 /// The path `edit` should open: a bare project resolves to its docs dir
 /// (created if absent), a `<project>/<repo>` query to the repo's real clone
-/// path. Null (after reporting why on ctx.err_w) when nothing resolves. The
+/// path. Null (after reporting why on ctx.err) when nothing resolves. The
 /// whole query is tried as a project first, so an "org/name" project opens
 /// its docs and only a genuine project/repo pair reaches the repo branch.
-fn resolveTarget(ctx: *cli.Ctx, ws: workspace.Workspace, query: []const u8) !?[]const u8 {
+fn resolveTarget(ctx: *app.Ctx, ws: workspace.Workspace, query: []const u8) !?[]const u8 {
     const alloc = ctx.alloc;
 
     const whole = try ws.find(alloc, query);

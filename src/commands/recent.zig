@@ -4,9 +4,8 @@
 //! commits) sorts last.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
 const git = @import("../git.zig");
@@ -18,22 +17,22 @@ const testutil = @import("../testutil.zig");
 const proc = @import("../proc.zig");
 
 const Spec = struct {
-    count: args.Opt(usize, .{ .short = 'n', .value_name = "N", .help = "show only the N most recently committed projects (default 10)" }),
-    org: args.Opt([]const u8, .{ .value_name = "org", .complete = comp.cat(.org), .help = "only include projects under this org" }),
-    json: args.Flag(.{ .help = "emit a JSON array (org, name, and commit timestamp) instead of plain text" }),
-    jobs: args.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "look up commit times in up to N clones concurrently (default: auto; 1 = serial)" }),
+    count: cli.spec.Opt(usize, .{ .short = 'n', .value_name = "N", .help = "show only the N most recently committed projects (default 10)" }),
+    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "only include projects under this org" }),
+    json: cli.spec.Flag(.{ .help = "emit a JSON array (org, name, and commit timestamp) instead of plain text" }),
+    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "look up commit times in up to N clones concurrently (default: auto; 1 = serial)" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "recent",
-    .about = "List projects ordered by their most recent commit",
+    .summary = "List projects ordered by their most recent commit",
     .usage = "holt recent [-n N] [--org <org>] [--json]",
     .group = .inspect,
     .details =
     \\Example:
     \\  holt recent -n 5
     ,
-    .needs_workspace = true,
+    .needs_context = true,
 }, run);
 
 const default_count = 10;
@@ -64,17 +63,16 @@ fn moreRecent(_: void, a: Entry, b: Entry) bool {
     return a.ts.? > b.ts.?;
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     if (a.jobs) |n| {
         if (n == 0) {
-            ctx.args.message = "-j/--jobs must be at least 1";
-            return error.UsageError;
+            return app.usageError(ctx, "-j/--jobs must be at least 1", .{});
         }
     }
     const jobs = a.jobs;
     const n: usize = a.count orelse default_count;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
     const listed = try ws.list(alloc);
 
@@ -93,7 +91,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
             try ctx.out.writeAll("[]\n");
             return 0;
         }
-        try ctx.err_w.writeAll("no projects with commits yet\n");
+        try ctx.err.writeAll("no projects with commits yet\n");
         return 0;
     }
 
@@ -145,7 +143,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     }
     // Signal, rather than silently swallow, the projects beyond the cap.
     if (entries.len > shown) {
-        try ctx.err_w.print("... and {d} more (use -n to show more)\n", .{entries.len - shown});
+        try ctx.err.print("... and {d} more (use -n to show more)\n", .{entries.len - shown});
     }
     return 0;
 }
@@ -153,7 +151,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 /// Emits the shown entries as a JSON array, one object per project: org, name,
 /// and `timestamp` (committer epoch seconds, or null when no clone has a
 /// commit). Order matches the human output - most recent first.
-fn runJson(ctx: *cli.Ctx, entries: []const Entry) anyerror!u8 {
+fn runJson(ctx: *app.Ctx, entries: []const Entry) anyerror!u8 {
     const alloc = ctx.alloc;
     var items: std.ArrayList(json.Value) = .empty;
     for (entries) |e| {

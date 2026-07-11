@@ -4,8 +4,8 @@
 //! repos - the destructive move itself is left to the explicit command.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
 const identity = @import("../identity.zig");
@@ -17,24 +17,25 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    dry_run: args.Flag(.{ .help = "report what would change without touching the hub" }),
+    dry_run: cli.spec.Flag(.{ .help = "report what would change without touching the hub" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "sync",
-    .about = "Reconcile every project's hub with its marker",
+    .summary = "Reconcile every project's hub with its marker",
     .usage = "holt sync [--dry-run]",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt sync --dry-run
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const dry_run = a.dry_run;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
     const all = try ws.list(alloc);
 
@@ -82,10 +83,10 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 /// content dropped via `holt keep`, not yet synced) is left alone rather than
 /// swept. Returns how many were actually pruned (or, under `dry_run`, would
 /// be). Empty org dirs left behind by a pruned hub are swept too.
-fn pruneOrphanHubs(ctx: *cli.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, dry_run: bool) !u32 {
+fn pruneOrphanHubs(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, dry_run: bool) !u32 {
     switch (try fsutil.linkState(alloc, ws.cfg.hub_root)) {
         .symlink => {
-            try ctx.err_w.print("holt: hub_root {s} is a symlink; skipping orphan-hub pruning to avoid deleting content through it\n", .{ws.cfg.hub_root});
+            try ctx.err.print("holt: hub_root {s} is a symlink; skipping orphan-hub pruning to avoid deleting content through it\n", .{ws.cfg.hub_root});
             return 0;
         },
         else => {},
@@ -128,7 +129,7 @@ fn pruneOrphanHubs(ctx: *cli.Ctx, ws: *const workspace.Workspace, alloc: std.mem
         // (real files present), warn, and leave it for the next run rather
         // than deleting on incomplete information or crashing outright.
         const has_files = hubHasRealFile(alloc, o.hub_path) catch |err| {
-            try ctx.err_w.print("holt: could not check hub {s}/{s} for real files ({s}); leaving it in place, not pruning\n", .{ o.org, o.name, @errorName(err) });
+            try ctx.err.print("holt: could not check hub {s}/{s} for real files ({s}); leaving it in place, not pruning\n", .{ o.org, o.name, @errorName(err) });
             continue;
         };
         if (has_files) {
@@ -202,7 +203,7 @@ fn hubHasRealFile(alloc: std.mem.Allocator, path: []const u8) !bool {
 /// Hints at every distinct `local:<name>` repo whose clone has grown an
 /// origin - a candidate for `holt promote`. A name shared by more than one
 /// project is only ever hinted once.
-fn printPromotable(ctx: *cli.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, all: []const project_mod.Project) !void {
+fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, all: []const project_mod.Project) !void {
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
     for (all) |p| {
         for (p.marker.repos.keys()) |repo_name| {

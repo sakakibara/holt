@@ -6,9 +6,8 @@
 //! as no name collides. Clones under code_root are never touched.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
@@ -21,14 +20,14 @@ const testutil = @import("../testutil.zig");
 const hub = @import("../hub.zig");
 
 const RenameSpec = struct {
-    old_org: args.Pos([]const u8, .{ .complete = comp.cat(.org), .help = "the org to rename" }),
-    new_org: args.Pos([]const u8, .{ .complete = comp.cat(.org), .help = "the new org name (may already exist, if no project name collides)" }),
-    yes: args.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
+    old_org: cli.spec.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the org to rename" }),
+    new_org: cli.spec.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the new org name (may already exist, if no project name collides)" }),
+    yes: cli.spec.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
 };
 
-const rename_command = args.command(RenameSpec, .{
+const rename_command = app.command(RenameSpec, .{
     .name = "rename",
-    .about = "Rename an org, moving every project in it",
+    .summary = "Rename an org, moving every project in it",
     .usage = "holt org rename <old-org> <new-org> [--yes]",
     .group = .maintain,
     .details =
@@ -43,41 +42,40 @@ const rename_command = args.command(RenameSpec, .{
     ,
 }, runRename);
 
-pub const command: cli.Command = .{
+pub const command: app.Command = .{
     .name = "org",
     .summary = "Manage orgs (rename an org, moving every project in it)",
     .usage = "holt org rename <old-org> <new-org> [--yes]",
     .group = .maintain,
     .subcommands = &.{rename_command},
-    .needs_workspace = true,
+    .needs_context = true,
     .run = runFallback,
 };
 
 /// `holt org` with no known subcommand: there is only `rename`, so guide the
 /// user to it rather than doing nothing.
-fn runFallback(ctx: *cli.Ctx) anyerror!u8 {
-    ctx.args.message = "usage: holt org rename <old-org> <new-org>";
-    return error.UsageError;
+fn runFallback(ctx: *app.Ctx) anyerror!u8 {
+    return app.usageError(ctx, "usage: holt org rename <old-org> <new-org>", .{});
 }
 
-fn runRename(ctx: *cli.Ctx, a: args.Args(RenameSpec)) anyerror!u8 {
+fn runRename(ctx: *app.Ctx, a: cli.args.Args(RenameSpec)) anyerror!u8 {
     const old_org = a.old_org;
     const new_org = a.new_org;
     const yes = a.yes;
 
     if (std.mem.eql(u8, old_org, new_org)) {
-        try ctx.err_w.writeAll("holt: the source and target org are the same\n");
+        try ctx.err.writeAll("holt: the source and target org are the same\n");
         return 1;
     }
 
     for ([_][]const u8{ old_org, new_org }) |org| {
         if (common.validateSegment(.org, org)) |why| {
-            try ctx.err_w.print("holt: invalid org name \"{s}\": {s}\n", .{ org, why });
+            try ctx.err.print("holt: invalid org name \"{s}\": {s}\n", .{ org, why });
             return 1;
         }
     }
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const projects_root = try ws.projectsRoot(alloc);
@@ -92,7 +90,7 @@ fn runRename(ctx: *cli.Ctx, a: args.Args(RenameSpec)) anyerror!u8 {
     const archived = try archivedNames(alloc, archive_root, old_org);
 
     if (members.items.len == 0 and archived.len == 0) {
-        try ctx.err_w.print("holt: no projects in org \"{s}\"\n", .{old_org});
+        try ctx.err.print("holt: no projects in org \"{s}\"\n", .{old_org});
         return 1;
     }
 
@@ -107,7 +105,7 @@ fn runRename(ctx: *cli.Ctx, a: args.Args(RenameSpec)) anyerror!u8 {
     }
     if (collisions.items.len > 0) {
         for (collisions.items) |name| {
-            try ctx.err_w.print("holt: cannot rename org: {s}/{s} already exists\n", .{ new_org, name });
+            try ctx.err.print("holt: cannot rename org: {s}/{s} already exists\n", .{ new_org, name });
         }
         return 1;
     }
@@ -188,23 +186,23 @@ fn runRename(ctx: *cli.Ctx, a: args.Args(RenameSpec)) anyerror!u8 {
 /// Renders which projects were moved to the new org, which one failed, and
 /// which were not attempted when an org rename stops partway, plus the re-run
 /// that converges.
-fn reportRenameProgress(ctx: *cli.Ctx, old_org: []const u8, new_org: []const u8, moved: []const []const u8, failed: []const u8, not_attempted: []const []const u8) !void {
-    try ctx.err_w.print("holt: org rename {s} -> {s} stopped partway\n", .{ old_org, new_org });
-    try ctx.err_w.print("  moved to {s}: ", .{new_org});
+fn reportRenameProgress(ctx: *app.Ctx, old_org: []const u8, new_org: []const u8, moved: []const []const u8, failed: []const u8, not_attempted: []const []const u8) !void {
+    try ctx.err.print("holt: org rename {s} -> {s} stopped partway\n", .{ old_org, new_org });
+    try ctx.err.print("  moved to {s}: ", .{new_org});
     try writeNameList(ctx, moved);
-    try ctx.err_w.print("\n  failed: {s}\n  not attempted: ", .{failed});
+    try ctx.err.print("\n  failed: {s}\n  not attempted: ", .{failed});
     try writeNameList(ctx, not_attempted);
-    try ctx.err_w.print("\nre-run \"holt org rename {s} {s}\" to finish\n", .{ old_org, new_org });
+    try ctx.err.print("\nre-run \"holt org rename {s} {s}\" to finish\n", .{ old_org, new_org });
 }
 
-fn writeNameList(ctx: *cli.Ctx, names: []const []const u8) !void {
+fn writeNameList(ctx: *app.Ctx, names: []const []const u8) !void {
     if (names.len == 0) {
-        try ctx.err_w.writeAll("(none)");
+        try ctx.err.writeAll("(none)");
         return;
     }
     for (names, 0..) |name, i| {
-        if (i != 0) try ctx.err_w.writeAll(", ");
-        try ctx.err_w.writeAll(name);
+        if (i != 0) try ctx.err.writeAll(", ");
+        try ctx.err.writeAll(name);
     }
 }
 
@@ -575,13 +573,9 @@ test "run: an unrecognized subcommand is a usage error naming the accepted form"
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, command.run(&ctx));
-    try testing.expect(std.mem.indexOf(u8, cli_args.message, "holt org rename <old-org> <new-org>") != null);
+    const got = try testutil.runCmd(arena, command.run, null, &.{});
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "holt org rename <old-org> <new-org>") != null);
 }
 
 test "run: rename with missing old-org/new-org args is a usage error" {
@@ -589,10 +583,6 @@ test "run: rename with missing old-org/new-org args is a usage error" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, rename_command.run(&ctx));
+    const got = try testutil.runCmd(arena, rename_command.run, null, &.{});
+    try testing.expectEqual(@as(u8, 2), got.code);
 }

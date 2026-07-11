@@ -8,8 +8,8 @@
 //! altogether absent.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const config = @import("../config.zig");
 const diagnostic = @import("../diag.zig");
 const fsutil = @import("../fsutil.zig");
@@ -19,15 +19,15 @@ const testutil = @import("../testutil.zig");
 
 const EditSpec = struct {};
 
-const edit_command = args.command(EditSpec, .{
+const edit_command = app.command(EditSpec, .{
     .name = "edit",
-    .about = "Open the config file in $EDITOR, even when it is broken",
+    .summary = "Open the config file in $EDITOR, even when it is broken",
     .usage = "holt config edit",
     .group = .system,
-    .needs_workspace = false,
+    .needs_context = false,
 }, runEdit);
 
-pub const command: cli.Command = .{
+pub const command: app.Command = .{
     .name = "config",
     .summary = "Show the resolved configuration, or edit it in $EDITOR",
     .usage = "holt config [edit]",
@@ -44,25 +44,28 @@ pub const command: cli.Command = .{
     \\  holt config edit
     ,
     .subcommands = &.{edit_command},
-    .needs_workspace = false,
+    .needs_context = false,
     .run = runShow,
 };
 
-fn runShow(ctx: *cli.Ctx) anyerror!u8 {
+fn runShow(ctx: *app.Ctx) anyerror!u8 {
     // `config edit` is routed to the subcommand before reaching here, so any
     // positional left is an unrecognized argument - name the accepted form.
-    if (ctx.args.positional() != null) {
-        ctx.args.message = "usage: holt config [edit]";
-        return error.UsageError;
+    for (ctx.argv) |tok| {
+        if (!cli.spec.looksLikeFlag(tok)) {
+            return app.usageError(ctx, "usage: holt config [edit]", .{});
+        }
     }
-    try ctx.args.finish();
+    if (ctx.argv.len > 0) {
+        return app.usageError(ctx, "unexpected argument: {s}", .{ctx.argv[0]});
+    }
     const path = try config.configPath(ctx.alloc);
 
     var diag: diagnostic.Diagnostic = .{};
     const cfg = config.loadDefault(ctx.alloc, &diag) catch {
-        try ctx.err_w.print("holt: config file = {s}\n", .{path});
-        try ctx.err_w.print("holt: {s}\n", .{diag.message});
-        try ctx.err_w.writeAll("holt: fix it with \"holt config edit\" or \"holt setup\"\n");
+        try ctx.err.print("holt: config file = {s}\n", .{path});
+        try ctx.err.print("holt: {s}\n", .{diag.message});
+        try ctx.err.writeAll("holt: fix it with \"holt config edit\" or \"holt setup\"\n");
         return 1;
     };
 
@@ -78,12 +81,12 @@ fn runShow(ctx: *cli.Ctx) anyerror!u8 {
     return 0;
 }
 
-fn runEdit(ctx: *cli.Ctx, _: args.Args(EditSpec)) anyerror!u8 {
+fn runEdit(ctx: *app.Ctx, _: cli.args.Args(EditSpec)) anyerror!u8 {
     const alloc = ctx.alloc;
     const path = try config.configPath(alloc);
 
     if (!fsutil.exists(path)) {
-        try ctx.err_w.print("holt: no config at {s}; run \"holt setup\" to create one\n", .{path});
+        try ctx.err.print("holt: no config at {s}; run \"holt setup\" to create one\n", .{path});
         return 1;
     }
 
@@ -197,13 +200,9 @@ test "run: an argument other than \"edit\" is a usage error naming the accepted 
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{"bogus"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, command.run(&ctx));
-    try testing.expect(std.mem.indexOf(u8, cli_args.message, "holt config [edit]") != null);
+    const got = try testutil.runCmd(arena, command.run, null, &.{"bogus"});
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "holt config [edit]") != null);
 }
 
 test "run: config edit opens $EDITOR even when the config file is malformed" {

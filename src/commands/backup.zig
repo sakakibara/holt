@@ -5,9 +5,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const marker = @import("../marker.zig");
 const proc = @import("../proc.zig");
@@ -16,14 +15,15 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to back up" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to back up" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "backup",
-    .about = "Tar a project's content dir into synced backups/",
+    .summary = "Tar a project's content dir into synced backups/",
     .usage = "holt backup <project>",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt backup myproj
@@ -85,10 +85,10 @@ fn runTar(alloc: std.mem.Allocator, argv: []const []const u8) !proc.RunResult {
     return proc.run(alloc, retry.items, null);
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const p = (try common.resolveOne(ctx, project_query)) orelse return 1;
@@ -114,7 +114,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     };
     if (res.status != 0) {
         std.Io.Dir.cwd().deleteFile(fsutil.io(), partial_path) catch {};
-        try ctx.err_w.print("holt: tar failed: {s}\n", .{res.stderr});
+        try ctx.err.print("holt: tar failed: {s}\n", .{res.stderr});
         return 1;
     }
 

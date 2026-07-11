@@ -152,6 +152,13 @@ pub const Category = enum {
     worktree_branch,
 };
 
+/// Builds a schema field's completion spec from a typed `Category`. The
+/// framework carries it as a string key thereafter (its engine is generic),
+/// but the schema and this hook both speak the enum, so neither can drift.
+pub fn cat(c: Category) cli.meta.Complete {
+    return .{ .dynamic = @tagName(c) };
+}
+
 // App-specific source: turns a `.dynamic` completion key into candidate
 // values by querying the workspace. `prev` is the preceding positional (a
 // project, for a repo category). A null or unreadable workspace yields no

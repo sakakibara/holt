@@ -3,9 +3,8 @@
 //! cloned-or-missing state.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const marker = @import("../marker.zig");
 const git = @import("../git.zig");
@@ -21,25 +20,26 @@ const color_red = "31";
 const color_green = "32";
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to inspect" }),
-    json: args.Flag(.{ .help = "emit a JSON object instead of human-readable text" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to inspect" }),
+    json: cli.spec.Flag(.{ .help = "emit a JSON object instead of human-readable text" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "info",
-    .about = "Show a project's paths and member repos",
+    .summary = "Show a project's paths and member repos",
     .usage = "holt info <project>",
     .group = .inspect,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt info myproj
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const p = (try common.resolveOne(ctx, project_query)) orelse return 1;
@@ -56,11 +56,11 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
         try ctx.out.print("  {s}: {s} ({s}) [", .{ repo_name, rel, try fsutil.contractTilde(alloc, clone_path) });
         if (!fsutil.exists(clone_path)) {
-            try ui.color(ctx.color, ctx.out, color_red, "missing");
+            try ui.color(ctx.context.?.color, ctx.out, color_red, "missing");
         } else if (!try git.inspectable(alloc, clone_path)) {
-            try ui.color(ctx.color, ctx.out, color_red, "cloned, unreadable");
+            try ui.color(ctx.context.?.color, ctx.out, color_red, "cloned, unreadable");
         } else {
-            try ui.color(ctx.color, ctx.out, color_green, "cloned");
+            try ui.color(ctx.context.?.color, ctx.out, color_green, "cloned");
         }
         try ctx.out.writeAll("]\n");
     }
@@ -71,7 +71,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 /// Emits the project as a single JSON object: org, name, content/hub paths,
 /// and a `repos` array of {name, identity, clone_path, state}, where `state`
 /// is "missing", "unreadable", or "cloned".
-fn runJson(ctx: *cli.Ctx, ws: *const workspace.Workspace, p: *const project_mod.Project) anyerror!u8 {
+fn runJson(ctx: *app.Ctx, ws: *const workspace.Workspace, p: *const project_mod.Project) anyerror!u8 {
     const alloc = ctx.alloc;
 
     var repo_items: std.ArrayList(json.Value) = .empty;

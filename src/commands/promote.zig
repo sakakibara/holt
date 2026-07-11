@@ -7,9 +7,8 @@
 //! exists is never merged into or overwritten.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
@@ -25,17 +24,18 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    repo: args.Pos([]const u8, .{ .complete = comp.cat(.local_repo), .help = "the short name of a local repo that has since gained a remote" }),
-    dry_run: args.Flag(.{ .help = "print the planned move and affected projects, then exit" }),
-    yes: args.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
-    force: args.Flag(.{ .short = 'f', .help = "promote even if the clone has unrecoverable local state (also skips the confirmation prompt)" }),
+    repo: cli.spec.Pos([]const u8, .{ .complete = app.cat(.local_repo), .help = "the short name of a local repo that has since gained a remote" }),
+    dry_run: cli.spec.Flag(.{ .help = "print the planned move and affected projects, then exit" }),
+    yes: cli.spec.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
+    force: cli.spec.Flag(.{ .short = 'f', .help = "promote even if the clone has unrecoverable local state (also skips the confirmation prompt)" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "promote",
-    .about = "Move a local repo to its real remote identity once it has an origin",
+    .summary = "Move a local repo to its real remote identity once it has an origin",
     .usage = "holt promote <repo> [--dry-run] [--yes] [--force]",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\<repo> is the short name of a local (unpushed) repo that has since gained
     \\a remote, as recorded in markers by "local:<repo>" - not a project
@@ -155,10 +155,10 @@ fn findMovedClone(alloc: std.mem.Allocator, code_root: []const u8, name: []const
 }
 
 /// Resolves the origin URL and move state for `name`. Returns null after
-/// printing the appropriate error to `ctx.err_w` - the caller should then
+/// printing the appropriate error to `ctx.err` - the caller should then
 /// exit 1.
 fn resolveOrigin(
-    ctx: *cli.Ctx,
+    ctx: *app.Ctx,
     alloc: std.mem.Allocator,
     ws: *const workspace.Workspace,
     name: []const u8,
@@ -167,12 +167,12 @@ fn resolveOrigin(
 ) !?Resolution {
     if (fsutil.exists(old_path)) {
         const origin = try git.remoteUrl(alloc, old_path) orelse {
-            try ctx.err_w.print("holt: no remote configured for {s}\n", .{name});
+            try ctx.err.print("holt: no remote configured for {s}\n", .{name});
             return null;
         };
         const new_id = identity.fromUrl(alloc, origin) catch |err| switch (err) {
             error.UnrecognizedUrl => {
-                try ctx.err_w.print("holt: origin \"{s}\" for {s} is not a recognized git url\n", .{ origin, name });
+                try ctx.err.print("holt: origin \"{s}\" for {s} is not a recognized git url\n", .{ origin, name });
                 return null;
             },
             else => return err,
@@ -187,7 +187,7 @@ fn resolveOrigin(
         return .{ .origin = r.origin, .new_id = r.id, .new_path = r.path, .move_needed = false };
     }
 
-    try ctx.err_w.print("holt: local clone for {s} not found at {s}\n", .{ name, old_path });
+    try ctx.err.print("holt: local clone for {s} not found at {s}\n", .{ name, old_path });
     return null;
 }
 
@@ -197,27 +197,27 @@ fn resolveOrigin(
 /// move already happened by the time this is called); when `done` is empty,
 /// a re-run can only find it again via `findMovedClone`'s basename match, so
 /// the "re-run to finish" hint is only printed when that would succeed.
-fn printResumeHint(ctx: *cli.Ctx, alloc: std.mem.Allocator, done: []const Referencing, name: []const u8, new_path: []const u8) !void {
+fn printResumeHint(ctx: *app.Ctx, alloc: std.mem.Allocator, done: []const Referencing, name: []const u8, new_path: []const u8) !void {
     if (done.len == 0) {
         if (std.mem.eql(u8, std.fs.path.basename(new_path), name)) {
-            try ctx.err_w.print("holt: promote failed before updating any project; re-run \"holt promote {s}\" to finish\n", .{name});
+            try ctx.err.print("holt: promote failed before updating any project; re-run \"holt promote {s}\" to finish\n", .{name});
         } else {
-            try ctx.err_w.print("holt: promote failed before updating any project; the clone now lives at {s} and cannot be found automatically - update a project's marker or move it back to resume\n", .{new_path});
+            try ctx.err.print("holt: promote failed before updating any project; the clone now lives at {s} and cannot be found automatically - update a project's marker or move it back to resume\n", .{new_path});
         }
         return;
     }
-    try ctx.err_w.writeAll("holt: promote updated ");
+    try ctx.err.writeAll("holt: promote updated ");
     for (done, 0..) |ref, i| {
-        if (i != 0) try ctx.err_w.writeAll(", ");
-        try ctx.err_w.print("{s}", .{try ref.project.qualified(alloc)});
+        if (i != 0) try ctx.err.writeAll(", ");
+        try ctx.err.print("{s}", .{try ref.project.qualified(alloc)});
     }
-    try ctx.err_w.print(" before failing; re-run \"holt promote {s}\" to finish\n", .{name});
+    try ctx.err.print(" before failing; re-run \"holt promote {s}\" to finish\n", .{name});
 }
 
 /// Prints the pending relocation and every project marker that will be
 /// rewritten - the shared preview for both `--dry-run` and the interactive
 /// confirmation.
-fn printPlan(ctx: *cli.Ctx, alloc: std.mem.Allocator, old_path: []const u8, new_path: []const u8, move_needed: bool, referencing: []const Referencing) !void {
+fn printPlan(ctx: *app.Ctx, alloc: std.mem.Allocator, old_path: []const u8, new_path: []const u8, move_needed: bool, referencing: []const Referencing) !void {
     if (move_needed) {
         try ctx.out.print("move {s} -> {s}\n", .{ old_path, new_path });
     } else {
@@ -229,18 +229,18 @@ fn printPlan(ctx: *cli.Ctx, alloc: std.mem.Allocator, old_path: []const u8, new_
     }
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const name = a.repo;
     const dry_run = a.dry_run;
     const yes = a.yes;
     const force = a.force;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const referencing = try findReferencing(alloc, &ws, name);
     if (referencing.len == 0) {
-        try ctx.err_w.print("holt: no project references a local repo named \"{s}\"\n", .{name});
+        try ctx.err.print("holt: no project references a local repo named \"{s}\"\n", .{name});
         return 1;
     }
 
@@ -253,9 +253,9 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         const dest_origin = try git.remoteUrl(alloc, new_path);
         const same_remote = if (dest_origin) |d| std.mem.eql(u8, d, origin) else false;
         if (same_remote) {
-            try ctx.err_w.print("holt: destination {s} already cloned; resolve manually\n", .{new_path});
+            try ctx.err.print("holt: destination {s} already cloned; resolve manually\n", .{new_path});
         } else {
-            try ctx.err_w.print("holt: destination {s} already exists and is a different repo\n", .{new_path});
+            try ctx.err.print("holt: destination {s} already exists and is a different repo\n", .{new_path});
         }
         return 1;
     }
@@ -268,8 +268,8 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     if (resolved.move_needed) {
         var verdict = try recover.check(alloc, old_path);
         if (!verdict.safe() and !force) {
-            try ctx.err_w.print("holt: {s} has unrecoverable local state, refusing to promote (use --force to override):\n", .{name});
-            try verdict.render(ctx.err_w);
+            try ctx.err.print("holt: {s} has unrecoverable local state, refusing to promote (use --force to override):\n", .{name});
+            try verdict.render(ctx.err);
             return 1;
         }
     }

@@ -14,7 +14,7 @@ const fsutil = @import("fsutil.zig");
 const marker = @import("marker.zig");
 const workspace = @import("workspace.zig");
 const identity = @import("identity.zig");
-const cli = @import("cli.zig");
+const app = @import("app.zig");
 const testing = std.testing;
 
 const identity_flags = [_][]const u8{
@@ -393,14 +393,21 @@ pub fn writeFakeEditor(alloc: std.mem.Allocator, dir: []const u8, marker_path: [
 
 pub const RunResult = struct { code: u8, out: []const u8, err: []const u8 };
 
-/// Builds a `Ctx` around `argv` and `ws` (null for a command that doesn't
-/// need a workspace) and calls `run_fn`, capturing its output into in-memory
-/// buffers instead of real stdout/stderr.
-pub fn runCmd(alloc: std.mem.Allocator, run_fn: *const fn (ctx: *cli.Ctx) anyerror!u8, ws: ?workspace.Workspace, argv: []const []const u8) !RunResult {
-    var args = try cli.Args.init(alloc, argv);
+/// Builds a cli-zig `Ctx` around `argv` and `ws` (null for a command that
+/// doesn't need a loaded workspace, matching `needs_context = false`) and
+/// calls `run_fn` - a command's `command.run` trampoline - capturing its
+/// output into in-memory buffers instead of real stdout/stderr.
+pub fn runCmd(alloc: std.mem.Allocator, run_fn: *const fn (ctx: *app.Ctx) anyerror!u8, ws: ?workspace.Workspace, argv: []const []const u8) !RunResult {
     var out: std.Io.Writer.Allocating = .init(alloc);
     var err_w: std.Io.Writer.Allocating = .init(alloc);
-    var ctx: cli.Ctx = .{ .alloc = alloc, .ws = ws, .args = &args, .out = &out.writer, .err_w = &err_w.writer };
+    var ctx: app.Ctx = .{
+        .alloc = alloc,
+        .io = testing.io,
+        .context = if (ws) |w| .{ .ws = w, .color = false } else null,
+        .out = &out.writer,
+        .err = &err_w.writer,
+        .argv = argv,
+    };
     const code = try run_fn(&ctx);
     return .{ .code = code, .out = out.written(), .err = err_w.written() };
 }

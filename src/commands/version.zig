@@ -3,25 +3,26 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const testing = std.testing;
+const testutil = @import("../testutil.zig");
 
 const Spec = struct {};
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "version",
-    .about = "Print the holt version",
+    .summary = "Print the holt version",
     .usage = "holt version",
     .group = .system,
     .details =
     \\Example:
     \\  holt version
     ,
-    .needs_workspace = false,
+    .needs_context = false,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     _ = a;
     try ctx.out.print("holt {s}\n", .{build_options.version});
     return 0;
@@ -32,15 +33,10 @@ test "run: prints holt <version> and exits 0" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
+    const got = try testutil.runCmd(arena, command.run, null, &.{});
 
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-    const code = try command.run(&ctx);
-
-    try testing.expectEqual(@as(u8, 0), code);
-    try testing.expectEqualStrings("holt " ++ build_options.version ++ "\n", out.written());
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expectEqualStrings("holt " ++ build_options.version ++ "\n", got.out);
 }
 
 test "run: leftover arguments are a usage error" {
@@ -48,10 +44,6 @@ test "run: leftover arguments are a usage error" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{"extra"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-    try testing.expectError(error.UsageError, command.run(&ctx));
+    const got = try testutil.runCmd(arena, command.run, null, &.{"extra"});
+    try testing.expectEqual(@as(u8, 2), got.code);
 }

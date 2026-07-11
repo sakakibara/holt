@@ -5,9 +5,8 @@
 //! move within the synced tree) and rebuilds its hub.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const project_mod = @import("../project.zig");
 const common = @import("common.zig");
 const marker = @import("../marker.zig");
@@ -20,38 +19,36 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos(?[]const u8, .{ .complete = comp.cat(.archived), .help = "unarchive this project and rebuild its hub" }),
-    all: args.Flag(.{ .help = "clone every missing repo and rebuild every hub (new-machine path)" }),
-    jobs: args.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "with --all, clone in up to N repos concurrently (default: auto; 1 = serial)" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.archived), .optional = true, .help = "unarchive this project and rebuild its hub" }),
+    all: cli.spec.Flag(.{ .help = "clone every missing repo and rebuild every hub (new-machine path)" }),
+    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "with --all, clone in up to N repos concurrently (default: auto; 1 = serial)" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "restore",
-    .about = "Clone missing repos and rebuild hubs, or unarchive one project",
+    .summary = "Clone missing repos and rebuild hubs, or unarchive one project",
     .usage = "holt restore --all [-j N] | <project>",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt restore --all
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const all_flag = a.all;
     const project_spec = a.project;
 
     if (all_flag and project_spec != null) {
-        ctx.args.message = "cannot combine --all with a project argument";
-        return error.UsageError;
+        return app.usageError(ctx, "cannot combine --all with a project argument", .{});
     }
     if (!all_flag and project_spec == null) {
-        ctx.args.message = "requires --all or a <project> argument";
-        return error.UsageError;
+        return app.usageError(ctx, "requires --all or a <project> argument", .{});
     }
     if (a.jobs) |n| {
         if (n == 0) {
-            ctx.args.message = "-j/--jobs must be at least 1";
-            return error.UsageError;
+            return app.usageError(ctx, "-j/--jobs must be at least 1", .{});
         }
     }
 
@@ -86,8 +83,8 @@ fn cloneJob(_: void, arena: std.mem.Allocator, job: CloneJob) CloneOutcome {
     return .{ .ok = true, .message = "" };
 }
 
-fn runAll(ctx: *cli.Ctx, jobs_cap: ?usize) anyerror!u8 {
-    const ws = ctx.ws.?;
+fn runAll(ctx: *app.Ctx, jobs_cap: ?usize) anyerror!u8 {
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
     const all = try ws.list(alloc);
 
@@ -100,7 +97,7 @@ fn runAll(ctx: *cli.Ctx, jobs_cap: ?usize) anyerror!u8 {
         const qualified = try p.qualified(alloc);
         for (p.marker.repos.keys()) |repo_name| {
             const id = p.repoIdentity(alloc, repo_name) catch {
-                try ctx.err_w.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ qualified, repo_name });
+                try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ qualified, repo_name });
                 had_error = true;
                 continue;
             };
@@ -143,10 +140,10 @@ fn runAll(ctx: *cli.Ctx, jobs_cap: ?usize) anyerror!u8 {
                 }
             } else {
                 if (!fail_reported[ji]) {
-                    try ctx.err_w.print("holt: {s}\n", .{results[ji].message});
+                    try ctx.err.print("holt: {s}\n", .{results[ji].message});
                     fail_reported[ji] = true;
                 }
-                try ctx.err_w.print("holt: could not restore {s} repo {s}\n", .{ qualified, repo_name });
+                try ctx.err.print("holt: could not restore {s} repo {s}\n", .{ qualified, repo_name });
                 had_error = true;
             }
         }
@@ -167,33 +164,32 @@ fn runAll(ctx: *cli.Ctx, jobs_cap: ?usize) anyerror!u8 {
             if (!id.isLocal()) continue;
             const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
             if (fsutil.exists(clone_path)) continue;
-            try ctx.err_w.print("holt: {s}: local repo {s} has no remote and its clone is missing; re-adopt it to restore its hub link\n", .{ qualified, repo_name });
+            try ctx.err.print("holt: {s}: local repo {s} has no remote and its clone is missing; re-adopt it to restore its hub link\n", .{ qualified, repo_name });
         }
     }
     return if (had_error) 1 else 0;
 }
 
-fn runUnarchive(ctx: *cli.Ctx, spec: []const u8) anyerror!u8 {
-    const ws = ctx.ws.?;
+fn runUnarchive(ctx: *app.Ctx, spec: []const u8) anyerror!u8 {
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const on = common.parseOrgName(spec) orelse {
-        ctx.args.message = try common.parseOrgNameMessage(alloc, spec);
-        return error.UsageError;
+        return app.usageError(ctx, "{s}", .{try common.parseOrgNameMessage(alloc, spec)});
     };
 
     const archive_root = try ws.archiveRoot(alloc);
     const archive_path = try std.fs.path.join(alloc, &.{ archive_root, on.org, on.name });
     const archive_marker = try std.fs.path.join(alloc, &.{ archive_path, marker.marker_basename });
     if (!fsutil.exists(archive_marker)) {
-        try ctx.err_w.print("holt: no archived project at {s}\n", .{archive_path});
+        try ctx.err.print("holt: no archived project at {s}\n", .{archive_path});
         return 1;
     }
 
     const projects_root = try ws.projectsRoot(alloc);
     const dest_path = try std.fs.path.join(alloc, &.{ projects_root, on.org, on.name });
     if (fsutil.exists(dest_path)) {
-        try ctx.err_w.print("holt: {s}/{s} already exists in projects\n", .{ on.org, on.name });
+        try ctx.err.print("holt: {s}/{s} already exists in projects\n", .{ on.org, on.name });
         return 1;
     }
 
@@ -431,12 +427,8 @@ test "run: --all with -j 0 is a usage error" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{ "--all", "-j", "0" });
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, command.run(&ctx));
+    const got = try testutil.runCmd(arena, command.run, null, &.{ "--all", "-j", "0" });
+    try testing.expectEqual(@as(u8, 2), got.code);
 }
 
 test "run: --all reports a repo whose marker url cannot resolve and exits nonzero" {
@@ -558,12 +550,8 @@ test "run: --all together with a project argument is a usage error" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{ "--all", "acme/widget" });
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, command.run(&ctx));
+    const got = try testutil.runCmd(arena, command.run, null, &.{ "--all", "acme/widget" });
+    try testing.expectEqual(@as(u8, 2), got.code);
 }
 
 test "run: neither --all nor a project argument is a usage error" {
@@ -571,10 +559,6 @@ test "run: neither --all nor a project argument is a usage error" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, command.run(&ctx));
+    const got = try testutil.runCmd(arena, command.run, null, &.{});
+    try testing.expectEqual(@as(u8, 2), got.code);
 }

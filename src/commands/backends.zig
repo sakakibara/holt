@@ -3,8 +3,8 @@
 //! which one (if any) is active.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
 const fsutil = @import("../fsutil.zig");
 const ui = @import("../ui.zig");
@@ -13,21 +13,22 @@ const testutil = @import("../testutil.zig");
 
 const Spec = struct {};
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "backends",
-    .about = "List configured backend presets",
+    .summary = "List configured backend presets",
     .usage = "holt backends",
     .group = .inspect,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt backends
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     _ = a;
 
-    const cfg = ctx.ws.?.cfg;
+    const cfg = ctx.context.?.ws.cfg;
     const alloc = ctx.alloc;
 
     if (cfg.backend == null) {
@@ -35,7 +36,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     }
 
     if (cfg.presets.len == 0) {
-        try ctx.err_w.writeAll("no backends defined; run \"holt setup\" or add [backends.*] to your config\n");
+        try ctx.err.writeAll("no backends defined; run \"holt setup\" or add [backends.*] to your config\n");
         return 0;
     }
 

@@ -8,9 +8,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const project_mod = @import("../project.zig");
 const identity = @import("../identity.zig");
@@ -26,16 +25,17 @@ const testutil = @import("../testutil.zig");
 const Spec = struct {
     // Interpreted by count in run(): two positionals -> <project> <path>;
     // one positional -> <path> (standalone). Hence the generic roles here.
-    first: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the clone path, or the project to adopt into when a path follows" }),
-    second: args.Pos(?[]const u8, .{ .complete = .files, .help = "the clone path (when a project is given first)" }),
-    force: args.Flag(.{ .short = 'f', .help = "adopt even if the clone has unrecoverable local state" }),
+    first: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the clone path, or the project to adopt into when a path follows" }),
+    second: cli.spec.Pos([]const u8, .{ .complete = .files, .optional = true, .help = "the clone path (when a project is given first)" }),
+    force: cli.spec.Flag(.{ .short = 'f', .help = "adopt even if the clone has unrecoverable local state" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "adopt",
-    .about = "Register an existing clone into a project, moving it to its identity path",
+    .summary = "Register an existing clone into a project, moving it to its identity path",
     .usage = "holt adopt [<project>] <path> [--force]",
     .group = .create,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt adopt myproj ~/Code/github.com/acme/widget
@@ -69,13 +69,13 @@ fn localSafetyCheck(alloc: std.mem.Allocator, repo_path: []const u8) !recover.Ve
     return .{ .blockers = blockers };
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     // Two positionals -> (project, path); one -> (path), standalone.
     const project_query: ?[]const u8 = if (a.second != null) a.first else null;
     const path_arg: []const u8 = a.second orelse a.first;
     const force = a.force;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     // Project setup (project mode only): resolve, lock, re-read the marker.
@@ -91,12 +91,12 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const abs_path = try fsutil.toAbsolute(alloc, path_arg);
 
     if (!fsutil.exists(abs_path)) {
-        try ctx.err_w.print("holt: no clone found at {s}\n", .{abs_path});
+        try ctx.err.print("holt: no clone found at {s}\n", .{abs_path});
         return 1;
     }
 
     if (!try git.inspectable(alloc, abs_path)) {
-        try ctx.err_w.print("holt: {s} is not a readable git repository\n", .{abs_path});
+        try ctx.err.print("holt: {s} is not a readable git repository\n", .{abs_path});
         return 1;
     }
 
@@ -108,7 +108,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     if (origin) |o| {
         id = identity.fromUrl(alloc, o) catch |err| switch (err) {
             error.UnrecognizedUrl => {
-                try ctx.err_w.print("holt: origin \"{s}\" is not a recognized git url\n", .{o});
+                try ctx.err.print("holt: origin \"{s}\" is not a recognized git url\n", .{o});
                 return 1;
             },
             else => return err,
@@ -120,7 +120,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     }
 
     if (project_query != null and p.marker.repos.contains(id.repo)) {
-        try ctx.err_w.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });
+        try ctx.err.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });
         return 1;
     }
 
@@ -138,7 +138,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     if (!try samePath(alloc, abs_path, clone_path)) {
         if (fsutil.exists(clone_path)) {
-            try ctx.err_w.print("holt: destination {s} already exists; refusing to overwrite\n", .{clone_path});
+            try ctx.err.print("holt: destination {s} already exists; refusing to overwrite\n", .{clone_path});
             return 1;
         }
 
@@ -149,8 +149,8 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         // data-loss risk from the move) gates a local adopt.
         var verdict = if (origin != null) try recover.check(alloc, abs_path) else try localSafetyCheck(alloc, abs_path);
         if (!verdict.safe() and !force) {
-            try ctx.err_w.print("holt: {s} has unrecoverable local state, refusing to adopt (use --force to override):\n", .{abs_path});
-            try verdict.render(ctx.err_w);
+            try ctx.err.print("holt: {s} has unrecoverable local state, refusing to adopt (use --force to override):\n", .{abs_path});
+            try verdict.render(ctx.err);
             return 1;
         }
 
@@ -162,7 +162,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     // Standalone: no marker, no hub. Print the clone path (cd-friendly), like `get`.
     if (project_query == null) {
         try ctx.out.print("{s}\n", .{final_path});
-        try ctx.err_w.print("{s}\n", .{if (moved) "adopted (standalone)" else "already there"});
+        try ctx.err.print("{s}\n", .{if (moved) "adopted (standalone)" else "already there"});
         return 0;
     }
 
@@ -191,12 +191,12 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     const rel = try id.relPath(alloc);
     try ctx.out.print("{s}\n", .{final_path});
-    try ctx.err_w.print("adopted {s} -> {s}\n", .{ rel, try fsutil.contractTilde(alloc, final_path) });
+    try ctx.err.print("adopted {s} -> {s}\n", .{ rel, try fsutil.contractTilde(alloc, final_path) });
     return 0;
 }
 
-fn reportUnfinishedAdopt(ctx: *cli.Ctx, org: []const u8, name: []const u8, clone_path: []const u8, err: anyerror) !void {
-    try ctx.err_w.print("holt: the clone was moved to {s} but updating {s}/{s} failed: {s}; re-run \"holt adopt {s}/{s} {s}\" to finish\n", .{ clone_path, org, name, @errorName(err), org, name, clone_path });
+fn reportUnfinishedAdopt(ctx: *app.Ctx, org: []const u8, name: []const u8, clone_path: []const u8, err: anyerror) !void {
+    try ctx.err.print("holt: the clone was moved to {s} but updating {s}/{s} failed: {s}; re-run \"holt adopt {s}/{s} {s}\" to finish\n", .{ clone_path, org, name, @errorName(err), org, name, clone_path });
 }
 
 /// Clones `bare` to `dest` and repoints origin at `fake_origin` - a URL

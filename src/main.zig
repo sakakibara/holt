@@ -1,84 +1,54 @@
 const std = @import("std");
-const cli = @import("cli.zig");
-const completion = @import("completion.zig");
+const cli = @import("cli");
+const app = @import("app.zig");
+const ui = @import("ui.zig");
+const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
 const marker = @import("marker.zig");
 const workspace = @import("workspace.zig");
 const testing = std.testing;
-const version_cmd = @import("commands/version.zig");
-const init_cmd = @import("commands/init.zig");
-const setup_cmd = @import("commands/setup.zig");
-const path_cmd = @import("commands/path.zig");
-const list_cmd = @import("commands/list.zig");
-const new_cmd = @import("commands/new.zig");
-const add_cmd = @import("commands/add.zig");
-const get_cmd = @import("commands/get.zig");
-const create_cmd = @import("commands/create.zig");
-const rm_cmd = @import("commands/rm.zig");
-const alias_cmd = @import("commands/alias.zig");
-const sync_cmd = @import("commands/sync.zig");
-const restore_cmd = @import("commands/restore.zig");
-const doctor_cmd = @import("commands/doctor.zig");
-const promote_cmd = @import("commands/promote.zig");
-const archive_cmd = @import("commands/archive.zig");
-const delete_cmd = @import("commands/delete.zig");
-const rename_cmd = @import("commands/rename.zig");
-const org_cmd = @import("commands/org.zig");
-const backup_cmd = @import("commands/backup.zig");
-const info_cmd = @import("commands/info.zig");
-const status_cmd = @import("commands/status.zig");
-const backends_cmd = @import("commands/backends.zig");
-const backend_cmd = @import("commands/backend.zig");
-const recent_cmd = @import("commands/recent.zig");
-const adopt_cmd = @import("commands/adopt.zig");
-const keep_cmd = @import("commands/keep.zig");
-const edit_cmd = @import("commands/edit.zig");
-const config_cmd = @import("commands/config.zig");
-const run_cmd = @import("commands/run.zig");
-const upgrade_cmd = @import("commands/upgrade.zig");
-const worktree_cmd = @import("commands/worktree.zig");
-
-pub const command_table = [_]cli.Command{
-    path_cmd.command,
-    list_cmd.command,
-    init_cmd.command,
-    setup_cmd.command,
-    new_cmd.command,
-    add_cmd.command,
-    get_cmd.command,
-    create_cmd.command,
-    rm_cmd.command,
-    alias_cmd.command,
-    adopt_cmd.command,
-    keep_cmd.command,
-    info_cmd.command,
-    status_cmd.command,
-    backends_cmd.command,
-    recent_cmd.command,
-    sync_cmd.command,
-    restore_cmd.command,
-    doctor_cmd.command,
-    promote_cmd.command,
-    rename_cmd.command,
-    org_cmd.command,
-    archive_cmd.command,
-    backup_cmd.command,
-    edit_cmd.command,
-    worktree_cmd.command,
-    backend_cmd.command,
-    config_cmd.command,
-    run_cmd.command,
-    version_cmd.command,
-    upgrade_cmd.command,
-    delete_cmd.command,
-};
 
 pub fn main(init: std.process.Init) u8 {
     const argv = init.minimal.args.toSlice(init.arena.allocator()) catch {
         std.debug.print("holt: failed to read command line arguments\n", .{});
         return 1;
     };
-    return cli.dispatch(init.gpa, argv[1..], &command_table);
+
+    var out_buf: [4096]u8 = undefined;
+    var err_buf: [4096]u8 = undefined;
+    const stdout_file = std.Io.File.stdout();
+    var stdout_fw: std.Io.File.Writer = .init(stdout_file, fsutil.io(), &out_buf);
+    var stderr_fw: std.Io.File.Writer = .init(.stderr(), fsutil.io(), &err_buf);
+    const out = &stdout_fw.interface;
+    const err = &stderr_fw.interface;
+    defer out.flush() catch {};
+    defer err.flush() catch {};
+
+    app.color_enabled = ui.colorEnabled(stdout_file);
+
+    // argv[0]'s display name is normalized to the literal "holt" (matching
+    // the old dispatcher's hardcoded top-level usage text) rather than
+    // whatever path the process was actually invoked with.
+    const call_argv = init.arena.allocator().alloc([]const u8, argv.len) catch {
+        std.debug.print("holt: failed to read command line arguments\n", .{});
+        return 1;
+    };
+    if (call_argv.len > 0) {
+        call_argv[0] = "holt";
+        @memcpy(call_argv[1..], argv[1..]);
+    }
+
+    // Unlike the old dispatcher (which wrapped its allocator in a
+    // per-dispatch arena internally), cli-zig's `Cli(cfg).run` uses
+    // `ctx.alloc` as given for the whole command body - fine for process
+    // memory (the process exits right after), but a debug build's leak
+    // checker on `init.gpa` would otherwise report every one of those
+    // allocations as leaked. `init.arena` is this process's own scratch
+    // arena, reclaimed in bulk at exit rather than individually tracked.
+    return app.run(init.arena.allocator(), fsutil.io(), call_argv, &app.command_table, out, err) catch |e| {
+        err.print("holt: internal error: {s}\n", .{@errorName(e)}) catch {};
+        return 1;
+    };
 }
 
 test {
@@ -98,6 +68,7 @@ test {
     _ = @import("doctor.zig");
     _ = @import("testutil.zig");
     _ = @import("cli.zig");
+    _ = @import("args.zig");
     _ = @import("app.zig");
     _ = @import("completion_source.zig");
     _ = @import("ui.zig");
@@ -153,7 +124,7 @@ fn coverageAllowed(allow: []const CoverageAllow, cmd: []const u8, field: []const
 /// command's allowlist/report key: its bare name at the top level, or
 /// "<parent> <sub>" for a subcommand, so a subcommand slot cannot alias a
 /// same-named top-level one.
-fn coverageCheckCommand(alloc: std.mem.Allocator, command: cli.Command, path: []const u8, allow: []const CoverageAllow, gaps: *std.ArrayList([]const u8)) !void {
+fn coverageCheckCommand(alloc: std.mem.Allocator, command: app.Command, path: []const u8, allow: []const CoverageAllow, gaps: *std.ArrayList([]const u8)) !void {
     for (command.args) |a| {
         if (a.variadic) continue;
         if (a.complete != .none) continue;
@@ -162,7 +133,7 @@ fn coverageCheckCommand(alloc: std.mem.Allocator, command: cli.Command, path: []
     }
     for (command.flags) |f| {
         if (!f.takes_value) continue;
-        if (f.value != .none) continue;
+        if (f.complete != .none) continue;
         if (coverageAllowed(allow, path, f.long)) continue;
         try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s} --{s} (value flag, no completion)", .{ path, f.long }));
     }
@@ -190,7 +161,7 @@ test "coverage: every command positional and value-flag completes or is allowlis
 
     var gaps: std.ArrayList([]const u8) = .empty;
 
-    for (command_table) |c| {
+    for (app.command_table) |c| {
         try coverageCheckCommand(arena, c, c.name, &allow, &gaps);
         for (c.subcommands) |sub| {
             const path = try std.fmt.allocPrint(arena, "{s} {s}", .{ c.name, sub.name });
@@ -205,18 +176,32 @@ test "coverage: every command positional and value-flag completes or is allowlis
     }
 }
 
-fn containsCandidate(candidates: []const completion.Candidate, value: []const u8) bool {
+fn containsCandidate(candidates: []const cli.complete.Candidate, value: []const u8) bool {
     for (candidates) |c| {
         if (std.mem.eql(u8, c.value, value)) return true;
     }
     return false;
 }
 
-fn findCandidate(candidates: []const completion.Candidate, value: []const u8) ?completion.Candidate {
+fn findCandidate(candidates: []const cli.complete.Candidate, value: []const u8) ?cli.complete.Candidate {
     for (candidates) |c| {
         if (std.mem.eql(u8, c.value, value)) return c;
     }
     return null;
+}
+
+/// A stand-in `Ctx` for driving completion directly (not through `app.run`):
+/// only `.context` matters to `resolveCompletion`, but a real `app.Ctx` also
+/// needs live `out`/`err` writers even though completion never writes to
+/// them.
+fn completionCtx(alloc: std.mem.Allocator, out: *std.Io.Writer, err: *std.Io.Writer, ws: ?*const workspace.Workspace) app.Ctx {
+    return .{
+        .alloc = alloc,
+        .io = testing.io,
+        .context = if (ws) |w| .{ .ws = w.*, .color = false } else null,
+        .out = out,
+        .err = err,
+    };
 }
 
 /// Seeds `ws` with a multi-project, multi-org fixture reused across the
@@ -244,25 +229,29 @@ test "integration: bare command and subcommand-group completion against the real
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    const ws_ptr: ?*const workspace.Workspace = &ws;
     try seedCompletionFixture(arena, &ws);
 
-    // A bare command name completes off the real 31-entry table, with or
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var err_w: std.Io.Writer.Allocating = .init(arena);
+    var ctx = completionCtx(arena, &out.writer, &err_w.writer, &ws);
+    var ctx_no_ws = completionCtx(arena, &out.writer, &err_w.writer, null);
+
+    // A bare command name completes off the real 32-entry table, with or
     // without a workspace - command names never need one.
-    const bare = try completion.compute(arena, &command_table, &.{"inf"}, ws_ptr);
+    const bare = try app.HoltCli.completionCompute(arena, &app.command_table, &.{"inf"}, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(bare.candidates, "info"));
-    const bare_no_ws = try completion.compute(arena, &command_table, &.{"inf"}, null);
+    const bare_no_ws = try app.HoltCli.completionCompute(arena, &app.command_table, &.{"inf"}, app.HoltCli.completion_resolve, &ctx_no_ws);
     try testing.expect(containsCandidate(bare_no_ws.candidates, "info"));
 
     // Subcommand groups: `org` and `config` each offer their real sub-names.
-    const org_subs = try completion.compute(arena, &command_table, &.{ "org", "" }, ws_ptr);
+    const org_subs = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "org", "" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(org_subs.candidates, "rename"));
-    const config_subs = try completion.compute(arena, &command_table, &.{ "config", "" }, ws_ptr);
+    const config_subs = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "config", "" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(config_subs.candidates, "edit"));
 
     // A subcommand's own positional (`org rename <old_org>`) resolves an
     // `org` category, archive-inclusive: "gone" only exists in the archive.
-    const org_rename_old = try completion.compute(arena, &command_table, &.{ "org", "rename", "" }, ws_ptr);
+    const org_rename_old = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "org", "rename", "" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(org_rename_old.candidates, "acme/"));
     try testing.expect(containsCandidate(org_rename_old.candidates, "gone/"));
 }
@@ -277,17 +266,19 @@ test "integration: project/repo/backend_seed categories carry real descriptions"
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    const ws_ptr: ?*const workspace.Workspace = &ws;
     try seedCompletionFixture(arena, &ws);
 
-    // `info`'s project positional carries the project's org as description.
     var out: std.Io.Writer.Allocating = .init(arena);
-    try completion.reply(arena, &command_table, &.{ "info", "wid" }, ws_ptr, &out.writer);
+    var err_w: std.Io.Writer.Allocating = .init(arena);
+    var ctx = completionCtx(arena, &out.writer, &err_w.writer, &ws);
+
+    // `info`'s project positional carries the project's org as description.
+    try app.HoltCli.completionReply(arena, &app.command_table, &.{ "info", "wid" }, app.HoltCli.completion_resolve, &ctx, &out.writer);
     try testing.expect(std.mem.indexOf(u8, out.written(), "widget\tacme") != null);
 
     // `rm`'s second positional (repo) resolves off the first (project) and
     // carries each repo's clone-state description - no git involved.
-    const repo_got = try completion.compute(arena, &command_table, &.{ "rm", "acme/proj", "" }, ws_ptr);
+    const repo_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "rm", "acme/proj", "" }, app.HoltCli.completion_resolve, &ctx);
     const backend_cand = findCandidate(repo_got.candidates, "backend") orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("missing", backend_cand.description.?);
     const tool_cand = findCandidate(repo_got.candidates, "tool") orelse return error.TestUnexpectedResult;
@@ -295,16 +286,17 @@ test "integration: project/repo/backend_seed categories carry real descriptions"
 
     // `setup --backend` lists the builtin seeds even with a null workspace
     // (the fresh-install path, before config.toml exists).
-    const seed_got = try completion.compute(arena, &command_table, &.{ "setup", "--backend", "" }, null);
+    var ctx_no_ws = completionCtx(arena, &out.writer, &err_w.writer, null);
+    const seed_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "setup", "--backend", "" }, app.HoltCli.completion_resolve, &ctx_no_ws);
     const dropbox_cand = findCandidate(seed_got.candidates, "dropbox") orelse return error.TestUnexpectedResult;
     try testing.expect(dropbox_cand.description != null);
 
     // `run --repo` completes off the preceding project positional.
-    const run_got = try completion.compute(arena, &command_table, &.{ "run", "acme/proj", "--repo", "back" }, ws_ptr);
+    const run_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "run", "acme/proj", "--repo", "back" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(run_got.candidates, "backend"));
 
     // A glued `--org=<partial>` on `list` completes the flag's value.
-    const list_got = try completion.compute(arena, &command_table, &.{ "list", "--org=ac" }, ws_ptr);
+    const list_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "list", "--org=ac" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(list_got.candidates, "acme/"));
 }
 
@@ -312,7 +304,12 @@ test "list --repos appears in list's flag-name completion" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const got = try completion.compute(arena, &command_table, &.{ "list", "--" }, null);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var err_w: std.Io.Writer.Allocating = .init(arena);
+    var ctx = completionCtx(arena, &out.writer, &err_w.writer, null);
+
+    const got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "list", "--" }, app.HoltCli.completion_resolve, &ctx);
     var found = false;
     for (got.candidates) |c| {
         if (std.mem.eql(u8, c.value, "--repos")) found = true;
@@ -326,7 +323,10 @@ test "integration: a broken (null) workspace still replies with the directive li
     const arena = arena_state.allocator();
 
     var out: std.Io.Writer.Allocating = .init(arena);
-    try completion.reply(arena, &command_table, &.{ "info", "wid" }, null, &out.writer);
+    var err_w: std.Io.Writer.Allocating = .init(arena);
+    var ctx = completionCtx(arena, &out.writer, &err_w.writer, null);
+
+    try app.HoltCli.completionReply(arena, &app.command_table, &.{ "info", "wid" }, app.HoltCli.completion_resolve, &ctx, &out.writer);
     try testing.expectEqualStrings("default\n", out.written());
 }
 
@@ -340,26 +340,29 @@ test "integration: adopt disambiguation, subsequence matching, and flag de-dup o
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    const ws_ptr: ?*const workspace.Workspace = &ws;
     try seedCompletionFixture(arena, &ws);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var err_w: std.Io.Writer.Allocating = .init(arena);
+    var ctx = completionCtx(arena, &out.writer, &err_w.writer, &ws);
 
     // `adopt`'s first positional (real spec: a project OR a clone path): a
     // path-shaped word defers to file completion, a bare word completes
     // projects.
-    const adopt_path = try completion.compute(arena, &command_table, &.{ "adopt", "./checkouts/wi" }, ws_ptr);
-    try testing.expectEqual(completion.Directive.files, adopt_path.directive);
-    const adopt_proj = try completion.compute(arena, &command_table, &.{ "adopt", "wid" }, ws_ptr);
-    try testing.expectEqual(completion.Directive.default, adopt_proj.directive);
+    const adopt_path = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "adopt", "./checkouts/wi" }, app.HoltCli.completion_resolve, &ctx);
+    try testing.expectEqual(cli.complete.Directive.files, adopt_path.directive);
+    const adopt_proj = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "adopt", "wid" }, app.HoltCli.completion_resolve, &ctx);
+    try testing.expectEqual(cli.complete.Directive.default, adopt_proj.directive);
     try testing.expect(containsCandidate(adopt_proj.candidates, "widget"));
 
     // Subsequence matching: "wdgt" is an abbreviation of "widget", so it
     // resolves the same on TAB as it would on Enter.
-    const subseq = try completion.compute(arena, &command_table, &.{ "info", "wdgt" }, ws_ptr);
+    const subseq = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "info", "wdgt" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(subseq.candidates, "widget"));
 
     // Flag-name de-dup: an already-present flag is not re-offered. `--json` is
     // on the line, so completing `--j` offers `--jobs` but not `--json`.
-    const flags = try completion.compute(arena, &command_table, &.{ "status", "--json", "--j" }, ws_ptr);
+    const flags = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "status", "--json", "--j" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expect(containsCandidate(flags.candidates, "--jobs"));
     try testing.expect(!containsCandidate(flags.candidates, "--json"));
 }

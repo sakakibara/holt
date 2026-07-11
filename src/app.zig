@@ -38,13 +38,15 @@ pub const Group = enum {
 pub var color_enabled: bool = false;
 
 /// Ports `config.loadDefault` into cli-zig's context-loader shape: on
-/// failure, copies holt's diagnostic message into `diag.message` and
-/// propagates the error; on success, wraps the config in a `Workspace`.
+/// failure, copies holt's diagnostic message into `diag.message` (prefixed
+/// "holt: ", matching the old dispatcher's `"holt: {s}\n"` framing - cli-zig
+/// prints `diag.message` verbatim, with no prefix of its own) and propagates
+/// the error; on success, wraps the config in a `Workspace`.
 pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.args.Diagnostic) anyerror!Context {
     _ = io;
     var holt_diag: diagnostic.Diagnostic = .{};
     const cfg = config.loadDefault(alloc, &holt_diag) catch |err| {
-        diag.message = holt_diag.message;
+        diag.message = try std.fmt.allocPrint(alloc, "holt: {s}", .{holt_diag.message});
         return err;
     };
     return .{ .ws = .{ .cfg = cfg }, .color = color_enabled };
@@ -54,6 +56,9 @@ pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.args.Diagnos
 /// `candidatesFor` plus `resolve()`'s `cur`-based special cases into the one
 /// hook cli-zig's engine calls for every `.dynamic` completion key.
 pub const resolveCompletion = completion_source.resolveCompletion;
+/// A schema field's `.dynamic` completion category, typed against
+/// `completion_source.Category` so a command's spec cannot misspell one.
+pub const cat = completion_source.cat;
 
 /// Maps the handful of environment/tooling failures that can surface from
 /// deep inside a command to a clear, actionable line, so a missing external
@@ -93,6 +98,49 @@ pub fn renderHelpFooter(w: *std.Io.Writer, prog_name: []const u8) anyerror!void 
     try w.print("Run \"{s} init <shell>\" to set up the h/hi shell helpers.\n", .{prog_name});
 }
 
+fn flagSpellingLen(f: anytype) usize {
+    var n: usize = 2 + f.long.len;
+    if (f.short != null) n += 4; // ", -X"
+    if (f.takes_value) n += 3 + f.value_name.len; // " <value_name>"
+    return n;
+}
+
+fn writeFlagSpelling(w: *std.Io.Writer, f: anytype) !void {
+    try w.print("--{s}", .{f.long});
+    if (f.short) |s| try w.print(", -{c}", .{s});
+    if (f.takes_value) try w.print(" <{s}>", .{f.value_name});
+}
+
+/// Per-command help, ported verbatim from the old `cli.zig`'s `printUsage`:
+/// usage line, blank line, summary, an optional Flags table, an optional
+/// details block. Deliberately does NOT use cli-zig's default renderer,
+/// which also emits Args:/Commands: sections holt's old dispatcher never
+/// had - a command's explicit `.usage` string and a subcommand parent's
+/// `.details` prose already document that structure, so adding those
+/// sections would change `--help` output that today's users already see.
+/// `cmd` is `anytype` (a `HoltCli.Command`, though that type cannot be named
+/// here - `Cli(cfg)` is still being built from this very hook).
+pub fn renderCommandHelp(w: *std.Io.Writer, prog_name: []const u8, cmd: anytype) anyerror!void {
+    _ = prog_name;
+    try w.print("Usage: {s}\n\n{s}\n", .{ cmd.usage, cmd.summary });
+
+    if (cmd.flags.len > 0) {
+        var width: usize = 0;
+        for (cmd.flags) |f| width = @max(width, flagSpellingLen(f));
+        try w.writeAll("\nFlags:\n");
+        for (cmd.flags) |f| {
+            try w.writeAll("  ");
+            const len = flagSpellingLen(f);
+            try writeFlagSpelling(w, f);
+            if (len < width) try w.splatByteAll(' ', width - len);
+            if (f.help.len > 0) try w.print("  {s}", .{f.help});
+            try w.writeByte('\n');
+        }
+    }
+
+    if (cmd.details.len > 0) try w.print("\n{s}\n", .{cmd.details});
+}
+
 pub const HoltCli = cli.cli.Cli(.{
     .Context = Context,
     .Group = Group,
@@ -101,6 +149,7 @@ pub const HoltCli = cli.cli.Cli(.{
     .describeError = describeError,
     .groupHeading = groupHeading,
     .renderHelpFooter = renderHelpFooter,
+    .renderCommandHelp = renderCommandHelp,
 });
 
 pub const Ctx = HoltCli.Ctx;
@@ -108,6 +157,88 @@ pub const Command = HoltCli.Command;
 pub const About = HoltCli.About;
 pub const run = HoltCli.run;
 pub const command = HoltCli.command;
+
+/// Reports a usage error the same way holt's old dispatcher rendered
+/// `ctx.args.message = m; return error.UsageError;`: `"holt: " ++ fmt ++
+/// "\n"` on `ctx.err`, exit code 2. Command bodies that reject their own
+/// already-parsed arguments (an org/name collision, mutually exclusive
+/// values not expressible via `About.exclusive`, a stray subcommand-parent
+/// argument) call this directly instead of returning `error.UsageError`,
+/// since cli-zig's `Ctx` has no `.args.message` slot for that idiom.
+pub fn usageError(ctx: *Ctx, comptime fmt: []const u8, args: anytype) u8 {
+    ctx.err.print("holt: " ++ fmt ++ "\n", args) catch {};
+    return 2;
+}
+
+const version_cmd = @import("commands/version.zig");
+const init_cmd = @import("commands/init.zig");
+const setup_cmd = @import("commands/setup.zig");
+const path_cmd = @import("commands/path.zig");
+const list_cmd = @import("commands/list.zig");
+const new_cmd = @import("commands/new.zig");
+const add_cmd = @import("commands/add.zig");
+const get_cmd = @import("commands/get.zig");
+const create_cmd = @import("commands/create.zig");
+const rm_cmd = @import("commands/rm.zig");
+const alias_cmd = @import("commands/alias.zig");
+const sync_cmd = @import("commands/sync.zig");
+const restore_cmd = @import("commands/restore.zig");
+const doctor_cmd = @import("commands/doctor.zig");
+const promote_cmd = @import("commands/promote.zig");
+const archive_cmd = @import("commands/archive.zig");
+const delete_cmd = @import("commands/delete.zig");
+const rename_cmd = @import("commands/rename.zig");
+const org_cmd = @import("commands/org.zig");
+const backup_cmd = @import("commands/backup.zig");
+const info_cmd = @import("commands/info.zig");
+const status_cmd = @import("commands/status.zig");
+const backends_cmd = @import("commands/backends.zig");
+const backend_cmd = @import("commands/backend.zig");
+const recent_cmd = @import("commands/recent.zig");
+const adopt_cmd = @import("commands/adopt.zig");
+const keep_cmd = @import("commands/keep.zig");
+const edit_cmd = @import("commands/edit.zig");
+const config_cmd = @import("commands/config.zig");
+const run_cmd = @import("commands/run.zig");
+const upgrade_cmd = @import("commands/upgrade.zig");
+const worktree_cmd = @import("commands/worktree.zig");
+
+/// Every registered top-level command, in the same order as holt's old
+/// `main.zig` table.
+pub const command_table = [_]Command{
+    path_cmd.command,
+    list_cmd.command,
+    init_cmd.command,
+    setup_cmd.command,
+    new_cmd.command,
+    add_cmd.command,
+    get_cmd.command,
+    create_cmd.command,
+    rm_cmd.command,
+    alias_cmd.command,
+    adopt_cmd.command,
+    keep_cmd.command,
+    info_cmd.command,
+    status_cmd.command,
+    backends_cmd.command,
+    recent_cmd.command,
+    sync_cmd.command,
+    restore_cmd.command,
+    doctor_cmd.command,
+    promote_cmd.command,
+    rename_cmd.command,
+    org_cmd.command,
+    archive_cmd.command,
+    backup_cmd.command,
+    edit_cmd.command,
+    worktree_cmd.command,
+    backend_cmd.command,
+    config_cmd.command,
+    run_cmd.command,
+    version_cmd.command,
+    upgrade_cmd.command,
+    delete_cmd.command,
+};
 
 const SmokeSpec = struct {};
 

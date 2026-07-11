@@ -5,9 +5,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const marker = @import("../marker.zig");
 const hub = @import("../hub.zig");
@@ -17,26 +16,27 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    old: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to rename" }),
-    new_name: args.Pos([]const u8, .{ .help = "the new <org>/<name>" }),
+    old: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to rename" }),
+    new_name: cli.spec.Pos([]const u8, .{ .help = "the new <org>/<name>" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "rename",
-    .about = "Rename a project, moving its content and rebuilding its hub",
+    .summary = "Rename a project, moving its content and rebuilding its hub",
     .usage = "holt rename <old> <new-org>/<new-name>",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt rename acme/widget acme/widget-core
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const old_query = a.old;
     const new_spec = a.new_name;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const p = (try common.resolveOne(ctx, old_query)) orelse return 1;
@@ -46,19 +46,18 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     defer lock.release();
 
     const target = common.parseOrgName(new_spec) orelse {
-        ctx.args.message = try common.parseOrgNameMessage(alloc, new_spec);
-        return error.UsageError;
+        return app.usageError(ctx, "{s}", .{try common.parseOrgNameMessage(alloc, new_spec)});
     };
 
     const projects_root = try ws.projectsRoot(alloc);
     const dest_path = try std.fs.path.join(alloc, &.{ projects_root, target.org, target.name });
 
     if (std.mem.eql(u8, p.content_path, dest_path)) {
-        try ctx.err_w.writeAll("holt: source and target are the same project\n");
+        try ctx.err.writeAll("holt: source and target are the same project\n");
         return 1;
     }
     if (fsutil.exists(dest_path)) {
-        try ctx.err_w.print("holt: {s}/{s} already exists in projects\n", .{ target.org, target.name });
+        try ctx.err.print("holt: {s}/{s} already exists in projects\n", .{ target.org, target.name });
         return 1;
     }
 
@@ -264,11 +263,8 @@ test "run: a malformed <new-org>/<new-name> spec is a usage error" {
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
 
-    var cli_args = try cli.Args.init(arena, &.{ "acme/widget", "no-slash" });
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-    try testing.expectError(error.UsageError, command.run(&ctx));
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "no-slash" });
+    try testing.expectEqual(@as(u8, 2), got.code);
 }
 
 test "run: a target that traverses out of the roots is rejected, leaving the source in place" {
@@ -284,7 +280,8 @@ test "run: a target that traverses out of the roots is rejected, leaving the sou
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
 
-    try testing.expectError(error.UsageError, testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "acme/../x" }));
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/widget", "acme/../x" });
+    try testing.expectEqual(@as(u8, 2), got.code);
 
     const source = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
     try testing.expect(fsutil.exists(source));

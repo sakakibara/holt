@@ -5,9 +5,8 @@
 //! so a project opened at its hub root can reach every branch's checkout.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const path = @import("path.zig");
 const git = @import("../git.zig");
 const hub = @import("../hub.zig");
@@ -19,16 +18,17 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    repo: args.Pos([]const u8, .{ .complete = comp.cat(.project_repo), .help = "the <project>/<repo> whose worktrees to manage" }),
-    branch: args.Pos(?[]const u8, .{ .value_name = "branch", .complete = comp.cat(.worktree_branch), .help = "branch to check out in a new worktree; omit to list" }),
-    remove: args.Flag(.{ .short = 'r', .help = "remove the worktree for <branch> instead of creating it" }),
+    repo: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project_repo), .help = "the <project>/<repo> whose worktrees to manage" }),
+    branch: cli.spec.Pos([]const u8, .{ .value_name = "branch", .complete = app.cat(.worktree_branch), .optional = true, .help = "branch to check out in a new worktree; omit to list" }),
+    remove: cli.spec.Flag(.{ .short = 'r', .help = "remove the worktree for <branch> instead of creating it" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "worktree",
-    .about = "Create, list, or remove a repo's git worktrees",
+    .summary = "Create, list, or remove a repo's git worktrees",
     .usage = "holt worktree <project>/<repo> [<branch>] [--remove]",
     .group = .navigate,
+    .needs_context = true,
     .details =
     \\A worktree is an extra checkout of a repo's one canonical clone, on a
     \\different branch, so two branches can be checked out at once without a
@@ -41,36 +41,33 @@ pub const command = args.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
-    const ws = ctx.ws.?;
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const slash = std.mem.lastIndexOfScalar(u8, a.repo, '/') orelse {
-        ctx.args.message = "worktree takes <project>/<repo>";
-        return error.UsageError;
+        return app.usageError(ctx, "worktree takes <project>/<repo>", .{});
     };
     const project_query = a.repo[0..slash];
     const repo_query = a.repo[slash + 1 ..];
     if (project_query.len == 0 or repo_query.len == 0) {
-        ctx.args.message = "worktree takes <project>/<repo>";
-        return error.UsageError;
+        return app.usageError(ctx, "worktree takes <project>/<repo>", .{});
     }
 
     const id = (try path.resolveRepoId(ctx, ws, project_query, repo_query)) orelse return 1;
     const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
     if (!fsutil.exists(clone_path)) {
-        try ctx.err_w.print("holt: {s} is not cloned yet; run `holt restore` first\n", .{a.repo});
+        try ctx.err.print("holt: {s} is not cloned yet; run `holt restore` first\n", .{a.repo});
         return 1;
     }
     const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
 
     if (a.branch == null) {
         if (a.remove) {
-            ctx.args.message = "--remove needs a <branch>";
-            return error.UsageError;
+            return app.usageError(ctx, "--remove needs a <branch>", .{});
         }
         const listing = git.worktreeList(alloc, clone_path) catch {
-            try ctx.err_w.print("holt: could not list worktrees for {s}\n", .{clone_path});
+            try ctx.err.print("holt: could not list worktrees for {s}\n", .{clone_path});
             return 1;
         };
         defer alloc.free(listing);
@@ -84,7 +81,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     if (a.remove) {
         var d: diagnostic.Diagnostic = .{};
         git.worktreeRemove(alloc, clone_path, wt_path, &d) catch {
-            try ctx.err_w.print("holt: {s}\n", .{d.message});
+            try ctx.err.print("holt: {s}\n", .{d.message});
             return 1;
         };
         // Once the last worktree is gone the dir is empty; drop it so the hub
@@ -97,7 +94,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     var d: diagnostic.Diagnostic = .{};
     git.worktreeAdd(alloc, clone_path, wt_path, branch, &d) catch {
-        try ctx.err_w.print("holt: {s}\n", .{d.message});
+        try ctx.err.print("holt: {s}\n", .{d.message});
         return 1;
     };
     try reconcileUsers(ctx, ws, id);
@@ -110,7 +107,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 /// a repo can be shared across projects, and each must see its worktrees.
 /// Best-effort: the git worktree change already succeeded and `holt sync`
 /// rebuilds hubs anyway, so a hub hiccup here is not worth failing over.
-fn reconcileUsers(ctx: *cli.Ctx, ws: workspace.Workspace, id: identity.Identity) !void {
+fn reconcileUsers(ctx: *app.Ctx, ws: workspace.Workspace, id: identity.Identity) !void {
     const users = ws.projectsUsing(ctx.alloc, id) catch return;
     for (users) |p| {
         _ = hub.reconcile(ctx.alloc, &ws, &p, false) catch {};

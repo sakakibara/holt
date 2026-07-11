@@ -3,9 +3,8 @@
 //! first member, then builds the hub.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const project_mod = @import("../project.zig");
 const common = @import("common.zig");
 const identity = @import("../identity.zig");
@@ -18,15 +17,16 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    org_name: args.Pos([]const u8, .{ .complete = comp.cat(.org), .help = "the org/name to create" }),
-    url: args.Pos(?[]const u8, .{ .complete = .files, .help = "a repo url to clone as the project's first member" }),
+    org_name: cli.spec.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the org/name to create" }),
+    url: cli.spec.Pos([]const u8, .{ .complete = .files, .optional = true, .help = "a repo url to clone as the project's first member" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "new",
-    .about = "Create a new project, optionally cloning its first repo",
+    .summary = "Create a new project, optionally cloning its first repo",
     .usage = "holt new <org>/<name> [url]",
     .group = .create,
+    .needs_context = true,
     .details =
     \\Creates the project's content dirs, marker, and hub; with a url it also
     \\clones the repo as the first member. The hub path is the sole line on
@@ -37,35 +37,34 @@ pub const command = args.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const spec = a.org_name;
     const url = a.url;
 
     const on = common.parseOrgName(spec) orelse {
-        ctx.args.message = try common.parseOrgNameMessage(ctx.alloc, spec);
-        return error.UsageError;
+        return app.usageError(ctx, "{s}", .{try common.parseOrgNameMessage(ctx.alloc, spec)});
     };
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const content_path = try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "projects", on.org, on.name });
     const marker_path = try std.fs.path.join(alloc, &.{ content_path, marker.marker_basename });
     if (fsutil.exists(marker_path)) {
-        try ctx.err_w.print("holt: project \"{s}/{s}\" already exists\n", .{ on.org, on.name });
+        try ctx.err.print("holt: project \"{s}/{s}\" already exists\n", .{ on.org, on.name });
         return 1;
     }
 
     const archive_root = try ws.archiveRoot(alloc);
     const archive_marker = try std.fs.path.join(alloc, &.{ archive_root, on.org, on.name, marker.marker_basename });
     if (fsutil.exists(archive_marker)) {
-        try ctx.err_w.print("holt: {s}/{s} already exists in archive (restore or delete it first)\n", .{ on.org, on.name });
+        try ctx.err.print("holt: {s}/{s} already exists in archive (restore or delete it first)\n", .{ on.org, on.name });
         return 1;
     }
 
     const id: ?identity.Identity = if (url) |u| identity.fromUrl(alloc, u) catch |err| switch (err) {
         error.UnrecognizedUrl => {
-            try ctx.err_w.print("holt: \"{s}\" is not a recognized git url\n", .{u});
+            try ctx.err.print("holt: \"{s}\" is not a recognized git url\n", .{u});
             return 1;
         },
         else => return err,
@@ -115,13 +114,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     // Human-facing status goes to stderr, where its tilde-abbreviated paths
     // cannot leak into a command substitution.
     try ctx.out.print("{s}\n", .{hub_path});
-    try ctx.err_w.print("created {s}/{s}\n", .{ on.org, on.name });
+    try ctx.err.print("created {s}/{s}\n", .{ on.org, on.name });
     if (clone_path) |cp| {
         const shown = try fsutil.contractTilde(alloc, cp);
         if (cloned) {
-            try ctx.err_w.print("cloned {s} -> {s}\n", .{ url.?, shown });
+            try ctx.err.print("cloned {s} -> {s}\n", .{ url.?, shown });
         } else {
-            try ctx.err_w.print("using existing clone at {s}\n", .{shown});
+            try ctx.err.print("using existing clone at {s}\n", .{shown});
         }
     }
     return 0;
@@ -249,13 +248,9 @@ test "run: a malformed spec (no slash) is a usage error" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var cli_args = try cli.Args.init(arena, &.{"widget"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, command.run(&ctx));
-    try testing.expect(std.mem.indexOf(u8, cli_args.message, "widget") != null);
+    const got = try testutil.runCmd(arena, command.run, null, &.{"widget"});
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "widget") != null);
 }
 
 test "run: an org that traverses out of the roots is rejected and nothing is written outside them" {
@@ -269,7 +264,8 @@ test "run: an org that traverses out of the roots is rejected and nothing is wri
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testing.expectError(error.UsageError, testutil.runCmd(arena, command.run, ws, &.{"../escape"}));
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"../escape"});
+    try testing.expectEqual(@as(u8, 2), got.code);
 
     const projects_root = try ws.projectsRoot(arena);
     const content_escape = try std.fs.path.join(arena, &.{ projects_root, "..", "escape" });
@@ -289,7 +285,8 @@ test "run: a control-char name is rejected before anything is created" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testing.expectError(error.UsageError, testutil.runCmd(arena, command.run, ws, &.{"acme/wi\x01dget"}));
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/wi\x01dget"});
+    try testing.expectEqual(@as(u8, 2), got.code);
 
     const org_dir = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
     try testing.expect(!fsutil.exists(org_dir));

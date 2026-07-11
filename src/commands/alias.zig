@@ -4,9 +4,8 @@
 //! returns. Either way the hub is reconciled so the on-disk symlink follows.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const marker = @import("../marker.zig");
 const projectlock = @import("../projectlock.zig");
@@ -16,16 +15,17 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project owning the repo" }),
-    repo: args.Pos([]const u8, .{ .complete = comp.cat(.repo), .help = "the member repo to alias" }),
-    name: args.Pos(?[]const u8, .{ .help = "the hub link name (omit to clear the alias)" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project owning the repo" }),
+    repo: cli.spec.Pos([]const u8, .{ .complete = app.cat(.repo), .help = "the member repo to alias" }),
+    name: cli.spec.Pos([]const u8, .{ .optional = true, .help = "the hub link name (omit to clear the alias)" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "alias",
-    .about = "Name the hub link a repo browses under (omit the name to clear)",
+    .summary = "Name the hub link a repo browses under (omit the name to clear)",
     .usage = "holt alias <project> <repo> [name]",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\Sets the hub link name for a member repo, overriding the derived
     \\name. Omit <name> to clear the alias and revert to the derived name.
@@ -64,12 +64,12 @@ fn hasDuplicateRel(links: []const hub.Link) bool {
     return false;
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
     const repo_name = a.repo;
     const new_name = a.name;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     var p = (try common.resolveOne(ctx, project_query)) orelse return 1;
@@ -81,24 +81,24 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 
     if (!p.marker.repos.contains(repo_name)) {
-        try ctx.err_w.print("holt: \"{s}\" is not a member of {s}/{s}\n", .{ repo_name, p.org, p.name });
+        try ctx.err.print("holt: \"{s}\" is not a member of {s}/{s}\n", .{ repo_name, p.org, p.name });
         return 1;
     }
 
     if (new_name) |name| {
         if (!isValidLinkName(name)) {
-            try ctx.err_w.print("holt: \"{s}\" is not a valid link name (must be a single path segment)\n", .{name});
+            try ctx.err.print("holt: \"{s}\" is not a valid link name (must be a single path segment)\n", .{name});
             return 1;
         }
         if (isReserved(name)) {
-            try ctx.err_w.print("holt: \"{s}\" is a reserved hub link name\n", .{name});
+            try ctx.err.print("holt: \"{s}\" is a reserved hub link name\n", .{name});
             return 1;
         }
 
         try p.marker.aliases.put(alloc, repo_name, name);
         const links = try hub.desiredLinks(alloc, &ws, &p);
         if (hasDuplicateRel(links)) {
-            try ctx.err_w.print("holt: alias \"{s}\" collides with another hub link in {s}/{s}\n", .{ name, p.org, p.name });
+            try ctx.err.print("holt: alias \"{s}\" collides with another hub link in {s}/{s}\n", .{ name, p.org, p.name });
             return 1;
         }
 

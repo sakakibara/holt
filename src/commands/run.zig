@@ -15,9 +15,8 @@
 //! command's own exit code once every repo has been attempted.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const proc = @import("../proc.zig");
 const fsutil = @import("../fsutil.zig");
@@ -28,19 +27,20 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    org: args.Opt([]const u8, .{ .value_name = "org", .complete = comp.cat(.org), .help = "run in every member repo of every project in this org" }),
-    repo: args.Opt([]const u8, .{ .value_name = "repo", .complete = comp.cat(.repo), .help = "run in only this member repo (single-project form only)" }),
-    jobs: args.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "run in up to N repos concurrently (default 1: serial, streaming live)" }),
-    all: args.Flag(.{ .help = "run in every member repo of every project in the workspace" }),
-    project: args.Pos(?[]const u8, .{ .complete = comp.cat(.project), .help = "the project whose member repos to run in" }),
-    cmd: args.Rest(.{ .help = "the command to run in each repo (after --)" }),
+    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "run in every member repo of every project in this org" }),
+    repo: cli.spec.Opt([]const u8, .{ .value_name = "repo", .complete = app.cat(.repo), .help = "run in only this member repo (single-project form only)" }),
+    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "run in up to N repos concurrently (default 1: serial, streaming live)" }),
+    all: cli.spec.Flag(.{ .help = "run in every member repo of every project in the workspace" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .optional = true, .help = "the project whose member repos to run in" }),
+    cmd: cli.spec.Rest(.{ .help = "the command to run in each repo (after --)" }),
 };
 
-pub const command = args.command(Spec, .{
+const about: app.About = .{
     .name = "run",
-    .about = "Run a command in each member repo's clone",
+    .summary = "Run a command in each member repo's clone",
     .usage = "holt run (<project> | --org <org> | --all) [--repo <repo>] -- <cmd...>",
     .group = .maintain,
+    .needs_context = true,
     .details =
     \\Exactly one of <project>, --org, or --all must be given. A repo shared
     \\across projects is one physical clone; the command runs there once,
@@ -53,23 +53,68 @@ pub const command = args.command(Spec, .{
     \\  holt run --org acme -- git pull
     \\  holt run --all -- git fetch
     ,
-}, run);
+};
+
+/// `command` is built via `app.command` (for its comptime-derived
+/// `.flags`/`.args` metadata, which drives `--help` and shell completion),
+/// then its `.run` is replaced with `runTrampoline`: cli-zig's `parseInto`
+/// resolves a starved positional (a `project` typed only when neither --org
+/// nor --all is given) by dipping into the tokens after a literal "--" when
+/// none precede it - by design, so a Spec pairing an optional positional
+/// with a `Rest` tail can still fill the positional from "-- <name> ...".
+/// `run`'s own "--" always introduces the child command, never a value for
+/// `project`, so that dip would silently steal the first word of the
+/// command being run. `runTrampoline` avoids it by parsing only the slice
+/// before "--" (which never has a "--" of its own, so the dip's precondition
+/// never holds) and patching the real tail into `.cmd` afterward.
+pub const command = blk: {
+    var c = app.command(Spec, about, run);
+    c.run = &runTrampoline;
+    break :blk c;
+};
+
+fn noEnv(_: []const u8) ?[]const u8 {
+    return null;
+}
+
+fn runTrampoline(ctx: *app.Ctx) anyerror!u8 {
+    var arena_state = std.heap.ArenaAllocator.init(ctx.alloc);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var dashdash: ?usize = null;
+    for (ctx.argv, 0..) |tok, i| {
+        if (std.mem.eql(u8, tok, "--")) {
+            dashdash = i;
+            break;
+        }
+    }
+    const head = if (dashdash) |i| ctx.argv[0..i] else ctx.argv;
+    const tail: []const []const u8 = if (dashdash) |i| ctx.argv[i + 1 ..] else &.{};
+
+    var diag = cli.args.Diagnostic{};
+    var parsed = cli.args.parseInto(Spec, arena, head, .{ .env_get = noEnv, .config_get = null }, &diag) catch |e| switch (e) {
+        error.OutOfMemory => return e,
+        error.UsageError => return app.usageError(ctx, "{s}", .{diag.message}),
+    };
+    parsed.cmd = tail;
+
+    return run(ctx, parsed);
+}
 
 const Target = struct {
     header: []const u8,
     clone_path: []const u8,
 };
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const cmd = a.cmd;
     if (cmd.len == 0) {
-        ctx.args.message = "missing command after --";
-        return error.UsageError;
+        return app.usageError(ctx, "missing command after --", .{});
     }
     if (a.jobs) |n| {
         if (n == 0) {
-            ctx.args.message = "-j/--jobs must be at least 1";
-            return error.UsageError;
+            return app.usageError(ctx, "-j/--jobs must be at least 1", .{});
         }
     }
 
@@ -83,15 +128,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         (if (org_filter != null) @as(u8, 1) else 0) +
         (if (all_flag) @as(u8, 1) else 0);
     if (selector_count != 1) {
-        ctx.args.message = "specify exactly one of <project>, --org <org>, or --all";
-        return error.UsageError;
+        return app.usageError(ctx, "specify exactly one of <project>, --org <org>, or --all", .{});
     }
     if (repo_filter != null and (org_filter != null or all_flag)) {
-        ctx.args.message = "--repo cannot be combined with --org or --all";
-        return error.UsageError;
+        return app.usageError(ctx, "--repo cannot be combined with --org or --all", .{});
     }
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     if (project_query) |query| {
@@ -110,12 +153,12 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     return runAcrossProjects(ctx, ws, alloc, projects, cmd, jobs);
 }
 
-fn runSingleProject(ctx: *cli.Ctx, ws: workspace.Workspace, alloc: std.mem.Allocator, query: []const u8, repo_filter: ?[]const u8, cmd: []const []const u8, jobs: ?usize) anyerror!u8 {
+fn runSingleProject(ctx: *app.Ctx, ws: workspace.Workspace, alloc: std.mem.Allocator, query: []const u8, repo_filter: ?[]const u8, cmd: []const []const u8, jobs: ?usize) anyerror!u8 {
     const p = (try common.resolveOne(ctx, query)) orelse return 1;
 
     if (p.marker.repos.keys().len == 0) {
         const qualified = try p.qualified(alloc);
-        try ctx.err_w.print("{s} has no member repos\n", .{qualified});
+        try ctx.err.print("{s} has no member repos\n", .{qualified});
         return 0;
     }
 
@@ -123,7 +166,7 @@ fn runSingleProject(ctx: *cli.Ctx, ws: workspace.Workspace, alloc: std.mem.Alloc
     if (repo_filter) |name| {
         if (!p.marker.repos.contains(name)) {
             const qualified = try p.qualified(alloc);
-            try ctx.err_w.print("holt: {s} has no member repo named \"{s}\"\n", .{ qualified, name });
+            try ctx.err.print("holt: {s} has no member repo named \"{s}\"\n", .{ qualified, name });
             return 1;
         }
         const one = try alloc.alloc([]const u8, 1);
@@ -144,7 +187,7 @@ fn runSingleProject(ctx: *cli.Ctx, ws: workspace.Workspace, alloc: std.mem.Alloc
 /// Collects the unique real clone paths across every member repo of every
 /// project in `projects`, so a repo shared by more than one project runs the
 /// command exactly once rather than once per project that references it.
-fn runAcrossProjects(ctx: *cli.Ctx, ws: workspace.Workspace, alloc: std.mem.Allocator, projects: []const project_mod.Project, cmd: []const []const u8, jobs: ?usize) anyerror!u8 {
+fn runAcrossProjects(ctx: *app.Ctx, ws: workspace.Workspace, alloc: std.mem.Allocator, projects: []const project_mod.Project, cmd: []const []const u8, jobs: ?usize) anyerror!u8 {
     var seen: std.StringHashMapUnmanaged(void) = .empty;
     var targets: std.ArrayList(Target) = .empty;
 
@@ -171,12 +214,12 @@ fn captureEnabled(alloc: std.mem.Allocator) !bool {
 /// `-j 1` (the default) runs serially and, unless HOLT_RUN_CAPTURE is set,
 /// lets each child stream live to the terminal; `-j N>1` runs up to N children
 /// concurrently with captured output, replayed per repo in input order.
-fn runTargets(ctx: *cli.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, targets: []const Target, jobs: ?usize) anyerror!u8 {
+fn runTargets(ctx: *app.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, targets: []const Target, jobs: ?usize) anyerror!u8 {
     if ((jobs orelse 1) > 1) return runParallel(ctx, alloc, cmd, targets, jobs);
     return runSerial(ctx, alloc, cmd, targets);
 }
 
-fn runSerial(ctx: *cli.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, targets: []const Target) anyerror!u8 {
+fn runSerial(ctx: *app.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, targets: []const Target) anyerror!u8 {
     const capture = try captureEnabled(alloc);
 
     var any_failed = false;
@@ -197,7 +240,7 @@ fn runSerial(ctx: *cli.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, t
             proc.spawnInherited(alloc, cmd, t.clone_path);
         const status = spawn_result catch |err| {
             if (err == error.FileNotFound) {
-                try ctx.err_w.print("holt: command \"{s}\" not found\n", .{cmd[0]});
+                try ctx.err.print("holt: command \"{s}\" not found\n", .{cmd[0]});
                 return 1;
             }
             return err;
@@ -240,7 +283,7 @@ fn runTask(cmd: []const []const u8, arena: std.mem.Allocator, clone_path: []cons
 /// regardless of completion order). Aggregate exit is nonzero if any child
 /// failed; a missing command is reported once by name, mirroring the serial
 /// path.
-fn runParallel(ctx: *cli.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, targets: []const Target, jobs: ?usize) anyerror!u8 {
+fn runParallel(ctx: *app.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, targets: []const Target, jobs: ?usize) anyerror!u8 {
     const items = try alloc.alloc([]const u8, targets.len);
     for (targets, items) |t, *it| it.* = t.clone_path;
 
@@ -250,7 +293,7 @@ fn runParallel(ctx: *cli.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8,
 
     for (results) |res| {
         if ((try res).not_found) {
-            try ctx.err_w.print("holt: command \"{s}\" not found\n", .{cmd[0]});
+            try ctx.err.print("holt: command \"{s}\" not found\n", .{cmd[0]});
             return 1;
         }
     }
@@ -276,7 +319,7 @@ fn runParallel(ctx: *cli.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8,
 /// Spawns `argv` with piped stdout/stderr, writing the captured output to
 /// `ctx.out` once the child exits. Test-only path: inheriting the test
 /// runner's own stdio would corrupt its `--listen` IPC on fd 1.
-fn runCaptured(ctx: *cli.Ctx, alloc: std.mem.Allocator, argv: []const []const u8, cwd: []const u8) !u8 {
+fn runCaptured(ctx: *app.Ctx, alloc: std.mem.Allocator, argv: []const []const u8, cwd: []const u8) !u8 {
     const res = try proc.run(alloc, argv, cwd);
     try ctx.out.writeAll(res.stdout);
     try ctx.out.writeAll(res.stderr);
@@ -463,11 +506,8 @@ test "run: missing -- separator is a usage error" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var cli_args = try cli.Args.init(arena, &.{"proj"});
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-    try testing.expectError(error.UsageError, command.run(&ctx));
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 2), got.code);
 }
 
 test "run: no matching project exits 1 and reports on stderr" {
@@ -674,12 +714,9 @@ test "run: --repo combined with --org is a usage error" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var cli_args = try cli.Args.init(arena, &.{ "--org", "acme", "--repo", "repo-a", "--", "echo", "hi" });
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-    try testing.expectError(error.UsageError, command.run(&ctx));
-    try testing.expect(std.mem.indexOf(u8, cli_args.message, "--repo") != null);
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "--org", "acme", "--repo", "repo-a", "--", "echo", "hi" });
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "--repo") != null);
 }
 
 test "run: no target selector (no project, --org, or --all) is a usage error" {
@@ -693,12 +730,9 @@ test "run: no target selector (no project, --org, or --all) is a usage error" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var cli_args = try cli.Args.init(arena, &.{ "--", "echo", "hi" });
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-    try testing.expectError(error.UsageError, command.run(&ctx));
-    try testing.expect(std.mem.indexOf(u8, cli_args.message, "exactly one") != null);
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "--", "echo", "hi" });
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "exactly one") != null);
 }
 
 test "run: -j 4 runs the command in every repo, one failing child yields aggregate exit 1" {

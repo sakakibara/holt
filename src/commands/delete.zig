@@ -6,9 +6,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const hub = @import("../hub.zig");
 const ui = @import("../ui.zig");
@@ -19,15 +18,16 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to delete" }),
-    yes: args.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to delete" }),
+    yes: cli.spec.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "delete",
-    .about = "Delete a project's content and hub (clones are kept)",
+    .summary = "Delete a project's content and hub (clones are kept)",
     .usage = "holt delete <project> [--yes]",
     .group = .system,
+    .needs_context = true,
     .details =
     \\Danger: permanently deletes the project's content dir and hub. Clones
     \\under Code/ are always kept; requires typed confirmation unless --yes.
@@ -37,11 +37,11 @@ pub const command = args.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
     const yes = a.yes;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const p = (try common.resolveOne(ctx, project_query)) orelse return 1;
@@ -68,7 +68,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     var failed_path: []const u8 = p.content_path;
     removeContentMarkerLast(alloc, p.content_path, &failed_path) catch |err| {
-        try ctx.err_w.print("holt: failed to delete {s}: {s} (run \"holt delete {s}\" again)\n", .{ failed_path, @errorName(err), qualified });
+        try ctx.err.print("holt: failed to delete {s}: {s} (run \"holt delete {s}\" again)\n", .{ failed_path, @errorName(err), qualified });
         return 1;
     };
 

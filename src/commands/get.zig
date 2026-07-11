@@ -5,8 +5,8 @@
 //! `local:<name>` argument is rejected - `get` takes a real remote URL.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const identity = @import("../identity.zig");
 const git = @import("../git.zig");
@@ -15,13 +15,13 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    url: args.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
-    update: args.Flag(.{ .short = 'u', .help = "fast-forward an existing clone instead of re-cloning" }),
+    url: cli.spec.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
+    update: cli.spec.Flag(.{ .short = 'u', .help = "fast-forward an existing clone instead of re-cloning" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "get",
-    .about = "Clone a repo standalone into the code tree",
+    .summary = "Clone a repo standalone into the code tree",
     .usage = "holt get <url> [--update]",
     .group = .create,
     .details =
@@ -36,18 +36,18 @@ pub const command = args.command(Spec, .{
     \\Example:
     \\  holt get https://github.com/acme/widget.git
     ,
-    .needs_workspace = true,
+    .needs_context = true,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const raw = a.url;
     const update = a.update;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     if (std.mem.startsWith(u8, raw, "local:")) {
-        try ctx.err_w.print("holt: \"{s}\" is a local repo; use `holt adopt` to bring it into a project\n", .{raw});
+        try ctx.err.print("holt: \"{s}\" is a local repo; use `holt adopt` to bring it into a project\n", .{raw});
         return 1;
     }
 
@@ -55,14 +55,14 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     // not `get` (which clones a remote). Redirect rather than mis-parse it.
     const maybe_local = try fsutil.toAbsolute(alloc, raw);
     if (fsutil.exists(maybe_local) and try git.inspectable(alloc, maybe_local)) {
-        try ctx.err_w.print("holt: {s} is a local checkout; use \"holt adopt {s}\" to ingest it standalone\n", .{ raw, raw });
+        try ctx.err.print("holt: {s} is a local checkout; use \"holt adopt {s}\" to ingest it standalone\n", .{ raw, raw });
         return 1;
     }
 
     // Expand "owner/repo" / "host/owner/repo" shorthand to a real clone URL.
     const url = identity.expand(alloc, raw) catch |err| switch (err) {
         error.UnrecognizedUrl => {
-            try ctx.err_w.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
+            try ctx.err.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
             return 1;
         },
         else => return err,
@@ -70,7 +70,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     const id = identity.fromUrl(alloc, url) catch |err| switch (err) {
         error.UnrecognizedUrl => {
-            try ctx.err_w.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
+            try ctx.err.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
             return 1;
         },
         else => return err,
@@ -82,23 +82,23 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         // Guard the "already present" fast path against an interrupted clone:
         // a `.git` with no commits is not a usable clone to report or update.
         if (!try git.isCompleteClone(alloc, clone_path)) {
-            try ctx.err_w.print("holt: clone at {s} looks incomplete (an interrupted clone?); remove it and retry\n", .{clone_path});
+            try ctx.err.print("holt: clone at {s} looks incomplete (an interrupted clone?); remove it and retry\n", .{clone_path});
             return 1;
         }
         if (!update) {
             try ctx.out.print("{s}\n", .{clone_path});
-            try ctx.err_w.print("already present\n", .{});
+            try ctx.err.print("already present\n", .{});
             return 0;
         }
         const res = try git.run(alloc, &.{ "git", "-C", clone_path, "pull", "--ff-only" }, null);
         if (res.status != 0) {
             const trimmed = std.mem.trim(u8, res.stderr, " \t\r\n");
             const cause = if (trimmed.len == 0) "git pull failed" else trimmed;
-            try ctx.err_w.print("holt: failed to update {s}: {s}\n", .{ clone_path, cause });
+            try ctx.err.print("holt: failed to update {s}: {s}\n", .{ clone_path, cause });
             return 1;
         }
         try ctx.out.print("{s}\n", .{clone_path});
-        try ctx.err_w.print("updated\n", .{});
+        try ctx.err.print("updated\n", .{});
         return 0;
     }
 

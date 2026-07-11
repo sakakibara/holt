@@ -6,9 +6,8 @@
 //! member. The repo is left commitless (plain `git init`); its path is printed.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const project_mod = @import("../project.zig");
 const identity = @import("../identity.zig");
@@ -21,13 +20,13 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    spec: args.Pos([]const u8, .{ .help = "a name for a local repo, or a git url / owner/repo shorthand for a remote-destined one" }),
-    project: args.Opt([]const u8, .{ .short = 'p', .value_name = "project", .complete = comp.cat(.project), .help = "attach the new repo as a member of this project" }),
+    spec: cli.spec.Pos([]const u8, .{ .help = "a name for a local repo, or a git url / owner/repo shorthand for a remote-destined one" }),
+    project: cli.spec.Opt([]const u8, .{ .short = 'p', .value_name = "project", .complete = app.cat(.project), .help = "attach the new repo as a member of this project" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "create",
-    .about = "Create a git repo from scratch",
+    .summary = "Create a git repo from scratch",
     .usage = "holt create <spec> [-p <project>]",
     .group = .create,
     .details =
@@ -42,7 +41,7 @@ pub const command = args.command(Spec, .{
     \\  holt create acme/widget
     \\  holt create tool -p myproject
     ,
-    .needs_workspace = true,
+    .needs_context = true,
 }, run);
 
 /// Classifies <spec>: a recognized url/shorthand yields its identity and the
@@ -66,13 +65,13 @@ fn isSafeLocalName(name: []const u8) bool {
     return true;
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
-    const ws = ctx.ws.?;
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     const target = classify(alloc, a.spec) catch |err| switch (err) {
         error.UnrecognizedUrl => {
-            try ctx.err_w.print("holt: \"{s}\" is not a valid repo url\n", .{a.spec});
+            try ctx.err.print("holt: \"{s}\" is not a valid repo url\n", .{a.spec});
             return 1;
         },
         else => return err,
@@ -81,13 +80,13 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     if (target.id.isLocal()) {
         if (!isSafeLocalName(a.spec)) {
-            try ctx.err_w.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
+            try ctx.err.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
             return 1;
         }
     }
 
     if (fsutil.exists(clone_path)) {
-        try ctx.err_w.print("holt: {s} already exists; use `holt adopt` to register an existing clone\n", .{clone_path});
+        try ctx.err.print("holt: {s} already exists; use `holt adopt` to register an existing clone\n", .{clone_path});
         return 1;
     }
 
@@ -101,7 +100,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const res = try git.run(alloc, &.{ "git", "init", "-q", "-b", "main", clone_path }, null);
     if (res.status != 0) {
         const cause = std.mem.trim(u8, res.stderr, " \t\r\n");
-        try ctx.err_w.print("holt: git init failed at {s}: {s}\n", .{ clone_path, cause });
+        try ctx.err.print("holt: git init failed at {s}: {s}\n", .{ clone_path, cause });
         return 1;
     }
 
@@ -109,7 +108,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         const rr = try git.run(alloc, &.{ "git", "-C", clone_path, "remote", "add", "origin", origin }, null);
         if (rr.status != 0) {
             const cause = std.mem.trim(u8, rr.stderr, " \t\r\n");
-            try ctx.err_w.print("holt: failed to set origin on {s}: {s}\n", .{ clone_path, cause });
+            try ctx.err.print("holt: failed to set origin on {s}: {s}\n", .{ clone_path, cause });
             return 1;
         }
     }
@@ -130,7 +129,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     }
 
     try ctx.out.print("{s}\n", .{clone_path});
-    try ctx.err_w.print("created {s}\n", .{try fsutil.contractTilde(alloc, clone_path)});
+    try ctx.err.print("created {s}\n", .{try fsutil.contractTilde(alloc, clone_path)});
     return 0;
 }
 

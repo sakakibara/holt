@@ -6,9 +6,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const config = @import("../config.zig");
 const ui = @import("../ui.zig");
 const fsutil = @import("../fsutil.zig");
@@ -16,16 +15,16 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    backend: args.Opt([]const u8, .{ .value_name = "name", .complete = comp.cat(.backend_seed), .help = "activate a seeded preset (e.g. dropbox, icloud)" }),
-    synced_root: args.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "use this path directly instead of a preset" }),
-    code_root: args.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Code" }),
-    hub_root: args.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Projects" }),
-    force: args.Flag(.{ .help = "overwrite an existing config file" }),
+    backend: cli.spec.Opt([]const u8, .{ .value_name = "name", .complete = app.cat(.backend_seed), .help = "activate a seeded preset (e.g. dropbox, icloud)" }),
+    synced_root: cli.spec.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "use this path directly instead of a preset" }),
+    code_root: cli.spec.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Code" }),
+    hub_root: cli.spec.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Projects" }),
+    force: cli.spec.Flag(.{ .help = "overwrite an existing config file" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "setup",
-    .about = "Create config.toml, picking or seeding a synced-storage backend",
+    .summary = "Create config.toml, picking or seeding a synced-storage backend",
     .usage = "holt setup [--backend <name>|--synced-root <path>] [--code-root <path>] [--hub-root <path>] [--force]",
     .group = .system,
     .exclusive = &.{&.{ "backend", "synced_root" }},
@@ -36,13 +35,13 @@ pub const command = args.command(Spec, .{
     \\Example:
     \\  holt setup --backend dropbox
     ,
-    .needs_workspace = false,
+    .needs_context = false,
 }, run);
 
 const default_code_root = "~/Code";
 const default_hub_root = "~/Projects";
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const backend_opt = a.backend;
     const synced_root_opt = a.synced_root;
     const code_root_opt = a.code_root;
@@ -53,7 +52,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const path = try config.configPath(alloc);
 
     if (fsutil.exists(path) and !force) {
-        try ctx.err_w.print("holt: config already exists at {s} (use --force to overwrite)\n", .{path});
+        try ctx.err.print("holt: config already exists at {s} (use --force to overwrite)\n", .{path});
         return 1;
     }
 
@@ -69,20 +68,20 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     const stdin_is_tty = std.Io.File.stdin().isTty(fsutil.io()) catch false;
     if (!stdin_is_tty) {
-        try ctx.err_w.writeAll("holt: no backend or synced_root given and no terminal to ask; pass --backend <name> or --synced-root <path>\n");
+        try ctx.err.writeAll("holt: no backend or synced_root given and no terminal to ask; pass --backend <name> or --synced-root <path>\n");
         return 1;
     }
 
     return runInteractive(ctx, path, code_root_opt, hub_root_opt);
 }
 
-fn writeConfig(ctx: *cli.Ctx, path: []const u8, active: ?[]const u8, direct_root: ?[]const u8, code_root: []const u8, hub_root: []const u8) !u8 {
+fn writeConfig(ctx: *app.Ctx, path: []const u8, active: ?[]const u8, direct_root: ?[]const u8, code_root: []const u8, hub_root: []const u8) !u8 {
     const alloc = ctx.alloc;
     const body = try config.renderConfig(alloc, active, direct_root, code_root, hub_root);
 
     writeBody(alloc, path, body) catch |err| switch (err) {
         error.AccessDenied => {
-            try ctx.err_w.print("holt: cannot write config to {s}: permission denied (is the directory writable?)\n", .{path});
+            try ctx.err.print("holt: cannot write config to {s}: permission denied (is the directory writable?)\n", .{path});
             return 1;
         },
         else => return err,
@@ -97,13 +96,13 @@ fn writeBody(alloc: std.mem.Allocator, path: []const u8, body: []const u8) !void
     try fsutil.writeFileAtomic(alloc, path, body);
 }
 
-/// Warns (never fails) on ctx.err_w when `raw_root` is set but does not yet
+/// Warns (never fails) on ctx.err when `raw_root` is set but does not yet
 /// resolve to something on disk - a not-yet-mounted cloud is a normal case,
 /// not an error.
-fn warnIfMissing(ctx: *cli.Ctx, raw_root: []const u8) !void {
+fn warnIfMissing(ctx: *app.Ctx, raw_root: []const u8) !void {
     const expanded = try fsutil.expandTilde(ctx.alloc, raw_root);
     if (!fsutil.exists(expanded)) {
-        try ctx.err_w.print("holt: warning: {s} does not exist yet\n", .{expanded});
+        try ctx.err.print("holt: warning: {s} does not exist yet\n", .{expanded});
     }
 }
 
@@ -113,7 +112,7 @@ fn warnIfMissing(ctx: *cli.Ctx, raw_root: []const u8) !void {
 /// has no way to carry a custom path under a preset name, so an edited
 /// reply falls back to a plain synced_root rather than silently discarding
 /// the user's edit).
-fn runInteractive(ctx: *cli.Ctx, path: []const u8, code_root_opt: ?[]const u8, hub_root_opt: ?[]const u8) !u8 {
+fn runInteractive(ctx: *app.Ctx, path: []const u8, code_root_opt: ?[]const u8, hub_root_opt: ?[]const u8) !u8 {
     const alloc = ctx.alloc;
     const w = ctx.out;
 
@@ -146,12 +145,12 @@ fn runInteractive(ctx: *cli.Ctx, path: []const u8, code_root_opt: ?[]const u8, h
     } else if (choice == custom_choice) {
         const reply = try ui.prompt(alloc, w, "synced_root:");
         if (reply.len == 0) {
-            try ctx.err_w.writeAll("holt: a synced_root is required\n");
+            try ctx.err.writeAll("holt: a synced_root is required\n");
             return 1;
         }
         direct_root = reply;
     } else {
-        try ctx.err_w.print("holt: \"{s}\" is not a valid choice\n", .{choice_line});
+        try ctx.err.print("holt: \"{s}\" is not a valid choice\n", .{choice_line});
         return 1;
     }
 
@@ -267,13 +266,9 @@ test "run: --backend and --synced-root together is a usage error" {
     const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
     defer override.restore();
 
-    var cli_args = try cli.Args.init(arena, &.{ "--backend", "dropbox", "--synced-root", "~/x" });
-    var out: std.Io.Writer.Allocating = .init(arena);
-    var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = null, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-
-    try testing.expectError(error.UsageError, command.run(&ctx));
-    try testing.expect(std.mem.indexOf(u8, cli_args.message, "mutually exclusive") != null);
+    const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox", "--synced-root", "~/x" });
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "mutually exclusive") != null);
 }
 
 test "run: a read-only config directory yields a permission-denied message, not a bare internal error" {

@@ -4,9 +4,8 @@
 //! local repos are adopted (via `holt adopt`), never created by `add`.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const common = @import("common.zig");
 const identity = @import("../identity.zig");
 const marker = @import("../marker.zig");
@@ -18,26 +17,27 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: args.Pos([]const u8, .{ .complete = comp.cat(.project), .help = "the project to add the repo to" }),
-    url: args.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to add the repo to" }),
+    url: cli.spec.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "add",
-    .about = "Add a repo to a project, cloning it if not already present",
+    .summary = "Add a repo to a project, cloning it if not already present",
     .usage = "holt add <project> <url>",
     .group = .create,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt add myproj https://github.com/acme/widget.git
     ,
 }, run);
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
     const raw = a.url;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     var p = (try common.resolveOne(ctx, project_query)) orelse return 1;
@@ -51,7 +51,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 
     if (std.mem.startsWith(u8, raw, "local:")) {
-        try ctx.err_w.print("holt: \"{s}\" is a local repo; local repos are adopted, not created - use `holt adopt` instead\n", .{raw});
+        try ctx.err.print("holt: \"{s}\" is a local repo; local repos are adopted, not created - use `holt adopt` instead\n", .{raw});
         return 1;
     }
 
@@ -59,7 +59,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     // clone succeeds and the marker records a URL a later restore can re-clone.
     const url = identity.expand(alloc, raw) catch |err| switch (err) {
         error.UnrecognizedUrl => {
-            try ctx.err_w.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
+            try ctx.err.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
             return 1;
         },
         else => return err,
@@ -67,14 +67,14 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 
     const id = identity.fromUrl(alloc, url) catch |err| switch (err) {
         error.UnrecognizedUrl => {
-            try ctx.err_w.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
+            try ctx.err.print("holt: \"{s}\" is not a recognized git url\n", .{raw});
             return 1;
         },
         else => return err,
     };
 
     if (p.marker.repos.contains(id.repo)) {
-        try ctx.err_w.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });
+        try ctx.err.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });
         return 1;
     }
 

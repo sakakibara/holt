@@ -4,9 +4,8 @@
 //! `git` call. `--dirty` narrows the output to only repos with findings.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
 const common = @import("common.zig");
@@ -56,18 +55,19 @@ const Spec = struct {
     // org/jobs are options and must be parsed before the positional below: a
     // bare positional scan would otherwise mistake either's value token for
     // the project query.
-    org: args.Opt([]const u8, .{ .value_name = "org", .complete = comp.cat(.org), .help = "with no <project> given, only show projects in this org" }),
-    jobs: args.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "probe up to N repos concurrently (default: auto; 1 = serial)" }),
-    project: args.Pos(?[]const u8, .{ .complete = comp.cat(.project), .help = "only show this project's member repos" }),
-    dirty: args.Flag(.{ .help = "only show repos with a finding (dirty, unpushed, missing)" }),
-    json: args.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --dirty)" }),
+    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "with no <project> given, only show projects in this org" }),
+    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "probe up to N repos concurrently (default: auto; 1 = serial)" }),
+    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .optional = true, .help = "only show this project's member repos" }),
+    dirty: cli.spec.Flag(.{ .help = "only show repos with a finding (dirty, unpushed, missing)" }),
+    json: cli.spec.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --dirty)" }),
 };
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "status",
-    .about = "Show git status across a project's (or every project's) member repos",
+    .summary = "Show git status across a project's (or every project's) member repos",
     .usage = "holt status [<project>] [--dirty] [--org <org>] [--json]",
     .group = .inspect,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt status myproj --dirty
@@ -138,11 +138,10 @@ fn probeTargets(alloc: std.mem.Allocator, ws: *const workspace.Workspace, target
     return .{ .repo_names = repo_names, .bounds = bounds, .results = results, .arenas = arenas };
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     if (a.jobs) |n| {
         if (n == 0) {
-            ctx.args.message = "-j/--jobs must be at least 1";
-            return error.UsageError;
+            return app.usageError(ctx, "-j/--jobs must be at least 1", .{});
         }
     }
     const org_filter = a.org;
@@ -151,7 +150,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     const dirty_only = a.dirty;
     const json_flag = a.json;
 
-    const ws = ctx.ws.?;
+    const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
     if (json_flag) return runJson(ctx, &ws, org_filter, project_query, jobs);
@@ -160,7 +159,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
         const p = (try common.resolveOne(ctx, q)) orelse return 1;
         if (p.marker.repos.keys().len == 0 and (try localOnlyEntries(alloc, p)).len == 0) {
             const qualified = try p.qualified(alloc);
-            try ctx.err_w.print("{s} has no member repos\n", .{qualified});
+            try ctx.err.print("{s} has no member repos\n", .{qualified});
             return 0;
         }
         const one = try alloc.alloc(project_mod.Project, 1);
@@ -178,7 +177,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     }
 
     if (targets.len == 0) {
-        try ctx.err_w.writeAll("no projects yet - create one with \"holt new <org>/<name>\"\n");
+        try ctx.err.writeAll("no projects yet - create one with \"holt new <org>/<name>\"\n");
         return 0;
     }
 
@@ -190,7 +189,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
 /// dirty/unpushed findings into one of clean|dirty|unpushed|no-upstream|
 /// missing|unreadable, in that precedence when more than one applies. Never
 /// prints the human empty-state message - an empty result is `[]`.
-fn runJson(ctx: *cli.Ctx, ws: *const workspace.Workspace, org_filter: ?[]const u8, project_query: ?[]const u8, jobs: ?usize) anyerror!u8 {
+fn runJson(ctx: *app.Ctx, ws: *const workspace.Workspace, org_filter: ?[]const u8, project_query: ?[]const u8, jobs: ?usize) anyerror!u8 {
     const alloc = ctx.alloc;
 
     var targets: []const project_mod.Project = undefined;
@@ -263,13 +262,13 @@ fn runJson(ctx: *cli.Ctx, ws: *const workspace.Workspace, org_filter: ?[]const u
 
 /// Renders one line for `repo_name` in `st`, honoring `dirty_only`; null when
 /// the repo has no finding and `dirty_only` is set. Owned by `alloc`.
-fn formatLine(ctx: *cli.Ctx, alloc: std.mem.Allocator, repo_name: []const u8, st: RepoState, dirty_only: bool) !?[]const u8 {
+fn formatLine(ctx: *app.Ctx, alloc: std.mem.Allocator, repo_name: []const u8, st: RepoState, dirty_only: bool) !?[]const u8 {
     switch (st.kind) {
         .missing => {
             if (dirty_only) return null;
             var aw: std.Io.Writer.Allocating = .init(alloc);
             try aw.writer.print("  {s}: ", .{repo_name});
-            try ui.color(ctx.color, &aw.writer, color_red, "missing");
+            try ui.color(ctx.context.?.color, &aw.writer, color_red, "missing");
             try aw.writer.writeByte('\n');
             return aw.written();
         },
@@ -277,7 +276,7 @@ fn formatLine(ctx: *cli.Ctx, alloc: std.mem.Allocator, repo_name: []const u8, st
             if (dirty_only) return null;
             var aw: std.Io.Writer.Allocating = .init(alloc);
             try aw.writer.print("  {s}: ", .{repo_name});
-            try ui.color(ctx.color, &aw.writer, color_red, "unreadable (not a git repository)");
+            try ui.color(ctx.context.?.color, &aw.writer, color_red, "unreadable (not a git repository)");
             try aw.writer.writeByte('\n');
             return aw.written();
         },
@@ -289,22 +288,22 @@ fn formatLine(ctx: *cli.Ctx, alloc: std.mem.Allocator, repo_name: []const u8, st
             try aw.writer.print("  {s}: branch={s}", .{ repo_name, st.branch orelse "(detached)" });
             if (st.dirty) {
                 try aw.writer.writeByte(' ');
-                try ui.color(ctx.color, &aw.writer, color_yellow, "dirty");
+                try ui.color(ctx.context.?.color, &aw.writer, color_yellow, "dirty");
             }
             switch (st.unpushed) {
                 .ahead => {
                     try aw.writer.writeByte(' ');
-                    try ui.color(ctx.color, &aw.writer, color_yellow, "unpushed");
+                    try ui.color(ctx.context.?.color, &aw.writer, color_yellow, "unpushed");
                 },
                 .no_upstream => {
                     try aw.writer.writeByte(' ');
-                    try ui.color(ctx.color, &aw.writer, color_yellow, "no-upstream");
+                    try ui.color(ctx.context.?.color, &aw.writer, color_yellow, "no-upstream");
                 },
                 .clean => {},
             }
             if (!has_finding) {
                 try aw.writer.writeByte(' ');
-                try ui.color(ctx.color, &aw.writer, color_green, "clean");
+                try ui.color(ctx.context.?.color, &aw.writer, color_green, "clean");
             }
             try aw.writer.writeByte('\n');
             return aw.written();
@@ -312,7 +311,7 @@ fn formatLine(ctx: *cli.Ctx, alloc: std.mem.Allocator, repo_name: []const u8, st
     }
 }
 
-fn report(ctx: *cli.Ctx, ws: *const workspace.Workspace, targets: []const project_mod.Project, dirty_only: bool, jobs: ?usize) !u8 {
+fn report(ctx: *app.Ctx, ws: *const workspace.Workspace, targets: []const project_mod.Project, dirty_only: bool, jobs: ?usize) !u8 {
     const alloc = ctx.alloc;
 
     var probed = try probeTargets(alloc, ws, targets, jobs);
@@ -651,10 +650,9 @@ test "run: colors the dirty/unpushed/missing/clean tokens when the destination i
     try fsutil.ensureDir(std.fs.path.dirname(clean_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, clean_path });
 
-    var cli_args = try cli.Args.init(arena, &.{"proj"});
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer, .color = true };
+    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = true }, .out = &out.writer, .err = &err_w.writer, .argv = &.{"proj"} };
     const code = try command.run(&ctx);
 
     try testing.expectEqual(@as(u8, 0), code);
@@ -877,17 +875,11 @@ test "jobsOption: -j 0 and a non-integer are usage errors" {
     const ws = try testutil.testWorkspace(arena, root);
 
     {
-        var cli_args = try cli.Args.init(arena, &.{ "-j", "0" });
-        var out: std.Io.Writer.Allocating = .init(arena);
-        var err_w: std.Io.Writer.Allocating = .init(arena);
-        var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-        try testing.expectError(error.UsageError, command.run(&ctx));
+        const got = try testutil.runCmd(arena, command.run, ws, &.{ "-j", "0" });
+        try testing.expectEqual(@as(u8, 2), got.code);
     }
     {
-        var cli_args = try cli.Args.init(arena, &.{ "--jobs", "abc" });
-        var out: std.Io.Writer.Allocating = .init(arena);
-        var err_w: std.Io.Writer.Allocating = .init(arena);
-        var ctx: cli.Ctx = .{ .alloc = arena, .ws = ws, .args = &cli_args, .out = &out.writer, .err_w = &err_w.writer };
-        try testing.expectError(error.UsageError, command.run(&ctx));
+        const got = try testutil.runCmd(arena, command.run, ws, &.{ "--jobs", "abc" });
+        try testing.expectEqual(@as(u8, 2), got.code);
     }
 }

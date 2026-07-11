@@ -1,9 +1,8 @@
 //! Enumerates every project in the workspace, one "org/name" per line.
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const args = @import("../args.zig");
-const comp = @import("../completion.zig");
+const cli = @import("cli");
+const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
 const fsutil = @import("../fsutil.zig");
@@ -12,10 +11,10 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    paths: args.Flag(.{ .help = "show each project's hub path instead of just its name" }),
-    org: args.Opt([]const u8, .{ .value_name = "org", .complete = comp.cat(.org), .help = "only list projects under this org" }),
-    json: args.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --paths)" }),
-    repos: args.Flag(.{ .help = "list every clone in the code tree instead of projects" }),
+    paths: cli.spec.Flag(.{ .help = "show each project's hub path instead of just its name" }),
+    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "only list projects under this org" }),
+    json: cli.spec.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --paths)" }),
+    repos: cli.spec.Flag(.{ .help = "list every clone in the code tree instead of projects" }),
 };
 
 /// A clone's code-tree key: its path relative to `code_root`, always
@@ -29,8 +28,8 @@ fn repoKey(alloc: std.mem.Allocator, code_root: []const u8, clone: []const u8) !
     return rel;
 }
 
-fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
-    const ws = ctx.ws.?;
+fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+    const ws = ctx.context.?.ws;
 
     if (a.repos) {
         const clones = try ws.listClones(ctx.alloc);
@@ -54,7 +53,7 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     if (json_flag) return runJson(ctx, all, org_filter);
 
     if (all.len == 0) {
-        try ctx.err_w.writeAll("no projects yet - create one with \"holt new <org>/<name>\"\n");
+        try ctx.err.writeAll("no projects yet - create one with \"holt new <org>/<name>\"\n");
         return 0;
     }
 
@@ -72,11 +71,12 @@ fn run(ctx: *cli.Ctx, a: args.Args(Spec)) anyerror!u8 {
     return 0;
 }
 
-pub const command = args.command(Spec, .{
+pub const command = app.command(Spec, .{
     .name = "list",
-    .about = "List every project in the workspace",
+    .summary = "List every project in the workspace",
     .usage = "holt list [--repos] [--paths] [--org <org>] [--json]",
     .group = .navigate,
+    .needs_context = true,
     .details =
     \\Example:
     \\  holt list --org acme --paths
@@ -86,7 +86,7 @@ pub const command = args.command(Spec, .{
 /// Emits `all` (after `org_filter`) as a compact JSON array, one object per
 /// project: org, name, hub_path, content_path, and its member repo names.
 /// Never prints the human empty-state message - an empty result is `[]`.
-fn runJson(ctx: *cli.Ctx, all: []const project_mod.Project, org_filter: ?[]const u8) anyerror!u8 {
+fn runJson(ctx: *app.Ctx, all: []const project_mod.Project, org_filter: ?[]const u8) anyerror!u8 {
     const alloc = ctx.alloc;
     var items: std.ArrayList(json.Value) = .empty;
 
