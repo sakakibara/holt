@@ -12,6 +12,10 @@
             .url = "https://github.com/sakakibara/toml-zig/archive/refs/tags/v0.4.0.tar.gz",
             .hash = "toml-0.4.0-L7MJe5qrCgCF-2BmK9hpRu9Kb1qPPHllZo7xY67iJVQg",
         },
+        .cli = .{
+            .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "cli-0.1.0-xmo039kgBAC8i-FbQUyGzh7WjSn2jGL1O4CEfz6Ro72S",
+        },
     },
     .paths = .{
         "build.zig",
