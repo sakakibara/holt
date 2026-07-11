@@ -5,7 +5,6 @@
 //! can reach `src/`'s internals without main.zig itself exposing them.
 pub const fsutil = @import("fsutil.zig");
 pub const workspace = @import("workspace.zig");
-pub const completion = @import("completion.zig");
 pub const testutil = @import("testutil.zig");
 pub const marker = @import("marker.zig");
 pub const app_main = @import("main.zig");

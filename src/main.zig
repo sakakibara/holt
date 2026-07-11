@@ -67,8 +67,6 @@ test {
     _ = @import("hub.zig");
     _ = @import("doctor.zig");
     _ = @import("testutil.zig");
-    _ = @import("cli.zig");
-    _ = @import("args.zig");
     _ = @import("app.zig");
     _ = @import("completion_source.zig");
     _ = @import("ui.zig");
