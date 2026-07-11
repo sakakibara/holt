@@ -99,6 +99,7 @@ test {
     _ = @import("testutil.zig");
     _ = @import("cli.zig");
     _ = @import("app.zig");
+    _ = @import("completion_source.zig");
     _ = @import("ui.zig");
     _ = @import("shell.zig");
     _ = @import("commands/common.zig");
