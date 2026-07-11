@@ -98,6 +98,7 @@ test {
     _ = @import("doctor.zig");
     _ = @import("testutil.zig");
     _ = @import("cli.zig");
+    _ = @import("app.zig");
     _ = @import("ui.zig");
     _ = @import("shell.zig");
     _ = @import("commands/common.zig");
