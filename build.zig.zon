@@ -13,7 +13,8 @@
             .hash = "toml-0.4.0-L7MJe5qrCgCF-2BmK9hpRu9Kb1qPPHllZo7xY67iJVQg",
         },
         .cli = .{
-            .path = "../cli-zig",
+            .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.1.1.tar.gz",
+            .hash = "cli-0.1.1-xmo036RvBAALMA62Gy_g1YMj5rrCF7Y0CqDMuFc6__wu",
         },
     },
     .paths = .{
