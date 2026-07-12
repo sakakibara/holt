@@ -55,52 +55,12 @@ const about: app.About = .{
     ,
 };
 
-/// `command` is built via `app.command` (for its comptime-derived
-/// `.flags`/`.args` metadata, which drives `--help` and shell completion),
-/// then its `.run` is replaced with `runTrampoline`: cli-zig's `parseInto`
-/// resolves a starved positional (a `project` typed only when neither --org
-/// nor --all is given) by dipping into the tokens after a literal "--" when
-/// none precede it - by design, so a Spec pairing an optional positional
-/// with a `Rest` tail can still fill the positional from "-- <name> ...".
-/// `run`'s own "--" always introduces the child command, never a value for
-/// `project`, so that dip would silently steal the first word of the
-/// command being run. `runTrampoline` avoids it by parsing only the slice
-/// before "--" (which never has a "--" of its own, so the dip's precondition
-/// never holds) and patching the real tail into `.cmd` afterward.
-pub const command = blk: {
-    var c = app.command(Spec, about, run);
-    c.run = &runTrampoline;
-    break :blk c;
-};
-
-fn noEnv(_: []const u8) ?[]const u8 {
-    return null;
-}
-
-fn runTrampoline(ctx: *app.Ctx) anyerror!u8 {
-    var arena_state = std.heap.ArenaAllocator.init(ctx.alloc);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var dashdash: ?usize = null;
-    for (ctx.argv, 0..) |tok, i| {
-        if (std.mem.eql(u8, tok, "--")) {
-            dashdash = i;
-            break;
-        }
-    }
-    const head = if (dashdash) |i| ctx.argv[0..i] else ctx.argv;
-    const tail: []const []const u8 = if (dashdash) |i| ctx.argv[i + 1 ..] else &.{};
-
-    var diag = cli.args.Diagnostic{};
-    var parsed = cli.args.parseInto(Spec, arena, head, .{ .env_get = noEnv, .config_get = null }, &diag) catch |e| switch (e) {
-        error.OutOfMemory => return e,
-        error.UsageError => return app.usageError(ctx, "{s}", .{diag.message}),
-    };
-    parsed.cmd = tail;
-
-    return run(ctx, parsed);
-}
+/// `project` (an optional positional) and `cmd` (a `Rest` tail) are resolved
+/// natively by cli-zig's `parseInto`: a fixed positional paired with a
+/// `Rest` field only fills from tokens before a literal "--", so `run`'s own
+/// "--" always introduces the child command and never gets mistaken for a
+/// value for `project`.
+pub const command = app.command(Spec, about, run);
 
 const Target = struct {
     header: []const u8,
