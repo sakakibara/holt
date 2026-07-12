@@ -258,7 +258,7 @@ test "HoltCli wiring: a command built via command() dispatches through run() and
     try testing.expectEqualStrings("smoke ok\n", out_w.buffered());
 }
 
-test "describeError: known tooling/config errors match holt's old friendlyError wording, unprefixed (cfg.messagePrefix adds \"holt: \")" {
+test "describeError: known tooling/config errors return their friendly wording unprefixed (cfg.messagePrefix adds \"holt: \")" {
     try testing.expectEqualStrings("cannot locate the holt config: set $HOME or $XDG_CONFIG_HOME to an absolute path", describeError(testing.allocator, error.NoHomeDir).?);
     try testing.expectEqualStrings("git is not installed or not on your PATH", describeError(testing.allocator, error.GitNotFound).?);
     try testing.expectEqualStrings("tar is not installed or not on your PATH", describeError(testing.allocator, error.TarNotFound).?);
@@ -268,7 +268,7 @@ test "describeError: known tooling/config errors match holt's old friendlyError 
     try testing.expectEqualStrings("internal error: SomethingElse", internal);
 }
 
-test "groupHeading: matches holt's old cli.zig group headings exactly" {
+test "groupHeading: returns the display heading for each group" {
     try testing.expectEqualStrings("Navigate", groupHeading(.navigate));
     try testing.expectEqualStrings("Create & membership", groupHeading(.create));
     try testing.expectEqualStrings("Inspect", groupHeading(.inspect));
@@ -276,7 +276,7 @@ test "groupHeading: matches holt's old cli.zig group headings exactly" {
     try testing.expectEqualStrings("System", groupHeading(.system));
 }
 
-test "renderHelpFooter: matches holt's old printHelp footer text exactly" {
+test "renderHelpFooter: renders the project-selector explainer and command pointers" {
     var buf: [512]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
     try renderHelpFooter(&w, "holt");
@@ -308,7 +308,7 @@ test "HoltCli wiring: top-level help renders holt's group headings and footer" {
     try testing.expect(std.mem.indexOf(u8, out, "Run \"holt init <shell>\" to set up the h/hi shell helpers.\n") != null);
 }
 
-test "HoltCli wiring: a command-body known error reports holt's old friendly message verbatim" {
+test "HoltCli wiring: a command-body known error reports its friendly message verbatim" {
     const S = struct {
         fn r(_: *Ctx, _: cli.args.Args(SmokeSpec)) anyerror!u8 {
             return error.GitNotFound;
