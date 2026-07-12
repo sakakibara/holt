@@ -1,8 +1,7 @@
 //! Instantiates cli-zig's `Cli(cfg)` for holt: the per-command `Context`
 //! (loaded workspace + color decision), the help-grouping `Group` enum, and
 //! the `loadContext` hook that ports `config.loadDefault` into cli-zig's
-//! shape. Coexists with the old `cli.zig`/`args.zig` dispatcher until the
-//! migration cuts every command over.
+//! shape.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -19,8 +18,7 @@ pub const Context = struct {
     color: bool,
 };
 
-/// Section a command is listed under in the general help table, in the same
-/// order as the old `cli.zig`'s `Group`.
+/// Section a command is listed under in the general help table.
 pub const Group = enum {
     navigate,
     create,
@@ -32,8 +30,7 @@ pub const Group = enum {
 /// Whether a command should color its output. `loadContext` runs with no
 /// access to the process's real stdout file (cli-zig's `Ctx.io` is an
 /// `std.Io`, not a file handle), so the decision is made once in `main.zig`
-/// against the real stdout - the same one-shot-against-the-real-terminal
-/// timing the old dispatcher used - and stored here as a process-global for
+/// against the real stdout, and stored here as a process-global for
 /// `loadContext` to read.
 pub var color_enabled: bool = false;
 
@@ -52,9 +49,9 @@ pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.args.Diagnos
     return .{ .ws = .{ .cfg = cfg }, .color = color_enabled };
 }
 
-/// Dynamic shell-completion source: ports the old `completion.zig`'s
-/// `candidatesFor` plus `resolve()`'s `cur`-based special cases into the one
-/// hook cli-zig's engine calls for every `.dynamic` completion key.
+/// Dynamic shell-completion source: the one hook cli-zig's engine calls for
+/// every `.dynamic` completion key, resolving the word under the cursor
+/// against the matching candidate set.
 pub const resolveCompletion = completion_source.resolveCompletion;
 /// A schema field's `.dynamic` completion category, typed against
 /// `completion_source.Category` so a command's spec cannot misspell one.
@@ -64,12 +61,11 @@ pub const cat = completion_source.cat;
 /// deep inside a command to a clear, actionable line, so a missing external
 /// tool or an unusable config location reads as guidance rather than a bare
 /// "error: <ErrorName>", plus a catch-all for everything else so no error
-/// ever falls back to cli-zig's own "error: <name>" wording. Ported from the
-/// old `cli.zig`'s `friendlyError`; every returned message is unprefixed -
-/// `cfg.messagePrefix` adds "holt: " uniformly, so baking it in here would
-/// double it. The catch-all uses `alloc` (a short-lived arena cli-zig scopes
-/// to this one call) to match the old dispatcher's `"internal error: {s}"`
-/// wording for an uncategorized error.
+/// ever falls back to cli-zig's own "error: <name>" wording. Every returned
+/// message is unprefixed - `cfg.messagePrefix` adds "holt: " uniformly, so
+/// baking it in here would double it. The catch-all uses `alloc` (a
+/// short-lived arena cli-zig scopes to this one call) to render
+/// `"internal error: {s}"` for an uncategorized error.
 pub fn describeError(alloc: std.mem.Allocator, err: anyerror) ?[]const u8 {
     return switch (err) {
         error.NoHomeDir => "cannot locate the holt config: set $HOME or $XDG_CONFIG_HOME to an absolute path",
@@ -80,8 +76,7 @@ pub fn describeError(alloc: std.mem.Allocator, err: anyerror) ?[]const u8 {
     };
 }
 
-/// Section heading text for the general help table, ported verbatim from
-/// the old `cli.zig`'s `groupHeading`.
+/// Section heading text for the general help table.
 pub fn groupHeading(g: Group) []const u8 {
     return switch (g) {
         .navigate => "Navigate",
@@ -92,8 +87,7 @@ pub fn groupHeading(g: Group) []const u8 {
     };
 }
 
-/// Top-level help footer, ported verbatim from the old `cli.zig`'s
-/// `printHelp` trailer.
+/// Top-level help footer, appended after the general help table.
 pub fn renderHelpFooter(w: *std.Io.Writer, prog_name: []const u8) anyerror!void {
     try w.writeAll("\nA <project> is <org>/<name>, or a unique name or abbreviation of one.\n");
     try w.print("Run \"{s} <command> --help\" for details on a command.\n", .{prog_name});
@@ -113,13 +107,12 @@ fn writeFlagSpelling(w: *std.Io.Writer, f: anytype) !void {
     if (f.takes_value) try w.print(" <{s}>", .{f.value_name});
 }
 
-/// Per-command help, ported verbatim from the old `cli.zig`'s `printUsage`:
-/// usage line, blank line, summary, an optional Flags table, an optional
-/// details block. Deliberately does NOT use cli-zig's default renderer,
-/// which also emits Args:/Commands: sections holt's old dispatcher never
-/// had - a command's explicit `.usage` string and a subcommand parent's
-/// `.details` prose already document that structure, so adding those
-/// sections would change `--help` output that today's users already see.
+/// Per-command help: usage line, blank line, summary, an optional Flags
+/// table, an optional details block. Deliberately does NOT use cli-zig's
+/// default renderer, which also emits Args:/Commands: sections - a
+/// command's explicit `.usage` string and a subcommand parent's `.details`
+/// prose already document that structure, so adding those sections would
+/// change the `--help` output users already see.
 /// `cmd` is `anytype` (a `HoltCli.Command`, though that type cannot be named
 /// here - `Cli(cfg)` is still being built from this very hook).
 pub fn renderCommandHelp(w: *std.Io.Writer, prog_name: []const u8, cmd: anytype) anyerror!void {
@@ -161,9 +154,8 @@ pub const About = HoltCli.About;
 pub const run = HoltCli.run;
 pub const command = HoltCli.command;
 
-/// Reports a usage error the same way holt's old dispatcher rendered
-/// `ctx.args.message = m; return error.UsageError;`: `"holt: " ++ fmt ++
-/// "\n"` on `ctx.err`, exit code 2. Command bodies that reject their own
+/// Reports a usage error: writes `"holt: " ++ fmt ++ "\n"` on `ctx.err` and
+/// returns exit code 2. Command bodies that reject their own
 /// already-parsed arguments (an org/name collision, mutually exclusive
 /// values not expressible via `About.exclusive`, a stray subcommand-parent
 /// argument) call this directly instead of returning `error.UsageError`,
@@ -206,8 +198,7 @@ const run_cmd = @import("commands/run.zig");
 const upgrade_cmd = @import("commands/upgrade.zig");
 const worktree_cmd = @import("commands/worktree.zig");
 
-/// Every registered top-level command, in the same order as holt's old
-/// `main.zig` table.
+/// Every registered top-level command.
 pub const command_table = [_]Command{
     path_cmd.command,
     list_cmd.command,

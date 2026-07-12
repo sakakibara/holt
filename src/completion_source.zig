@@ -1,10 +1,8 @@
-//! holt's `resolveCompletion` hook for cli-zig: turns a `.dynamic`
+//! Supplies dynamic shell-completion candidates: turns a `.dynamic`
 //! completion key, plus the word under the cursor, into the final
-//! `cli.complete.Result` (directive and filtered candidates). Ported from
-//! the old `completion.zig`'s `candidatesFor` and the `cur`-based special
-//! cases `resolve()` used to apply after the fact - cli-zig's engine no
-//! longer post-filters a dynamic reply, so this hook owns filtering itself,
-//! exactly as `resolve()` did.
+//! `cli.complete.Result` (directive and filtered candidates). cli-zig's
+//! engine does not post-filter a dynamic reply, so this hook owns filtering
+//! itself against the word under the cursor.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -21,12 +19,12 @@ const Candidate = cli.complete.Candidate;
 const Result = cli.complete.Result;
 
 /// The hook cli-zig calls for every `.dynamic` completion spec. Sees the
-/// word under the cursor (`cur`) and owns the whole `Result`, mirroring
-/// holt's old `resolve()`. `ctx` is `anytype` (a `*HoltCli.Ctx`, though that
-/// type cannot be named here - `Cli(cfg)` is still being built from this
-/// very hook) with a `context: ?struct { ws: workspace.Workspace, .. }`
-/// field; a null context (a broken or absent config) yields no candidates
-/// rather than failing the shell.
+/// word under the cursor (`cur`) and owns the whole `Result`. `ctx` is
+/// `anytype` (a `*HoltCli.Ctx`, though that type cannot be named here -
+/// `Cli(cfg)` is still being built from this very hook) with a
+/// `context: ?struct { ws: workspace.Workspace, .. }` field; a null context
+/// (a broken or absent config) yields no candidates rather than failing the
+/// shell.
 pub fn resolveCompletion(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, cur: []const u8, ctx: anytype) anyerror!Result {
     const ws: ?*const workspace.Workspace = if (ctx.context) |*c| &c.ws else null;
 
@@ -82,8 +80,8 @@ fn hasPrefixIgnoreCase(s: []const u8, prefix: []const u8) bool {
 }
 
 /// Match like the resolver: case-insensitive subsequence (smartcase: a query
-/// with an uppercase letter matches case-sensitively). Prefix and exact are
-/// subsequences too, so this is a superset of the old prefix test.
+/// with an uppercase letter matches case-sensitively). Prefix and exact
+/// matches are subsequences too, so no separate check is needed for either.
 fn matches(query: []const u8, target: []const u8) bool {
     if (query.len == 0) return true;
     const cased = for (query) |c| {
@@ -358,9 +356,7 @@ fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]
 
 // Tests below drive `resolveCompletion` directly with a minimal stand-in
 // context (any struct with a `context: ?struct{ ws, .. }` field works, since
-// the hook takes `ctx: anytype`), asserting the same candidates/directives
-// holt's old `completion.zig` oracle tests proved against `candidatesFor`
-// and `resolve()`.
+// the hook takes `ctx: anytype`).
 
 const TestContext = struct { ws: workspace.Workspace };
 const TestCtx = struct { context: ?TestContext };

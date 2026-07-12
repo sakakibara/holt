@@ -226,8 +226,8 @@ pub fn assetBinaryName(os_tag: std.Target.Os.Tag) []const u8 {
 }
 
 /// Extracts `archive_path` into `dest_dir` in process. A `.zip` (Windows) via
-/// `std.zip`; a `.tar.gz` (unix) via gzip-decompress + `std.tar`. Replaces the
-/// prior external `tar -xzf`, so holt no longer depends on a `tar` binary.
+/// `std.zip`; a `.tar.gz` (unix) via gzip-decompress + `std.tar` - no
+/// external `tar` binary required.
 fn extractArchive(archive_path: []const u8, dest_dir: []const u8, is_zip: bool) !void {
     const io = fsutil.io();
     var dest = try std.Io.Dir.openDirAbsolute(io, dest_dir, .{});

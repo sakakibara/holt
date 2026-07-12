@@ -29,9 +29,8 @@ fn dispatch(arena: std.mem.Allocator, argv: []const []const u8) !Result {
     // itself - fine for `main.zig`'s one-shot process, but this test process
     // stays up for the whole suite, so `testing.allocator`'s leak detector
     // would flag every one of those allocations. Scope them to a
-    // dispatch-local arena instead, mirroring the old dispatcher's own
-    // per-dispatch arena; `out`/`err_w` stay on the caller's longer-lived
-    // `arena` so the returned slices remain valid.
+    // dispatch-local arena instead; `out`/`err_w` stay on the caller's
+    // longer-lived `arena` so the returned slices remain valid.
     var dispatch_arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer dispatch_arena.deinit();
 

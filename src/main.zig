@@ -26,9 +26,9 @@ pub fn main(init: std.process.Init) u8 {
 
     app.color_enabled = ui.colorEnabled(stdout_file);
 
-    // argv[0]'s display name is normalized to the literal "holt" (matching
-    // the old dispatcher's hardcoded top-level usage text) rather than
-    // whatever path the process was actually invoked with.
+    // argv[0]'s display name is normalized to the literal "holt" rather than
+    // whatever path the process was actually invoked with, so help/usage
+    // text always names the program the same way.
     const call_argv = init.arena.allocator().alloc([]const u8, argv.len) catch {
         std.debug.print("holt: failed to read command line arguments\n", .{});
         return 1;
@@ -38,13 +38,12 @@ pub fn main(init: std.process.Init) u8 {
         @memcpy(call_argv[1..], argv[1..]);
     }
 
-    // Unlike the old dispatcher (which wrapped its allocator in a
-    // per-dispatch arena internally), cli-zig's `Cli(cfg).run` uses
-    // `ctx.alloc` as given for the whole command body - fine for process
-    // memory (the process exits right after), but a debug build's leak
-    // checker on `init.gpa` would otherwise report every one of those
-    // allocations as leaked. `init.arena` is this process's own scratch
-    // arena, reclaimed in bulk at exit rather than individually tracked.
+    // cli-zig's `Cli(cfg).run` uses `ctx.alloc` as given for the whole
+    // command body - fine for process memory (the process exits right
+    // after), but a debug build's leak checker on `init.gpa` would
+    // otherwise report every one of those allocations as leaked.
+    // `init.arena` is this process's own scratch arena, reclaimed in bulk
+    // at exit rather than individually tracked.
     return app.run(init.arena.allocator(), fsutil.io(), call_argv, &app.command_table, out, err) catch |e| {
         err.print("holt: internal error: {s}\n", .{@errorName(e)}) catch {};
         return 1;
