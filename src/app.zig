@@ -38,15 +38,15 @@ pub const Group = enum {
 pub var color_enabled: bool = false;
 
 /// Ports `config.loadDefault` into cli-zig's context-loader shape: on
-/// failure, copies holt's diagnostic message into `diag.message` (prefixed
-/// "holt: ", matching the old dispatcher's `"holt: {s}\n"` framing - cli-zig
-/// prints `diag.message` verbatim, with no prefix of its own) and propagates
-/// the error; on success, wraps the config in a `Workspace`.
+/// failure, copies holt's diagnostic message into `diag.message` (unprefixed
+/// - `cfg.messagePrefix` adds "holt: " uniformly, and cli-zig prints
+/// `diag.message` verbatim with that prefix prepended) and propagates the
+/// error; on success, wraps the config in a `Workspace`.
 pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.args.Diagnostic) anyerror!Context {
     _ = io;
     var holt_diag: diagnostic.Diagnostic = .{};
     const cfg = config.loadDefault(alloc, &holt_diag) catch |err| {
-        diag.message = try std.fmt.allocPrint(alloc, "holt: {s}", .{holt_diag.message});
+        diag.message = try alloc.dupe(u8, holt_diag.message);
         return err;
     };
     return .{ .ws = .{ .cfg = cfg }, .color = color_enabled };
@@ -63,18 +63,20 @@ pub const cat = completion_source.cat;
 /// Maps the handful of environment/tooling failures that can surface from
 /// deep inside a command to a clear, actionable line, so a missing external
 /// tool or an unusable config location reads as guidance rather than a bare
-/// "error: <ErrorName>". Anything not listed keeps cli-zig's generic
-/// fallback. Ported from the old `cli.zig`'s `friendlyError`; the `"holt: "`
-/// prefix is baked into the message here (rather than added by cli-zig's
-/// `reportError`, which prints the message verbatim) so a reported error
-/// reads identically to the old dispatcher's `"holt: {s}\n"`.
-pub fn describeError(err: anyerror) ?[]const u8 {
+/// "error: <ErrorName>", plus a catch-all for everything else so no error
+/// ever falls back to cli-zig's own "error: <name>" wording. Ported from the
+/// old `cli.zig`'s `friendlyError`; every returned message is unprefixed -
+/// `cfg.messagePrefix` adds "holt: " uniformly, so baking it in here would
+/// double it. The catch-all uses `alloc` (a short-lived arena cli-zig scopes
+/// to this one call) to match the old dispatcher's `"internal error: {s}"`
+/// wording for an uncategorized error.
+pub fn describeError(alloc: std.mem.Allocator, err: anyerror) ?[]const u8 {
     return switch (err) {
-        error.NoHomeDir => "holt: cannot locate the holt config: set $HOME or $XDG_CONFIG_HOME to an absolute path",
-        error.GitNotFound => "holt: git is not installed or not on your PATH",
-        error.TarNotFound => "holt: tar is not installed or not on your PATH",
-        error.CurlNotFound => "holt: curl is not installed or not on your PATH",
-        else => null,
+        error.NoHomeDir => "cannot locate the holt config: set $HOME or $XDG_CONFIG_HOME to an absolute path",
+        error.GitNotFound => "git is not installed or not on your PATH",
+        error.TarNotFound => "tar is not installed or not on your PATH",
+        error.CurlNotFound => "curl is not installed or not on your PATH",
+        else => std.fmt.allocPrint(alloc, "internal error: {s}", .{@errorName(err)}) catch null,
     };
 }
 
@@ -150,6 +152,7 @@ pub const HoltCli = cli.cli.Cli(.{
     .groupHeading = groupHeading,
     .renderHelpFooter = renderHelpFooter,
     .renderCommandHelp = renderCommandHelp,
+    .messagePrefix = "holt: ",
 });
 
 pub const Ctx = HoltCli.Ctx;
@@ -264,12 +267,14 @@ test "HoltCli wiring: a command built via command() dispatches through run() and
     try testing.expectEqualStrings("smoke ok\n", out_w.buffered());
 }
 
-test "describeError: known tooling/config errors match holt's old friendlyError wording, prefixed for byte-identical stderr" {
-    try testing.expectEqualStrings("holt: cannot locate the holt config: set $HOME or $XDG_CONFIG_HOME to an absolute path", describeError(error.NoHomeDir).?);
-    try testing.expectEqualStrings("holt: git is not installed or not on your PATH", describeError(error.GitNotFound).?);
-    try testing.expectEqualStrings("holt: tar is not installed or not on your PATH", describeError(error.TarNotFound).?);
-    try testing.expectEqualStrings("holt: curl is not installed or not on your PATH", describeError(error.CurlNotFound).?);
-    try testing.expect(describeError(error.SomethingElse) == null);
+test "describeError: known tooling/config errors match holt's old friendlyError wording, unprefixed (cfg.messagePrefix adds \"holt: \")" {
+    try testing.expectEqualStrings("cannot locate the holt config: set $HOME or $XDG_CONFIG_HOME to an absolute path", describeError(testing.allocator, error.NoHomeDir).?);
+    try testing.expectEqualStrings("git is not installed or not on your PATH", describeError(testing.allocator, error.GitNotFound).?);
+    try testing.expectEqualStrings("tar is not installed or not on your PATH", describeError(testing.allocator, error.TarNotFound).?);
+    try testing.expectEqualStrings("curl is not installed or not on your PATH", describeError(testing.allocator, error.CurlNotFound).?);
+    const internal = describeError(testing.allocator, error.SomethingElse).?;
+    defer testing.allocator.free(internal);
+    try testing.expectEqualStrings("internal error: SomethingElse", internal);
 }
 
 test "groupHeading: matches holt's old cli.zig group headings exactly" {
