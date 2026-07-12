@@ -8,9 +8,8 @@ const std = @import("std");
 const holt_lib = @import("holt_lib");
 const fsutil = holt_lib.fsutil;
 const workspace = holt_lib.workspace;
-const completion = holt_lib.completion;
 const testutil = holt_lib.testutil;
-const app_main = holt_lib.app_main;
+const app = holt_lib.app;
 const recent_cmd = holt_lib.recent_cmd;
 const status_cmd = holt_lib.status_cmd;
 const sync_cmd = holt_lib.sync_cmd;
@@ -172,25 +171,52 @@ fn findOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
 }
 
 fn completeOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
-    _ = try completion.compute(alloc, &app_main.command_table, &.{ "info", "" }, &ws);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    var err_w: std.Io.Writer.Allocating = .init(alloc);
+    var ctx: app.Ctx = .{
+        .alloc = alloc,
+        .io = fsutil.io(),
+        .context = .{ .ws = ws, .color = false },
+        .out = &out.writer,
+        .err = &err_w.writer,
+    };
+    _ = try app.HoltCli.completionCompute(alloc, &app.command_table, &.{ "info", "" }, app.HoltCli.completion_resolve, &ctx);
+}
+
+/// Drives a command's `.run` the same way `testutil.runCmd` does for tests,
+/// but against a real `std.Io` (`fsutil.io()`) instead of `std.testing.io` -
+/// bench compiles as a plain executable, not a test binary, so referencing
+/// `std.testing.io` there would be a compile error.
+fn runCmd(alloc: std.mem.Allocator, run_fn: *const fn (ctx: *app.Ctx) anyerror!u8, ws: workspace.Workspace, argv: []const []const u8) !void {
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    var err_w: std.Io.Writer.Allocating = .init(alloc);
+    var ctx: app.Ctx = .{
+        .alloc = alloc,
+        .io = fsutil.io(),
+        .context = .{ .ws = ws, .color = false },
+        .out = &out.writer,
+        .err = &err_w.writer,
+        .argv = argv,
+    };
+    _ = try run_fn(&ctx);
 }
 
 fn recentOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
-    _ = try testutil.runCmd(alloc, recent_cmd.command.run, ws, &.{});
+    try runCmd(alloc, recent_cmd.command.run, ws, &.{});
 }
 
 fn statusOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
-    _ = try testutil.runCmd(alloc, status_cmd.command.run, ws, &.{});
+    try runCmd(alloc, status_cmd.command.run, ws, &.{});
 }
 
 fn syncOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
-    _ = try testutil.runCmd(alloc, sync_cmd.command.run, ws, &.{});
+    try runCmd(alloc, sync_cmd.command.run, ws, &.{});
 }
 
 fn doctorOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
-    _ = try testutil.runCmd(alloc, doctor_cmd.command.run, ws, &.{});
+    try runCmd(alloc, doctor_cmd.command.run, ws, &.{});
 }
 
 fn doctorFullOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
-    _ = try testutil.runCmd(alloc, doctor_cmd.command.run, ws, &.{"--full"});
+    try runCmd(alloc, doctor_cmd.command.run, ws, &.{"--full"});
 }
