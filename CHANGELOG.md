@@ -6,6 +6,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-12
+
+### Changed
+
+- The command-line layer - argument parsing, command dispatch, shell
+  completion, and help rendering - is now provided by the `cli` dependency
+  instead of an in-tree implementation. User-facing behavior (help text,
+  completion, error messages, and exit codes) is unchanged.
+
+### Added
+
+- `holt help <command> <subcommand>` renders the nested subcommand's help;
+  previously the third token was ignored.
+
 ## [0.5.2] - 2026-07-09
 
 ### Fixed
@@ -231,7 +245,8 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/sakakibara/holt/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/sakakibara/holt/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/sakakibara/holt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/sakakibara/holt/compare/v0.4.0...v0.5.0
