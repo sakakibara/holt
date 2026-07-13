@@ -315,9 +315,25 @@ test "run: output leads with human check names, never the internal D1/D2/D3 code
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "D1") == null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "D2") == null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "D3") == null);
+    try testing.expect(!leaksCode(got.out, "D1"));
+    try testing.expect(!leaksCode(got.out, "D2"));
+    try testing.expect(!leaksCode(got.out, "D3"));
+}
+
+/// True when `code` appears as a word of its own. The output carries the
+/// workspace's paths, and a temp directory is named at random -- a check that
+/// merely scanned for the substring would fail whenever those random letters
+/// happened to spell one, which they eventually do.
+fn leaksCode(out: []const u8, code: []const u8) bool {
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, out, i, code)) |at| {
+        i = at + code.len;
+        const before_ok = at == 0 or !std.ascii.isAlphanumeric(out[at - 1]);
+        const after = at + code.len;
+        const after_ok = after == out.len or !std.ascii.isAlphanumeric(out[after]);
+        if (before_ok and after_ok) return true;
+    }
+    return false;
 }
 
 test "run: dangling hub links catches a deleted remote clone and a cloneless local repo" {
