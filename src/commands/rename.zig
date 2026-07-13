@@ -42,7 +42,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const p = (try common.resolveOne(ctx, old_query)) orelse return 1;
 
     // Serialize the content move against concurrent per-project mutators.
-    var lock = try projectlock.acquire(alloc, p.content_path);
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
     defer lock.release();
 
     const target = common.parseOrgName(new_spec) orelse {

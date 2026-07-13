@@ -61,7 +61,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
-    const path = try config.configPath(ctx.alloc);
+    const path = try config.configPath(ctx.alloc, app.envOf(ctx));
     const src = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, ctx.alloc, .limited(1 << 20));
 
     const rewritten = switchBackendLine(ctx.alloc, src, name) catch |err| switch (err) {
@@ -237,7 +237,7 @@ test "run: switching to a defined preset rewrites only the workspace.backend lin
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const fixture =
@@ -275,7 +275,7 @@ test "run: switching to a defined preset rewrites only the workspace.backend lin
     try testing.expect(std.mem.indexOf(u8, after, "[backends.dropbox]") != null);
     try testing.expect(std.mem.indexOf(u8, after, "[backends.icloud]") != null);
 
-    const reloaded = try config.load(arena, path, null);
+    const reloaded = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("icloud", reloaded.backend.?);
 }
 
@@ -289,7 +289,7 @@ test "run: switching preserves a trailing inline comment on the backend line" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const fixture =
@@ -322,7 +322,7 @@ test "run: switching preserves a trailing inline comment on the backend line" {
     try testing.expectEqualStrings(want, after);
     try testing.expect(std.mem.indexOf(u8, after, "backend = \"dropbox\"  # pick one") != null);
 
-    const reloaded = try config.load(arena, path, null);
+    const reloaded = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("dropbox", reloaded.backend.?);
 }
 
@@ -336,7 +336,7 @@ test "run: a commented [workspace] header is still recognized as the workspace t
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const fixture =
@@ -366,7 +366,7 @@ test "run: a commented [workspace] header is still recognized as the workspace t
     const after = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, arena, .limited(1 << 20));
     try testing.expectEqualStrings(want, after);
 
-    const reloaded = try config.load(arena, path, null);
+    const reloaded = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("beta", reloaded.backend.?);
 }
 
@@ -380,7 +380,7 @@ test "run: an undefined preset name exits 1 and leaves the file byte-unchanged" 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const fixture =
@@ -415,7 +415,7 @@ test "run: a direct-synced_root config errors and leaves the file byte-unchanged
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const fixture =

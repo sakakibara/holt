@@ -7,6 +7,7 @@
 //! exists is never merged into or overwritten.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const cli = @import("cli");
 const app = @import("../app.zig");
 const common = @import("common.zig");
@@ -84,8 +85,8 @@ const Resumed = struct { origin: []const u8, id: identity.Identity, path: []cons
 /// it. The lock is scoped to this one project and released on return, so
 /// promoting across many projects never holds two locks at once (no deadlock
 /// against another promote acquiring them in a different order).
-fn rewriteMemberOrigin(alloc: std.mem.Allocator, ref: Referencing, origin: []const u8) !void {
-    var lock = try projectlock.acquire(alloc, ref.project.content_path);
+fn rewriteMemberOrigin(alloc: std.mem.Allocator, env: Env, ref: Referencing, origin: []const u8) !void {
+    var lock = try projectlock.acquire(alloc, env, ref.project.content_path);
     defer lock.release();
 
     var p = ref.project;
@@ -300,7 +301,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
 
     var progress: std.ArrayList(Referencing) = .empty;
     for (referencing) |ref| {
-        rewriteMemberOrigin(alloc, ref, origin) catch |err| {
+        rewriteMemberOrigin(alloc, app.envOf(ctx), ref, origin) catch |err| {
             try printResumeHint(ctx, alloc, progress.items, name, new_path);
             return err;
         };

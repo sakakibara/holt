@@ -4,15 +4,19 @@
 
 const std = @import("std");
 const fsutil = @import("fsutil.zig");
-const env = @import("env.zig");
+const Env = @import("env").Env;
 const testing = std.testing;
 
 /// True when `file` is a terminal and NO_COLOR is unset. Any NO_COLOR
 /// value, including empty, disables color.
-pub fn colorEnabled(file: std.Io.File) bool {
+pub fn colorEnabled(file: std.Io.File, alloc: std.mem.Allocator, env: Env) bool {
     const is_tty = file.isTty(fsutil.io()) catch return false;
     if (!is_tty) return false;
-    return !env.has("NO_COLOR");
+    // Any NO_COLOR value disables color, including an empty one, so presence is
+    // the question -- not whether it reads as set.
+    const raw = env.getAlloc(alloc, "NO_COLOR") catch return true;
+    alloc.free(raw);
+    return false;
 }
 
 /// Writes `text` wrapped in the ANSI SGR `code` (e.g. "32" for green) when
@@ -119,7 +123,7 @@ test "colorEnabled: false for a non-tty (regular) file" {
     const file = try tmp.dir.openFile(testing.io, "f.txt", .{});
     defer file.close(testing.io);
 
-    try testing.expect(!colorEnabled(file));
+    try testing.expect(!colorEnabled(file, testing.allocator, Env.current()));
 }
 
 test "color: writes plain text when disabled, ANSI-wrapped when enabled" {

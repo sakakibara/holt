@@ -7,6 +7,8 @@
 //! releases it if the holding process dies, so a crash never wedges a project.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const Env = @import("env").Env;
 const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
@@ -25,8 +27,8 @@ pub const Handle = struct {
 /// is `content_path`, then returns a handle whose `release` drops it. Two
 /// processes resolving the same project derive the same lock file, so their
 /// critical sections run one at a time.
-pub fn acquire(alloc: std.mem.Allocator, content_path: []const u8) !Handle {
-    const lock_path = try lockPath(alloc, content_path);
+pub fn acquire(alloc: std.mem.Allocator, env: Env, content_path: []const u8) !Handle {
+    const lock_path = try lockPath(alloc, env, content_path);
     const file = try std.Io.Dir.createFileAbsolute(fsutil.io(), lock_path, .{ .truncate = false, .lock = .exclusive });
     return .{ .file = file };
 }
@@ -34,8 +36,8 @@ pub fn acquire(alloc: std.mem.Allocator, content_path: []const u8) !Handle {
 /// `<runtime>/holt-locks/holt-<hash>.lock`, where `<runtime>` is a local dir
 /// that is never part of a synced tree, so lock files are never cloud-synced.
 /// The lock dir is created if absent. Exposed for tests.
-fn lockPath(alloc: std.mem.Allocator, content_path: []const u8) ![]const u8 {
-    const base = try fsutil.tempDir(alloc);
+fn lockPath(alloc: std.mem.Allocator, env: Env, content_path: []const u8) ![]const u8 {
+    const base = try fsutil.tempDir(alloc, env);
     const dir = try std.fs.path.join(alloc, &.{ base, "holt-locks" });
     try fsutil.ensureDir(dir);
 
@@ -54,20 +56,23 @@ test "acquire: a held lock blocks a second acquirer; releasing frees it" {
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    const override = try testutil.EnvOverride.install(arena, "TMPDIR", root);
-    defer override.restore();
+    const map = try arena.create(std.process.Environ.Map);
+    map.* = std.process.Environ.Map.init(arena);
+    const key = if (builtin.os.tag == .windows) "TEMP" else "TMPDIR";
+    try map.put(key, root);
+    const env: Env = .{ .map = map };
 
     const content_path = "/some/project/acme/widget";
 
-    var first = try acquire(arena, content_path);
+    var first = try acquire(arena, env, content_path);
 
     // While held, a non-blocking exclusive open of the same lock file must
     // report the lock as taken rather than succeed.
-    const path = try lockPath(arena, content_path);
+    const path = try lockPath(arena, env, content_path);
     try testing.expectError(error.WouldBlock, std.Io.Dir.createFileAbsolute(fsutil.io(), path, .{ .truncate = false, .lock = .exclusive, .lock_nonblocking = true }));
 
     // After release, the same lock is acquirable again.
     first.release();
-    var second = try acquire(arena, content_path);
+    var second = try acquire(arena, env, content_path);
     second.release();
 }

@@ -84,7 +84,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     defer if (content_lock) |l| l.release();
     if (project_query) |q| {
         p = (try common.resolveOne(ctx, q)) orelse return 1;
-        content_lock = try projectlock.acquire(alloc, p.content_path);
+        content_lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
         p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
     }
 
@@ -130,7 +130,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     // the content lock, a fixed order), so a concurrent `archive --prune`
     // cannot delete the destination clone between the move and the reference
     // to it landing on disk.
-    var clone_lock = try projectlock.acquire(alloc, clone_path);
+    var clone_lock = try projectlock.acquire(alloc, app.envOf(ctx), clone_path);
     defer clone_lock.release();
 
     var final_path: []const u8 = abs_path;
@@ -191,7 +191,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
 
     const rel = try id.relPath(alloc);
     try ctx.out.print("{s}\n", .{final_path});
-    try ctx.err.print("adopted {s} -> {s}\n", .{ rel, try fsutil.contractTilde(alloc, final_path) });
+    try ctx.err.print("adopted {s} -> {s}\n", .{ rel, try fsutil.contractTilde(alloc, app.envOf(ctx), final_path) });
     return 0;
 }
 

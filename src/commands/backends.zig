@@ -44,7 +44,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const expanded = try alloc.alloc([]const u8, cfg.presets.len);
     for (cfg.presets, names, expanded) |p, *n, *e| {
         n.* = p.name;
-        e.* = try fsutil.expandTilde(alloc, p.synced_root);
+        e.* = try fsutil.expandTilde(alloc, app.envOf(ctx), p.synced_root);
     }
     const name_width = ui.columnWidth(names);
     const path_width = ui.columnWidth(expanded);

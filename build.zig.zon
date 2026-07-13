@@ -13,8 +13,8 @@
             .hash = "toml-0.4.0-L7MJe5qrCgCF-2BmK9hpRu9Kb1qPPHllZo7xY67iJVQg",
         },
         .env = .{
-            .url = "https://github.com/sakakibara/env-zig/archive/refs/tags/v0.1.0.tar.gz",
-            .hash = "env-0.1.0-sTEXsrhtAADFKzYLY-lvPizphbjeczbNcMPWGrW50tDJ",
+            .url = "https://github.com/sakakibara/env-zig/archive/refs/tags/v0.1.1.tar.gz",
+            .hash = "env-0.1.1-sTEXsnNyAADkVRj6KAJjvfbgZQZVq56Rg2I4CoTy63sG",
         },
         .cli = .{
             .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.1.1.tar.gz",

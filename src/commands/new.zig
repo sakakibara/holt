@@ -83,7 +83,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     if (id) |i| {
         const u = url.?;
         const cp = try i.clonePath(alloc, ws.cfg.code_root);
-        clone_lock = try projectlock.acquire(alloc, cp);
+        clone_lock = try projectlock.acquire(alloc, app.envOf(ctx), cp);
         cloned = common.cloneIfAbsent(ctx, u, cp) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return 1,
@@ -116,7 +116,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     try ctx.out.print("{s}\n", .{hub_path});
     try ctx.err.print("created {s}/{s}\n", .{ on.org, on.name });
     if (clone_path) |cp| {
-        const shown = try fsutil.contractTilde(alloc, cp);
+        const shown = try fsutil.contractTilde(alloc, app.envOf(ctx), cp);
         if (cloned) {
             try ctx.err.print("cloned {s} -> {s}\n", .{ url.?, shown });
         } else {

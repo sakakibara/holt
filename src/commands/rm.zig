@@ -43,7 +43,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
 
     // Lock and re-read so a concurrent holt mutating this project cannot make
     // this remove clobber (or be clobbered by) its edit.
-    var lock = try projectlock.acquire(alloc, p.content_path);
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
     defer lock.release();
     p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 

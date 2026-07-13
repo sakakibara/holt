@@ -89,7 +89,7 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
         .{ .url = url_b, .bare = bare_b },
     });
     defer git_override.restore();
-    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", xdg_config_home);
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", xdg_config_home }});
     defer xdg_override.restore();
 
     const clone_alpha = try std.fs.path.join(arena, &.{ code_root, "holt-test.invalid", "acme", "alpha" });

@@ -652,7 +652,7 @@ test "run: colors the dirty/unpushed/missing/clean tokens when the destination i
 
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
-    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = true }, .out = &out.writer, .err = &err_w.writer, .argv = &.{"proj"} };
+    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = true, .env = app.envOf_current() }, .out = &out.writer, .err = &err_w.writer, .argv = &.{"proj"} };
     const code = try command.run(&ctx);
 
     try testing.expectEqual(@as(u8, 0), code);

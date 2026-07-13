@@ -54,7 +54,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
 
     // Serialize against concurrent per-project mutators (add/rm/...) so the
     // content move never races an in-flight marker edit on the same project.
-    var lock = try projectlock.acquire(alloc, p.content_path);
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
     defer lock.release();
 
     // Snapshot the non-local member clones before the marker moves, so a
@@ -142,7 +142,7 @@ fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const M
         // holds the same lock while writing its marker, so if one slipped in
         // since the eligibility scan (or across the confirmation prompt) its
         // reference is on disk and visible here - and we keep the clone.
-        var lock = try projectlock.acquire(alloc, m.clone_path);
+        var lock = try projectlock.acquire(alloc, app.envOf(ctx), m.clone_path);
         defer lock.release();
         if ((try ws.projectsUsing(alloc, m.id)).len > 0) {
             try ctx.out.print("kept {s}: now used by an active project\n", .{m.repo});
@@ -156,7 +156,7 @@ fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const M
             fsutil.rmdirIfEmpty(owner_dir);
             if (std.fs.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
         }
-        try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, try fsutil.contractTilde(alloc, m.clone_path) });
+        try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, try fsutil.contractTilde(alloc, app.envOf(ctx), m.clone_path) });
     }
 }
 

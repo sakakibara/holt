@@ -1,8 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const env_zig = @import("env");
+const Env = env_zig.Env;
 const testutil = @import("testutil.zig");
 const testing = std.testing;
+
+fn testEnv(a: std.mem.Allocator, pairs: []const [2][]const u8) !Env {
+    const map = try a.create(std.process.Environ.Map);
+    map.* = std.process.Environ.Map.init(a);
+    for (pairs) |p| try map.put(p[0], p[1]);
+    return .{ .map = map };
+}
 
 /// The process has no `Io` threaded down to it from `main`, so filesystem
 /// and environment access here goes through the default singleton that
@@ -11,31 +19,16 @@ pub fn io() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-fn homeDirAlloc(alloc: std.mem.Allocator) ![]u8 {
-    return env_zig.dirs.home(alloc, env_zig.Env.current());
-}
-
 /// The process temp directory: `TMPDIR` then `/tmp` on POSIX; `TEMP` then
 /// `TMP` then `C:\Windows\Temp` on Windows.
-pub fn tempDir(alloc: std.mem.Allocator) ![]const u8 {
-    const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
+pub fn tempDir(alloc: std.mem.Allocator, env: Env) ![]const u8 {
     if (builtin.os.tag == .windows) {
-        if (std.process.Environ.getAlloc(environ, alloc, "TEMP")) |v| {
-            return v;
-        } else |err| switch (err) {
-            error.EnvironmentVariableMissing => {},
-            else => return err,
-        }
-        return std.process.Environ.getAlloc(environ, alloc, "TMP") catch |err| switch (err) {
-            error.EnvironmentVariableMissing => "C:\\Windows\\Temp",
-            else => return err,
-        };
-    } else {
-        return std.process.Environ.getAlloc(environ, alloc, "TMPDIR") catch |err| switch (err) {
-            error.EnvironmentVariableMissing => "/tmp",
-            else => return err,
-        };
+        if (env.get(alloc, "TEMP")) |v| return v;
+        if (env.get(alloc, "TMP")) |v| return v;
+        return alloc.dupe(u8, "C:\\Windows\\Temp");
     }
+    if (env.get(alloc, "TMPDIR")) |v| return v;
+    return alloc.dupe(u8, "/tmp");
 }
 
 /// Expands a leading "~" (home directory) or "~/rest" (home-relative path)
@@ -44,8 +37,8 @@ pub fn tempDir(alloc: std.mem.Allocator) ![]const u8 {
 /// is platform-agnostic); split it on `/` and rejoin so each segment nests
 /// with the platform separator rather than leaving a literal `/` embedded in
 /// a Windows path. Caller owns the returned memory.
-pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
-    return env_zig.dirs.expandTilde(alloc, env_zig.Env.current(), path);
+pub fn expandTilde(alloc: std.mem.Allocator, env: Env, path: []const u8) ![]u8 {
+    return env_zig.dirs.expandTilde(alloc, env, path);
 }
 
 /// Contracts a leading $HOME into "~" for display: the inverse of expandTilde.
@@ -55,8 +48,8 @@ pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
 /// `~XY`. For human-facing prose ONLY - a whole-line path meant for
 /// `cd $(holt ...)` must stay absolute, since neither fish nor bash expands a
 /// tilde that arrives from a command substitution. Caller owns the result.
-pub fn contractTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
-    return env_zig.dirs.contractTilde(alloc, env_zig.Env.current(), path);
+pub fn contractTilde(alloc: std.mem.Allocator, env: Env, path: []const u8) ![]u8 {
+    return env_zig.dirs.contractTilde(alloc, env, path);
 }
 
 /// Joins `base` with `rel`, a `/`-delimited relative path (e.g. a git branch
@@ -483,35 +476,37 @@ test "tempDir honors the platform temp env var" {
     const arena = arena_state.allocator();
 
     const key = if (builtin.os.tag == .windows) "TEMP" else "TMPDIR";
-    const override = try testutil.EnvOverride.install(arena, key, "/some/tmp/dir");
-    defer override.restore();
+    const env = try testEnv(arena, &.{.{ key, "/some/tmp/dir" }});
 
-    try testing.expectEqualStrings("/some/tmp/dir", try tempDir(arena));
+    try testing.expectEqualStrings("/some/tmp/dir", try tempDir(arena, env));
 }
 
 test "expandTilde: ~ and ~/x expand via $HOME, other paths pass through" {
-    const home = try homeDirAlloc(testing.allocator);
+    var arena_home = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_home.deinit();
+    const env = try testEnv(arena_home.allocator(), &.{.{ "HOME", "/home/me" }});
+    const home = try env_zig.dirs.home(testing.allocator, env);
     defer testing.allocator.free(home);
 
     {
-        const got = try expandTilde(testing.allocator, "~");
+        const got = try expandTilde(testing.allocator, env, "~");
         defer testing.allocator.free(got);
         try testing.expectEqualStrings(home, got);
     }
     {
-        const got = try expandTilde(testing.allocator, "~/x");
+        const got = try expandTilde(testing.allocator, env, "~/x");
         defer testing.allocator.free(got);
         const want = try std.fs.path.join(testing.allocator, &.{ home, "x" });
         defer testing.allocator.free(want);
         try testing.expectEqualStrings(want, got);
     }
     {
-        const got = try expandTilde(testing.allocator, "/abs/path");
+        const got = try expandTilde(testing.allocator, env, "/abs/path");
         defer testing.allocator.free(got);
         try testing.expectEqualStrings("/abs/path", got);
     }
     {
-        const got = try expandTilde(testing.allocator, "relative/path");
+        const got = try expandTilde(testing.allocator, env, "relative/path");
         defer testing.allocator.free(got);
         try testing.expectEqualStrings("relative/path", got);
     }
@@ -524,8 +519,7 @@ test "contractTilde: $HOME prefix becomes ~, boundary and outside paths are unto
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const override = try testutil.EnvOverride.install(arena, "HOME", "/home/me");
-    defer override.restore();
+    const env = try testEnv(arena, &.{.{ "HOME", "/home/me" }});
 
     const cases = [_]struct { in: []const u8, want: []const u8 }{
         .{ .in = "/home/me", .want = "~" },
@@ -536,7 +530,7 @@ test "contractTilde: $HOME prefix becomes ~, boundary and outside paths are unto
         .{ .in = "/etc/passwd", .want = "/etc/passwd" },
     };
     for (cases) |c| {
-        try testing.expectEqualStrings(c.want, try contractTilde(arena, c.in));
+        try testing.expectEqualStrings(c.want, try contractTilde(arena, env, c.in));
     }
 }
 
@@ -545,10 +539,9 @@ test "contractTilde: a trailing separator on $HOME does not defeat the match" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const override = try testutil.EnvOverride.install(arena, "HOME", "/home/me/");
-    defer override.restore();
+    const env = try testEnv(arena, &.{.{ "HOME", "/home/me/" }});
 
-    try testing.expectEqualStrings("~/Code", try contractTilde(arena, "/home/me/Code"));
+    try testing.expectEqualStrings("~/Code", try contractTilde(arena, env, "/home/me/Code"));
 }
 
 test "toAbsolute: absolute input passes through, relative input joins the cwd" {

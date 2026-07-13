@@ -8,6 +8,7 @@
 //! real ~/.gitconfig or credentials.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const builtin = @import("builtin");
 const proc = @import("proc.zig");
 const fsutil = @import("fsutil.zig");
@@ -261,6 +262,53 @@ extern "kernel32" fn SetEnvironmentVariableW(
 /// A saved process environment, swapped back in on `restore`. Used by
 /// tests that need a command to see a different env var than the real
 /// process has, without leaking the override past the test.
+/// Stands a command up against a supplied environment, rather than editing the
+/// one the test runner is living in. What the process itself reads goes through
+/// `app.environ_override`; a child it spawns still inherits the real
+/// environment, so PATH and the rest are carried over.
+///
+/// Installs nest: each one starts from the environment currently in force, so a
+/// test may set one variable and then another.
+pub const EnvScope = struct {
+    prev: ?Env,
+
+    pub fn install(alloc: std.mem.Allocator, pairs: []const [2][]const u8) !EnvScope {
+        const base = app.environ_override orelse Env.current();
+        const map = try alloc.create(std.process.Environ.Map);
+        map.* = try base.createMap(alloc);
+        for (pairs) |p| try map.put(p[0], p[1]);
+
+        const prev = app.environ_override;
+        app.environ_override = .{ .map = map };
+        return .{ .prev = prev };
+    }
+
+    /// The same, with `keys` removed rather than set: for a test that asks what
+    /// happens when a variable is not there at all.
+    pub fn without(alloc: std.mem.Allocator, keys: []const []const u8) !EnvScope {
+        const base = app.environ_override orelse Env.current();
+        const map = try alloc.create(std.process.Environ.Map);
+        map.* = try base.createMap(alloc);
+        for (keys) |k| _ = map.swapRemove(k);
+
+        const prev = app.environ_override;
+        app.environ_override = .{ .map = map };
+        return .{ .prev = prev };
+    }
+
+    pub fn restore(self: EnvScope) void {
+        app.environ_override = self.prev;
+    }
+};
+
+/// Edits the environment of the process running the test.
+///
+/// Reserved for what a CHILD inherits. What holt itself reads goes through
+/// `EnvScope`, which supplies an environment rather than editing this one; but
+/// a git holt spawns inherits the process's environment implicitly, so a test
+/// that needs the child to see GIT_CONFIG_GLOBAL has to put it there. Handing
+/// children an environment explicitly (`proc.runEnv` already takes one) would
+/// retire this too.
 pub const EnvOverride = struct {
     original: std.process.Environ,
     windows: Windows,
@@ -403,7 +451,7 @@ pub fn runCmd(alloc: std.mem.Allocator, run_fn: *const fn (ctx: *app.Ctx) anyerr
     var ctx: app.Ctx = .{
         .alloc = alloc,
         .io = testing.io,
-        .context = if (ws) |w| .{ .ws = w, .color = false } else null,
+        .context = if (ws) |w| .{ .ws = w, .color = false, .env = app.envOf_current() } else null,
         .out = &out.writer,
         .err = &err_w.writer,
         .argv = argv,

@@ -91,7 +91,7 @@ test "run: spawns $EDITOR with the docs path as both argv[1] and cwd" {
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
@@ -127,7 +127,7 @@ test "run: <project>/<repo> opens the repo's real clone path, not the docs dir" 
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/backend"});
@@ -159,7 +159,7 @@ test "run: a project with no docs dir yet still gets one created for the editor"
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
@@ -179,7 +179,7 @@ test "run: missing $EDITOR errors cleanly, without ever spawning anything" {
     const ws = try testutil.testWorkspace(arena, root);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
 
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", null);
+    const override = try testutil.EnvScope.without(arena, &.{"EDITOR"});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});

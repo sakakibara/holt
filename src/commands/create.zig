@@ -114,7 +114,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     }
 
     if (project) |*p| {
-        var lock = try projectlock.acquire(alloc, p.content_path);
+        var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
         defer lock.release();
         p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 
@@ -129,7 +129,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     }
 
     try ctx.out.print("{s}\n", .{clone_path});
-    try ctx.err.print("created {s}\n", .{try fsutil.contractTilde(alloc, clone_path)});
+    try ctx.err.print("created {s}\n", .{try fsutil.contractTilde(alloc, app.envOf(ctx), clone_path)});
     return 0;
 }
 

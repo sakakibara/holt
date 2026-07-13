@@ -121,7 +121,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const cwd = std.Io.Dir.cwd();
     try cwd.rename(partial_path, cwd, out_path, fsutil.io());
 
-    try ctx.out.print("backed up {s}/{s} -> {s}\n", .{ p.org, p.name, try fsutil.contractTilde(alloc, out_path) });
+    try ctx.out.print("backed up {s}/{s} -> {s}\n", .{ p.org, p.name, try fsutil.contractTilde(alloc, app.envOf(ctx), out_path) });
     return 0;
 }
 

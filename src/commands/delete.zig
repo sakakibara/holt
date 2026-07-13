@@ -57,7 +57,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
 
     // Take the lock only now (not across the confirmation prompt), then
     // serialize the destructive removal against concurrent per-project edits.
-    var lock = try projectlock.acquire(alloc, p.content_path);
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
     defer lock.release();
 
     // Remove the hub first, then the content with the marker deleted LAST: a
@@ -80,7 +80,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
         const others = try ws.projectsUsing(alloc, id);
         if (others.len == 0) {
             const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-            try ctx.out.print("clone at {s} is now unreferenced; remove it manually if no longer needed\n", .{try fsutil.contractTilde(alloc, clone_path)});
+            try ctx.out.print("clone at {s} is now unreferenced; remove it manually if no longer needed\n", .{try fsutil.contractTilde(alloc, app.envOf(ctx), clone_path)});
         }
     }
 
@@ -160,7 +160,7 @@ test "run: --yes deletes content and hub, keeps the clone, and reports it unrefe
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "deleted acme/widget") != null);
     // The unreferenced-clone note tilde-abbreviates the path for display.
-    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, clone_path)) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), clone_path)) != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "unreferenced") != null);
 
     try testing.expect(!fsutil.exists(p.content_path));

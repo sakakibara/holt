@@ -141,7 +141,7 @@ fn runRename(ctx: *app.Ctx, a: cli.args.Args(RenameSpec)) anyerror!u8 {
     for (members.items, 0..) |p, idx| {
         // Lock each project across its own move; the org rename is a sequence
         // of per-project moves, each serialized against that project's editors.
-        var lock = try projectlock.acquire(alloc, p.content_path);
+        var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
         defer lock.release();
         common.moveProject(ctx, &ws, &p, new_org, p.name) catch {
             var rest: std.ArrayList([]const u8) = .empty;

@@ -59,10 +59,10 @@ fn runShow(ctx: *app.Ctx) anyerror!u8 {
     if (ctx.argv.len > 0) {
         return app.usageError(ctx, "unexpected argument: {s}", .{ctx.argv[0]});
     }
-    const path = try config.configPath(ctx.alloc);
+    const path = try config.configPath(ctx.alloc, app.envOf(ctx));
 
     var diag: diagnostic.Diagnostic = .{};
-    const cfg = config.loadDefault(ctx.alloc, &diag) catch {
+    const cfg = config.loadDefault(ctx.alloc, app.envOf(ctx), &diag) catch {
         try ctx.err.print("holt: config file = {s}\n", .{path});
         try ctx.err.print("holt: {s}\n", .{diag.message});
         try ctx.err.writeAll("holt: fix it with \"holt config edit\" or \"holt setup\"\n");
@@ -83,7 +83,7 @@ fn runShow(ctx: *app.Ctx) anyerror!u8 {
 
 fn runEdit(ctx: *app.Ctx, _: cli.args.Args(EditSpec)) anyerror!u8 {
     const alloc = ctx.alloc;
-    const path = try config.configPath(alloc);
+    const path = try config.configPath(alloc, app.envOf(ctx));
 
     if (!fsutil.exists(path)) {
         try ctx.err.print("holt: no config at {s}; run \"holt setup\" to create one\n", .{path});
@@ -115,7 +115,7 @@ test "run: with no argument, prints the three roots, the active backend, and the
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
     const synced_root = try std.fs.path.join(arena, &.{ root, "synced" });
@@ -152,7 +152,7 @@ test "run: with no argument in direct mode, the backend line reads (direct synce
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
     const synced_root = try std.fs.path.join(arena, &.{ root, "synced" });
@@ -178,7 +178,7 @@ test "run: with no argument, a broken config reports the path and diagnostic ins
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
     const path = try writeConfigFile(arena, root,
@@ -217,9 +217,9 @@ test "run: config edit opens $EDITOR even when the config file is malformed" {
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{});
 
-    const editor_override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
+    const editor_override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
     defer editor_override.restore();
-    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
     const path = try writeConfigFile(arena, root,
@@ -247,9 +247,9 @@ test "run: config edit with no config file errors, pointing at holt setup, witho
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{});
 
-    const editor_override = try testutil.EnvOverride.install(arena, "EDITOR", script_path);
+    const editor_override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
     defer editor_override.restore();
-    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
     const got = try testutil.runCmd(arena, edit_command.run, null, &.{});
@@ -268,7 +268,7 @@ test "run: config edit with no $EDITOR errors cleanly, without spawning anything
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const xdg_override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
     _ = try writeConfigFile(arena, root,
         \\[workspace]
@@ -276,7 +276,7 @@ test "run: config edit with no $EDITOR errors cleanly, without spawning anything
         \\
     );
 
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", null);
+    const override = try testutil.EnvScope.without(arena, &.{"EDITOR"});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, edit_command.run, null, &.{});

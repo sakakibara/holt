@@ -5,11 +5,19 @@
 //! treated as one impossible binary name.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const app = @import("app.zig");
 const proc = @import("proc.zig");
 const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
+
+fn envWithEditor(a: std.mem.Allocator, value: []const u8) !Env {
+    const map = try a.create(std.process.Environ.Map);
+    map.* = try Env.current().createMap(a); // PATH and friends: the child needs them
+    try map.put("EDITOR", value);
+    return .{ .map = map };
+}
 
 /// Opens `path` in $EDITOR (child cwd `cwd`, or the process cwd when null),
 /// returning the editor's exit code. Reports on ctx.err and returns 1 when
@@ -18,8 +26,7 @@ const testing = std.testing;
 pub fn open(ctx: *app.Ctx, path: []const u8, cwd: ?[]const u8) !u8 {
     const alloc = ctx.alloc;
 
-    const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    const raw = std.process.Environ.getAlloc(environ, alloc, "EDITOR") catch |err| switch (err) {
+    const raw = app.envOf(ctx).getAlloc(alloc, "EDITOR") catch |err| switch (err) {
         error.EnvironmentVariableMissing => {
             try ctx.err.writeAll("holt: $EDITOR is not set\n");
             return 1;
@@ -72,8 +79,8 @@ test "open: a multi-word $EDITOR is split into a command plus the path" {
     const script = try testutil.writeFakeEditor(arena, root, record, .{ .args = 2 });
 
     const editor_val = try std.fmt.allocPrint(arena, "{s} --flag", .{script});
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", editor_val);
-    defer override.restore();
+    app.environ_override = try envWithEditor(arena, editor_val);
+    defer app.environ_override = null;
 
     const target = try std.fs.path.join(arena, &.{ root, "file.txt" });
 
@@ -94,8 +101,8 @@ test "open: a blank $EDITOR is treated as unset, never spawned" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", "   ");
-    defer override.restore();
+    app.environ_override = try envWithEditor(arena, "   ");
+    defer app.environ_override = null;
 
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
@@ -110,8 +117,8 @@ test "open: an editor binary that is not on PATH is reported by name, not a bare
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const override = try testutil.EnvOverride.install(arena, "EDITOR", "holt-no-such-editor-xyz");
-    defer override.restore();
+    app.environ_override = try envWithEditor(arena, "holt-no-such-editor-xyz");
+    defer app.environ_override = null;
 
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);

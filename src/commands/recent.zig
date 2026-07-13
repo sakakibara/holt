@@ -4,6 +4,7 @@
 //! commits) sorts last.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const cli = @import("cli");
 const app = @import("../app.zig");
 const workspace = @import("../workspace.zig");
@@ -174,8 +175,7 @@ fn runJson(ctx: *app.Ctx, entries: []const Entry) anyerror!u8 {
 fn commitAtEpoch(alloc: std.mem.Allocator, cwd: []const u8, epoch_seconds: i64) !void {
     const date = try std.fmt.allocPrint(alloc, "@{d} +0000", .{epoch_seconds});
 
-    const singleton = std.Io.Threaded.global_single_threaded;
-    var map = try std.process.Environ.createMap(singleton.environ.process_environ, alloc);
+    var map = try Env.current().createMap(alloc);
     defer map.deinit();
     try map.put("GIT_CONFIG_GLOBAL", "/dev/null");
     try map.put("GIT_CONFIG_SYSTEM", "/dev/null");

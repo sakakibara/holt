@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) u8 {
     defer out.flush() catch {};
     defer err.flush() catch {};
 
-    app.color_enabled = ui.colorEnabled(stdout_file);
+    app.color_enabled = ui.colorEnabled(stdout_file, init.arena.allocator(), app.envOf_current());
 
     // argv[0]'s display name is normalized to the literal "holt" rather than
     // whatever path the process was actually invoked with, so help/usage
@@ -195,7 +195,7 @@ fn completionCtx(alloc: std.mem.Allocator, out: *std.Io.Writer, err: *std.Io.Wri
     return .{
         .alloc = alloc,
         .io = testing.io,
-        .context = if (ws) |w| .{ .ws = w.*, .color = false } else null,
+        .context = if (ws) |w| .{ .ws = w.*, .color = false, .env = app.envOf_current() } else null,
         .out = out,
         .err = err,
     };

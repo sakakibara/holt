@@ -46,7 +46,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     // the marker under the lock so the load-modify-save below acts on the
     // current state rather than a snapshot that a concurrent run may have
     // already superseded (which would silently drop that run's edit).
-    var lock = try projectlock.acquire(alloc, p.content_path);
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
     defer lock.release();
     p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 
@@ -84,7 +84,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     // content lock, a fixed order that prevents any deadlock), so a concurrent
     // `archive --prune` cannot delete this clone between the clone landing and
     // our reference to it landing on disk.
-    var clone_lock = try projectlock.acquire(alloc, clone_path);
+    var clone_lock = try projectlock.acquire(alloc, app.envOf(ctx), clone_path);
     defer clone_lock.release();
 
     const cloned = common.cloneIfAbsent(ctx, url, clone_path) catch |err| switch (err) {
@@ -98,7 +98,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
 
     _ = try hub.reconcile(alloc, &ws, &p, false);
 
-    const shown = try fsutil.contractTilde(alloc, clone_path);
+    const shown = try fsutil.contractTilde(alloc, app.envOf(ctx), clone_path);
     try ctx.out.print("added {s} to {s}/{s}\n", .{ id.repo, p.org, p.name });
     if (cloned) {
         try ctx.out.print("cloned {s} -> {s}\n", .{ url, shown });

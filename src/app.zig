@@ -4,6 +4,7 @@
 //! shape.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const cli = @import("cli");
 const workspace = @import("workspace.zig");
 const config = @import("config.zig");
@@ -16,6 +17,9 @@ const testing = std.testing;
 pub const Context = struct {
     ws: workspace.Workspace,
     color: bool,
+    /// The environment every command reads through, rather than each reaching
+    /// for the process's own.
+    env: Env,
 };
 
 /// Section a command is listed under in the general help table.
@@ -34,6 +38,15 @@ pub const Group = enum {
 /// `loadContext` to read.
 pub var color_enabled: bool = false;
 
+/// The environment `loadContext` hands every command, when it should not be
+/// the process's own. A caller driving `run` in-process -- the test harness --
+/// sets this to stand a command up against an environment it controls, rather
+/// than editing the one the test runner is living in.
+///
+/// It exists for the same reason `color_enabled` does: `loadContext` is a plain
+/// function pointer, with no channel for either.
+pub var environ_override: ?Env = null;
+
 /// Ports `config.loadDefault` into cli-zig's context-loader shape: on
 /// failure, copies holt's diagnostic message into `diag.message` (unprefixed
 /// - `cfg.messagePrefix` adds "holt: " uniformly, and cli-zig prints
@@ -41,12 +54,28 @@ pub var color_enabled: bool = false;
 /// error; on success, wraps the config in a `Workspace`.
 pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.args.Diagnostic) anyerror!Context {
     _ = io;
+    const env = environ_override orelse Env.current();
+
     var holt_diag: diagnostic.Diagnostic = .{};
-    const cfg = config.loadDefault(alloc, &holt_diag) catch |err| {
+    const cfg = config.loadDefault(alloc, env, &holt_diag) catch |err| {
         diag.message = try alloc.dupe(u8, holt_diag.message);
         return err;
     };
-    return .{ .ws = .{ .cfg = cfg }, .color = color_enabled };
+    return .{ .ws = .{ .cfg = cfg }, .color = color_enabled, .env = env };
+}
+
+/// The environment before any context exists -- `main` deciding on color, say.
+pub fn envOf_current() Env {
+    return environ_override orelse Env.current();
+}
+
+/// The environment a command reads through. A command that loads a context
+/// takes it from there; one that runs without a context (it may be the command
+/// that creates the config) still must not read the process's own environment
+/// when a caller supplied one.
+pub fn envOf(ctx: *Ctx) Env {
+    if (ctx.context) |c| return c.env;
+    return envOf_current();
 }
 
 /// Dynamic shell-completion source: the one hook cli-zig's engine calls for

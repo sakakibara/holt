@@ -387,7 +387,7 @@ test "reportProjectFailure: an evicted marker gets a download-it message, not a 
     defer out.deinit();
     var err_w: std.Io.Writer.Allocating = .init(arena);
     defer err_w.deinit();
-    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = false }, .out = &out.writer, .err = &err_w.writer };
+    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = false, .env = app.envOf_current() }, .out = &out.writer, .err = &err_w.writer };
 
     const found = try ctx.context.?.ws.find(arena, "acme/gone");
     _ = try reportProjectFailure(&ctx, "acme/gone", found);
@@ -445,7 +445,7 @@ test "removeContent: a delete that fails reports the path and the error, not a b
         const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
         const target_path = try std.fs.path.join(arena, &.{ root, "parent", "target" });
 
-            var out: std.Io.Writer.Allocating = .init(arena);
+        var out: std.Io.Writer.Allocating = .init(arena);
         defer out.deinit();
         var err_w: std.Io.Writer.Allocating = .init(arena);
         defer err_w.deinit();
@@ -532,7 +532,7 @@ test "projectFromCwd: resolves the project when cwd is inside its hub" {
     defer out.deinit();
     var err_w: std.Io.Writer.Allocating = .init(arena);
     defer err_w.deinit();
-    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = false }, .out = &out.writer, .err = &err_w.writer };
+    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = false, .env = app.envOf_current() }, .out = &out.writer, .err = &err_w.writer };
 
     var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);
@@ -565,7 +565,7 @@ test "projectFromCwd: returns null when cwd is exactly hub_root, not just inside
     defer out.deinit();
     var err_w: std.Io.Writer.Allocating = .init(arena);
     defer err_w.deinit();
-    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = false }, .out = &out.writer, .err = &err_w.writer };
+    var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = .{ .ws = ws, .color = false, .env = app.envOf_current() }, .out = &out.writer, .err = &err_w.writer };
 
     var orig_cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const orig_cwd = try testing.allocator.dupe(u8, orig_cwd_buf[0..try std.process.currentPath(fsutil.io(), &orig_cwd_buf)]);

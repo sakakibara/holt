@@ -13,6 +13,7 @@
 //! touch the real network or the real test binary.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const builtin = @import("builtin");
 const json = @import("json");
 const build_options = @import("build_options");
@@ -49,13 +50,13 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const auto_yes = a.yes;
     const alloc = ctx.alloc;
 
-    const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
+    const env = app.envOf(ctx);
 
     const explicit = version_arg != null;
     const tag = if (version_arg) |v|
         (if (std.mem.startsWith(u8, v, "v")) v else try std.fmt.allocPrint(alloc, "v{s}", .{v}))
     else blk: {
-        const api_url = try envOrDefault(alloc, environ, "HOLT_UPGRADE_API", default_api_url);
+        const api_url = try envOrDefault(alloc, env, "HOLT_UPGRADE_API", default_api_url);
         const body = fetch(alloc, api_url) catch |err| switch (err) {
             error.OutOfMemory, error.CurlNotFound => return err,
             else => "",
@@ -84,7 +85,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
         else => return err,
     };
 
-    const target_path = std.process.Environ.getAlloc(environ, alloc, "HOLT_UPGRADE_TARGET_BIN") catch |err| switch (err) {
+    const target_path = env.getAlloc(alloc, "HOLT_UPGRADE_TARGET_BIN") catch |err| switch (err) {
         error.EnvironmentVariableMissing => try std.process.executablePathAlloc(fsutil.io(), alloc),
         else => return err,
     };
@@ -97,10 +98,10 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
         }
     }
 
-    const download_base = try envOrDefault(alloc, environ, "HOLT_UPGRADE_DOWNLOAD_BASE", default_download_base);
+    const download_base = try envOrDefault(alloc, env, "HOLT_UPGRADE_DOWNLOAD_BASE", default_download_base);
     const url = try downloadUrl(alloc, download_base, tag, asset);
 
-    const tmp_dir = try makeTempDir(alloc);
+    const tmp_dir = try makeTempDir(alloc, app.envOf(ctx));
     defer std.Io.Dir.cwd().deleteTree(fsutil.io(), tmp_dir) catch {};
 
     const is_zip = builtin.os.tag == .windows;
@@ -134,11 +135,8 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
 
 /// Reads `key` from `environ`, falling back to `default` only when the
 /// variable is unset (any other error, e.g. invalid encoding, propagates).
-fn envOrDefault(alloc: std.mem.Allocator, environ: std.process.Environ, key: []const u8, default: []const u8) ![]const u8 {
-    return std.process.Environ.getAlloc(environ, alloc, key) catch |err| switch (err) {
-        error.EnvironmentVariableMissing => default,
-        else => return err,
-    };
+fn envOrDefault(alloc: std.mem.Allocator, env: Env, key: []const u8, default: []const u8) ![]const u8 {
+    return env.get(alloc, key) orelse default;
 }
 
 /// Thin wrapper around a `curl` subprocess; a nonzero exit (network error,
@@ -257,8 +255,8 @@ const temp_name_len = std.base64.url_safe.Encoder.calcSize(temp_name_random_byte
 
 /// Creates a fresh `holt-upgrade-<random>` directory under the platform temp
 /// location to stage the downloaded archive in. Caller deletes it when done.
-fn makeTempDir(alloc: std.mem.Allocator) ![]const u8 {
-    const base = try fsutil.tempDir(alloc);
+fn makeTempDir(alloc: std.mem.Allocator, env: Env) ![]const u8 {
+    const base = try fsutil.tempDir(alloc, env);
 
     var random_bytes: [temp_name_random_bytes]u8 = undefined;
     fsutil.io().random(&random_bytes);
@@ -548,7 +546,7 @@ test "run: a release matching the current version reports up to date" {
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = fixture_path, .data = content });
 
     const url = try std.fmt.allocPrint(arena, "file://{s}", .{fixture_path});
-    const override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_API", url);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", url }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
@@ -577,7 +575,7 @@ test "run: an unreachable HOLT_UPGRADE_API degrades cleanly to no releases found
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
     const url = try std.fmt.allocPrint(arena, "file://{s}/does-not-exist.json", .{root});
-    const override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_API", url);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", url }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
@@ -640,11 +638,11 @@ test "run: a newer release fetched via HOLT_UPGRADE_API downloads, extracts, and
     const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
     const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
 
-    const api_override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_API", api_url);
+    const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
     defer api_override.restore();
-    const download_override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_DOWNLOAD_BASE", download_base);
+    const download_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_DOWNLOAD_BASE", download_base }});
     defer download_override.restore();
-    const target_override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_TARGET_BIN", target_bin);
+    const target_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_TARGET_BIN", target_bin }});
     defer target_override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{"--yes"});
@@ -673,9 +671,9 @@ test "run: a fetched latest that is not newer than the current build reports up 
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
 
     const api_url = try std.fmt.allocPrint(arena, "file://{s}", .{release_path});
-    const api_override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_API", api_url);
+    const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
     defer api_override.restore();
-    const target_override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_TARGET_BIN", target_bin);
+    const target_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_TARGET_BIN", target_bin }});
     defer target_override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
@@ -714,9 +712,9 @@ test "run: an explicit older version installs, allowing a downgrade with --yes" 
 
     const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
     const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
-    const download_override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_DOWNLOAD_BASE", download_base);
+    const download_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_DOWNLOAD_BASE", download_base }});
     defer download_override.restore();
-    const target_override = try testutil.EnvOverride.install(arena, "HOLT_UPGRADE_TARGET_BIN", target_bin);
+    const target_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_TARGET_BIN", target_bin }});
     defer target_override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{ tag, "--yes" });

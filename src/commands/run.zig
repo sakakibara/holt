@@ -15,6 +15,7 @@
 //! command's own exit code once every repo has been attempted.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const cli = @import("cli");
 const app = @import("../app.zig");
 const common = @import("common.zig");
@@ -166,9 +167,8 @@ fn runAcrossProjects(ctx: *app.Ctx, ws: workspace.Workspace, alloc: std.mem.Allo
     return runTargets(ctx, alloc, cmd, targets.items, jobs);
 }
 
-fn captureEnabled(alloc: std.mem.Allocator) !bool {
-    const environ = std.Io.Threaded.global_single_threaded.environ.process_environ;
-    return std.process.Environ.containsUnempty(environ, alloc, "HOLT_RUN_CAPTURE");
+fn captureEnabled(alloc: std.mem.Allocator, env: Env) !bool {
+    return env.get(alloc, "HOLT_RUN_CAPTURE") != null;
 }
 
 /// `-j 1` (the default) runs serially and, unless HOLT_RUN_CAPTURE is set,
@@ -180,7 +180,7 @@ fn runTargets(ctx: *app.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, 
 }
 
 fn runSerial(ctx: *app.Ctx, alloc: std.mem.Allocator, cmd: []const []const u8, targets: []const Target) anyerror!u8 {
-    const capture = try captureEnabled(alloc);
+    const capture = try captureEnabled(alloc, app.envOf(ctx));
 
     var any_failed = false;
     for (targets) |t| {
@@ -286,8 +286,8 @@ fn runCaptured(ctx: *app.Ctx, alloc: std.mem.Allocator, argv: []const []const u8
     return res.status;
 }
 
-fn installCapture(alloc: std.mem.Allocator) !testutil.EnvOverride {
-    return testutil.EnvOverride.install(alloc, "HOLT_RUN_CAPTURE", "1");
+fn installCapture(alloc: std.mem.Allocator) !testutil.EnvScope {
+    return testutil.EnvScope.install(alloc, &.{.{ "HOLT_RUN_CAPTURE", "1" }});
 }
 
 test "run: touches a marker file in each of 2 member clones, exit 0" {

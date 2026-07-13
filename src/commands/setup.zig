@@ -49,7 +49,7 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
     const force = a.force;
 
     const alloc = ctx.alloc;
-    const path = try config.configPath(alloc);
+    const path = try config.configPath(alloc, app.envOf(ctx));
 
     if (fsutil.exists(path) and !force) {
         try ctx.err.print("holt: config already exists at {s} (use --force to overwrite)\n", .{path});
@@ -100,7 +100,7 @@ fn writeBody(alloc: std.mem.Allocator, path: []const u8, body: []const u8) !void
 /// resolve to something on disk - a not-yet-mounted cloud is a normal case,
 /// not an error.
 fn warnIfMissing(ctx: *app.Ctx, raw_root: []const u8) !void {
-    const expanded = try fsutil.expandTilde(ctx.alloc, raw_root);
+    const expanded = try fsutil.expandTilde(ctx.alloc, app.envOf(ctx), raw_root);
     if (!fsutil.exists(expanded)) {
         try ctx.err.print("holt: warning: {s} does not exist yet\n", .{expanded});
     }
@@ -186,16 +186,16 @@ test "run: --backend dropbox writes a config that loads with backend dropbox, na
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox" });
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const path = try config.configPath(arena);
+    const path = try config.configPath(arena, app.envOf_current());
     try testing.expect(std.mem.indexOf(u8, got.out, path) != null);
 
-    const cfg = try config.load(arena, path, null);
+    const cfg = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("dropbox", cfg.backend.?);
 }
 
@@ -209,16 +209,16 @@ test "run: --synced-root writes direct mode; load resolves it with no active bac
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{ "--synced-root", "~/custom" });
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const path = try config.configPath(arena);
-    const cfg = try config.load(arena, path, null);
+    const path = try config.configPath(arena, app.envOf_current());
+    const cfg = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqual(@as(?[]const u8, null), cfg.backend);
-    const home = try fsutil.expandTilde(arena, "~");
+    const home = try fsutil.expandTilde(arena, app.envOf_current(), "~");
     try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "custom" }), cfg.synced_root);
 }
 
@@ -232,10 +232,10 @@ test "run: refuses to overwrite an existing config without --force, --force over
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
-    const path = try config.configPath(arena);
+    const path = try config.configPath(arena, app.envOf_current());
     try fsutil.ensureDir(std.fs.path.dirname(path).?);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = path, .data = "[workspace]\nsynced_root = \"/custom\"\n" });
 
@@ -243,13 +243,13 @@ test "run: refuses to overwrite an existing config without --force, --force over
     try testing.expectEqual(@as(u8, 1), refused.code);
     try testing.expect(std.mem.indexOf(u8, refused.err, "already exists") != null);
 
-    const preserved = try config.load(arena, path, null);
+    const preserved = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqual(@as(?[]const u8, null), preserved.backend);
 
     const forced = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox", "--force" });
     try testing.expectEqual(@as(u8, 0), forced.code);
 
-    const overwritten = try config.load(arena, path, null);
+    const overwritten = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("dropbox", overwritten.backend.?);
 }
 
@@ -263,7 +263,7 @@ test "run: --backend and --synced-root together is a usage error" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox", "--synced-root", "~/x" });
@@ -289,7 +289,7 @@ test "run: a read-only config directory yields a permission-denied message, not 
         try tmp.dir.setFilePermissions(testing.io, "ro-cfg", std.Io.File.Permissions.fromMode(0o555), .{});
         defer tmp.dir.setFilePermissions(testing.io, "ro-cfg", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
 
-        const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", xdg);
+        const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", xdg }});
         defer override.restore();
 
         const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox" });
@@ -308,7 +308,7 @@ test "run: no flags and no terminal (the test harness's real stdin) errors askin
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const override = try testutil.EnvOverride.install(arena, "XDG_CONFIG_HOME", root);
+    const override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer override.restore();
 
     try testing.expect(!(std.Io.File.stdin().isTty(fsutil.io()) catch false));
