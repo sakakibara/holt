@@ -6,6 +6,28 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking, Windows only.** The config now lives under
+  `%LOCALAPPDATA%\holt\config.toml`, not `~/.config/holt/config.toml` -- that
+  is where a program's per-user config belongs on that platform, and a
+  `~/.local`-shaped path is a POSIX habit carried somewhere it means nothing. `$XDG_CONFIG_HOME` is
+  still honoured first, on every platform, so setting it restores the old
+  location exactly.
+
+  There is no migration: holt has no released Windows users to migrate. Anyone
+  who does have a config there moves the file, or points `$XDG_CONFIG_HOME` at
+  its parent. POSIX is unaffected -- the path is unchanged there.
+
+  A relative `$XDG_CONFIG_HOME` is also now ignored (the XDG spec calls it
+  invalid), rather than resolving against whatever directory holt was run from.
+
+- holt reads the environment through a value it is handed rather than the
+  process's own, so what a command sees can be supplied. Tests no longer edit
+  the environment of the process running them, except where a git child must
+  inherit one. `~` now expands via `USERPROFILE` where a Windows shell names no
+  `HOME`, having previously failed outright.
+
 ## [0.6.0] - 2026-07-12
 
 ### Changed

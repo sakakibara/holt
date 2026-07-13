@@ -122,7 +122,8 @@ completion.
 
 ## Config
 
-holt reads `~/.config/holt/config.toml` (or `$XDG_CONFIG_HOME/holt/config.toml`).
+holt reads `$XDG_CONFIG_HOME/holt/config.toml`, falling back to
+`~/.config/holt/config.toml` (and `%LOCALAPPDATA%\holt\config.toml` on Windows).
 There is no auto-detection: without a config file, any workspace command stops
 and points you at `holt setup`.
 
