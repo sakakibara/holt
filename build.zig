@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
     const json_dep = b.dependency("json", .{ .target = target, .optimize = optimize });
     const toml_dep = b.dependency("toml", .{ .target = target, .optimize = optimize });
     const cli_dep = b.dependency("cli", .{ .target = target, .optimize = optimize });
+    const env_dep = b.dependency("env", .{ .target = target, .optimize = optimize });
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", package_info.version);
@@ -20,6 +21,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "json", .module = json_dep.module("json") },
             .{ .name = "toml", .module = toml_dep.module("toml") },
             .{ .name = "cli", .module = cli_dep.module("cli") },
+            .{ .name = "env", .module = env_dep.module("env") },
         },
     });
     root_module.addOptions("build_options", options);
@@ -43,6 +45,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "json", .module = json_dep.module("json") },
             .{ .name = "toml", .module = toml_dep.module("toml") },
             .{ .name = "cli", .module = cli_dep.module("cli") },
+            .{ .name = "env", .module = env_dep.module("env") },
         },
     });
     lib_module.addOptions("build_options", options);

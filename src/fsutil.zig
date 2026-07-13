@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const env_zig = @import("env");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
 
@@ -11,7 +12,7 @@ pub fn io() std.Io {
 }
 
 fn homeDirAlloc(alloc: std.mem.Allocator) ![]u8 {
-    return std.process.Environ.getAlloc(std.Io.Threaded.global_single_threaded.environ.process_environ, alloc, "HOME");
+    return env_zig.dirs.home(alloc, env_zig.Env.current());
 }
 
 /// The process temp directory: `TMPDIR` then `/tmp` on POSIX; `TEMP` then
@@ -44,13 +45,7 @@ pub fn tempDir(alloc: std.mem.Allocator) ![]const u8 {
 /// with the platform separator rather than leaving a literal `/` embedded in
 /// a Windows path. Caller owns the returned memory.
 pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
-    if (!std.mem.eql(u8, path, "~") and !std.mem.startsWith(u8, path, "~/")) {
-        return alloc.dupe(u8, path);
-    }
-    const home = try homeDirAlloc(alloc);
-    defer alloc.free(home);
-    if (path.len == 1) return alloc.dupe(u8, home);
-    return joinSlashy(alloc, home, path[2..]);
+    return env_zig.dirs.expandTilde(alloc, env_zig.Env.current(), path);
 }
 
 /// Contracts a leading $HOME into "~" for display: the inverse of expandTilde.
@@ -61,17 +56,7 @@ pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
 /// `cd $(holt ...)` must stay absolute, since neither fish nor bash expands a
 /// tilde that arrives from a command substitution. Caller owns the result.
 pub fn contractTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
-    const home_raw = homeDirAlloc(alloc) catch |err| switch (err) {
-        error.EnvironmentVariableMissing => return alloc.dupe(u8, path),
-        else => return err,
-    };
-    defer alloc.free(home_raw);
-    const home = std.mem.trimEnd(u8, home_raw, "/\\");
-    if (home.len == 0 or !std.mem.startsWith(u8, path, home)) return alloc.dupe(u8, path);
-    const rest = path[home.len..];
-    if (rest.len == 0) return alloc.dupe(u8, "~");
-    if (rest[0] != '/' and rest[0] != std.fs.path.sep) return alloc.dupe(u8, path);
-    return std.fmt.allocPrint(alloc, "~{s}", .{rest});
+    return env_zig.dirs.contractTilde(alloc, env_zig.Env.current(), path);
 }
 
 /// Joins `base` with `rel`, a `/`-delimited relative path (e.g. a git branch
@@ -80,12 +65,7 @@ pub fn contractTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
 /// leaving a literal '/' embedded in a Windows path component. Caller owns
 /// the returned memory.
 pub fn joinSlashy(alloc: std.mem.Allocator, base: []const u8, rel: []const u8) ![]u8 {
-    var segs: std.ArrayList([]const u8) = .empty;
-    defer segs.deinit(alloc);
-    try segs.append(alloc, base);
-    var it = std.mem.splitScalar(u8, rel, '/');
-    while (it.next()) |s| try segs.append(alloc, s);
-    return std.fs.path.join(alloc, segs.items);
+    return env_zig.path.joinRel(alloc, base, rel);
 }
 
 /// Forward-slashes `path` - git's own internals (worktree admin links,
