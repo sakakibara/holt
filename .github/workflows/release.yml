@@ -85,7 +85,7 @@ jobs:
             zig build -Dtarget="$target" -Doptimize=ReleaseSafe
             (cd zig-out/bin && zip -q "$OLDPWD/holt-windows-${arch}.zip" holt.exe)
           done
-          sha256sum holt-*.tar.gz holt-*.zip > checksums.txt
+          sha256sum holt-*.tar.gz holt-*.zip > SHA256SUMS
 
       # Third-party action pinned to a commit SHA (not a movable tag) so a
       # compromised or retagged release cannot run with this job's
@@ -99,4 +99,4 @@ jobs:
           files: |
             holt-*.tar.gz
             holt-*.zip
-            checksums.txt
+            SHA256SUMS

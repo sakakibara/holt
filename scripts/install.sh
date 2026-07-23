@@ -84,9 +84,13 @@ trap 'rm -rf "$TMPDIR"' EXIT
 echo "Downloading $BIN $VERSION for $OS/$ARCH..."
 download "${BASE}/${ARCHIVE}" "$TMPDIR/$ARCHIVE" || err "download failed: ${BASE}/${ARCHIVE}"
 
-# Verify the archive against the release's checksums.txt when both the file
-# and a hasher are available; a mismatch is fatal, a missing hasher is skipped.
-if sums=$(fetch "${BASE}/checksums.txt" 2>/dev/null) && [ -n "$sums" ]; then
+# Verify the archive against the release's published checksums when both the
+# file and a hasher are available; a mismatch is fatal, a missing hasher is
+# skipped. Current releases publish SHA256SUMS; pre-0.6.1 published
+# checksums.txt, so fall back to that name (same GNU sha256sum format).
+sums=$(fetch "${BASE}/SHA256SUMS" 2>/dev/null) || sums=""
+[ -n "$sums" ] || sums=$(fetch "${BASE}/checksums.txt" 2>/dev/null) || sums=""
+if [ -n "$sums" ]; then
   expected=$(echo "$sums" | awk -v f="$ARCHIVE" '$2 == f { print $1 }')
   if [ -n "$expected" ]; then
     if command -v sha256sum >/dev/null 2>&1; then

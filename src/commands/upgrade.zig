@@ -1,13 +1,14 @@
 //! `holt upgrade [<version>] [--yes]`: compares the running build against a
 //! GitHub release of sakakibara/holt (the latest, or an explicit tag),
-//! downloads that release's platform tarball, and atomically replaces the
-//! running binary with the `holt` it contains. A fetched `latest` only
-//! installs when it is strictly newer than the running build, so it never
-//! auto-downgrades; an explicit `<version>` installs unless it names the same
-//! version, so an explicit downgrade is allowed. Version selection and the
-//! tag compares (`latestTag`, `isNewer`, `versionsEqual`) are pure and unit
-//! tested directly against fixture JSON; the download/extract/replace goes
-//! through `curl`, `tar`, and the filesystem, exercised end to end via
+//! downloads that release's platform tarball, verifies it against the
+//! release's published checksums, and atomically replaces the running binary
+//! with the `holt` it contains. A fetched `latest` only installs when it is
+//! strictly newer than the running build, so it never auto-downgrades; an
+//! explicit `<version>` installs unless it names the same version, so an
+//! explicit downgrade is allowed. Version selection and the tag compares
+//! (`latestTag`, `isNewer`, `versionsEqual`) are pure and unit tested directly
+//! against fixture JSON; the download/verify/extract/replace goes through
+//! `curl`, `tar`, and the filesystem, exercised end to end via
 //! `file://` fixtures and three env-var seams (`HOLT_UPGRADE_API`,
 //! `HOLT_UPGRADE_DOWNLOAD_BASE`, `HOLT_UPGRADE_TARGET_BIN`) so tests never
 //! touch the real network or the real test binary.
@@ -116,6 +117,30 @@ fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
         return 1;
     }
 
+    // Verify the downloaded archive against the release's published checksums
+    // before it is ever unpacked or installed. A missing checksums file, a
+    // missing entry for this asset, or a mismatch all REFUSE the install: an
+    // upgrade that replaces the running binary must never trust an unverified
+    // download.
+    try ctx.out.writeAll("holt: verifying checksum\n");
+    const sums_body = fetchChecksums(alloc, download_base, tag) catch |err| switch (err) {
+        error.OutOfMemory, error.CurlNotFound => return err,
+        else => {
+            try ctx.err.print("holt: could not fetch checksums ({s})\n", .{tag});
+            return 1;
+        },
+    };
+    const expected = expectedDigest(sums_body, asset) orelse {
+        try ctx.err.print("holt: no checksum entry for {s}; refusing to install\n", .{asset});
+        return 1;
+    };
+    const archive_bytes = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), archive_path, alloc, .unlimited);
+    const actual = sha256Hex(archive_bytes);
+    if (!std.ascii.eqlIgnoreCase(expected, &actual)) {
+        try ctx.err.print("holt: checksum mismatch for {s}; refusing to install\n", .{asset});
+        return 1;
+    }
+
     extractArchive(archive_path, tmp_dir, is_zip) catch {
         try ctx.err.writeAll("holt: extract failed\n");
         return 1;
@@ -221,6 +246,45 @@ pub fn assetName(alloc: std.mem.Allocator, os_tag: std.Target.Os.Tag, arch: std.
 /// `holt` elsewhere.
 pub fn assetBinaryName(os_tag: std.Target.Os.Tag) []const u8 {
     return if (os_tag == .windows) "holt.exe" else "holt";
+}
+
+/// Lowercase hex sha256 of `bytes`.
+fn sha256Hex(bytes: []const u8) [64]u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return std.fmt.bytesToHex(digest, .lower);
+}
+
+/// The expected sha256 hex for `asset` from a checksums body (lines of
+/// `<hex>  <filename>`, the filename optionally `*`-prefixed for coreutils'
+/// binary mode). Null when no line names `asset`.
+pub fn expectedDigest(body: []const u8, asset: []const u8) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, body, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        var toks = std.mem.tokenizeAny(u8, line, " \t");
+        const hex = toks.next() orelse continue;
+        var name = toks.next() orelse continue;
+        if (name.len > 0 and name[0] == '*') name = name[1..];
+        if (std.mem.eql(u8, name, asset)) return hex;
+    }
+    return null;
+}
+
+/// Fetches the release's checksums body: `SHA256SUMS` (what current releases
+/// publish) first, falling back to `checksums.txt` (the name holt's pre-0.6.1
+/// releases published) on any fetch failure other than OOM or a missing curl.
+/// Both are the same GNU `sha256sum` format.
+fn fetchChecksums(alloc: std.mem.Allocator, base: []const u8, tag: []const u8) ![]const u8 {
+    const primary_url = try downloadUrl(alloc, base, tag, "SHA256SUMS");
+    return fetch(alloc, primary_url) catch |err| switch (err) {
+        error.OutOfMemory, error.CurlNotFound => return err,
+        else => {
+            const fallback_url = try downloadUrl(alloc, base, tag, "checksums.txt");
+            return fetch(alloc, fallback_url);
+        },
+    };
 }
 
 /// Extracts `archive_path` into `dest_dir` in process. A `.zip` (Windows) via
@@ -380,6 +444,18 @@ test "assetBinaryName: holt.exe on windows, holt elsewhere" {
     try testing.expectEqualStrings("holt.exe", assetBinaryName(.windows));
     try testing.expectEqualStrings("holt", assetBinaryName(.macos));
     try testing.expectEqualStrings("holt", assetBinaryName(.linux));
+}
+
+test "expectedDigest: finds the asset's line, handles a binary-mode star, misses an absent asset" {
+    const body =
+        "aaaa1111  holt-linux-aarch64.tar.gz\n" ++
+        "bbbb2222 *holt-macos-aarch64.tar.gz\n" ++
+        "\n" ++
+        "cccc3333  holt-linux-x86_64.tar.gz\n";
+    try testing.expectEqualStrings("aaaa1111", expectedDigest(body, "holt-linux-aarch64.tar.gz").?);
+    // The `*` binary-mode marker is stripped from the filename before matching.
+    try testing.expectEqualStrings("bbbb2222", expectedDigest(body, "holt-macos-aarch64.tar.gz").?);
+    try testing.expect(expectedDigest(body, "holt-windows-x86_64.zip") == null);
 }
 
 test "extractArchive: unpacks a gzip tar into the destination" {
@@ -604,6 +680,21 @@ fn stageFakeReleaseAsset(arena: std.mem.Allocator, pkg_dir: []const u8, asset_pa
     }
 }
 
+/// Writes a `sums_name` checksums fixture in `dl_dir` for `asset`. `digest`
+/// null means compute the real sha256 of the staged asset (the happy path); a
+/// non-null value plants a deliberately wrong digest to exercise refusal.
+fn writeSums(arena: std.mem.Allocator, dl_dir: []const u8, sums_name: []const u8, asset: []const u8, digest: ?[]const u8) !void {
+    const hex: []const u8 = if (digest) |d| d else blk: {
+        const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, asset_path, arena, .unlimited);
+        const h = sha256Hex(bytes);
+        break :blk try arena.dupe(u8, &h);
+    };
+    const body = try std.fmt.allocPrint(arena, "{s}  {s}\n", .{ hex, asset });
+    const sums_path = try std.fs.path.join(arena, &.{ dl_dir, sums_name });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = sums_path, .data = body });
+}
+
 test "run: a newer release fetched via HOLT_UPGRADE_API downloads, extracts, and installs the binary with --yes" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -629,6 +720,111 @@ test "run: a newer release fetched via HOLT_UPGRADE_API downloads, extracts, and
     try fsutil.ensureDir(dl_dir);
     const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
     try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
+    try writeSums(arena, dl_dir, "SHA256SUMS", asset, null);
+
+    const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
+    const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = release_path, .data = release_body });
+
+    const api_url = try std.fmt.allocPrint(arena, "file://{s}", .{release_path});
+    const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
+    const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
+
+    const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
+    defer api_override.restore();
+    const download_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_DOWNLOAD_BASE", download_base }});
+    defer download_override.restore();
+    const target_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_TARGET_BIN", target_bin }});
+    defer target_override.restore();
+
+    const got = try testutil.runCmd(arena, command.run, null, &.{"--yes"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "upgraded") != null);
+
+    const installed = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_bin, arena, .unlimited);
+    try testing.expectEqualStrings("NEW", installed);
+}
+
+test "run: a checksum mismatch is refused and the target binary is left untouched" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
+
+    const tag = "v99.0.0";
+
+    const bin_dir = try std.fs.path.join(arena, &.{ root, "bin" });
+    try fsutil.ensureDir(bin_dir);
+    const target_bin = try std.fs.path.join(arena, &.{ bin_dir, "holt" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
+
+    const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
+    const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
+    try fsutil.ensureDir(pkg_dir);
+
+    const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
+    try fsutil.ensureDir(dl_dir);
+    const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+    try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
+    // A deliberately wrong digest: 64 zero hex nibbles.
+    try writeSums(arena, dl_dir, "SHA256SUMS", asset, "0" ** 64);
+
+    const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
+    const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = release_path, .data = release_body });
+
+    const api_url = try std.fmt.allocPrint(arena, "file://{s}", .{release_path});
+    const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
+    const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
+
+    const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
+    defer api_override.restore();
+    const download_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_DOWNLOAD_BASE", download_base }});
+    defer download_override.restore();
+    const target_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_TARGET_BIN", target_bin }});
+    defer target_override.restore();
+
+    const got = try testutil.runCmd(arena, command.run, null, &.{"--yes"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "checksum mismatch") != null);
+
+    // The running binary must be left exactly as it was.
+    const untouched = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_bin, arena, .unlimited);
+    try testing.expectEqualStrings("OLD", untouched);
+}
+
+test "run: a release that publishes only checksums.txt is verified via the fallback and installs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
+
+    const tag = "v99.0.0";
+
+    const bin_dir = try std.fs.path.join(arena, &.{ root, "bin" });
+    try fsutil.ensureDir(bin_dir);
+    const target_bin = try std.fs.path.join(arena, &.{ bin_dir, "holt" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
+
+    const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
+    const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
+    try fsutil.ensureDir(pkg_dir);
+
+    const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
+    try fsutil.ensureDir(dl_dir);
+    const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+    try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
+    // Only the legacy name is served; no SHA256SUMS exists, so the fetch of it
+    // fails and fetchChecksums falls back to checksums.txt.
+    try writeSums(arena, dl_dir, "checksums.txt", asset, null);
 
     const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
     const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});
@@ -709,6 +905,7 @@ test "run: an explicit older version installs, allowing a downgrade with --yes" 
     try fsutil.ensureDir(dl_dir);
     const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
     try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
+    try writeSums(arena, dl_dir, "SHA256SUMS", asset, null);
 
     const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
     const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});

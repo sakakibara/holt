@@ -30,10 +30,13 @@ try {
   $zip = Join-Path $Tmp $Archive
   Invoke-WebRequest "$Base/$Archive" -OutFile $zip
 
-  # Soft-skip only a missing or unfetchable checksums.txt; a real mismatch
-  # below must stay fatal, so the compare lives outside this try.
+  # Soft-skip only a missing or unfetchable checksums file; a real mismatch
+  # below must stay fatal, so the compare lives outside this try. Current
+  # releases publish SHA256SUMS; pre-0.6.1 published checksums.txt, so fall
+  # back to that name (same GNU sha256sum format).
   try {
-    $sums = (Invoke-WebRequest "$Base/checksums.txt").Content
+    $sums = try { (Invoke-WebRequest "$Base/SHA256SUMS").Content }
+            catch { (Invoke-WebRequest "$Base/checksums.txt").Content }
     $expected = ($sums -split "`n" | Where-Object { $_ -match "\s$([regex]::Escape($Archive))$" } | ForEach-Object { ($_ -split '\s+')[0] })
   } catch { $expected = $null }
   if ($expected) {
