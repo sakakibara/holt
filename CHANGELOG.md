@@ -4,7 +4,17 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-07-24
+
+### Security
+
+- `holt upgrade` now verifies the downloaded archive against the release's
+  published checksums before unpacking or installing anything. A missing
+  checksums file, a missing entry for the asset, or a mismatch each refuse the
+  install -- previously the archive replaced the running binary unverified. The
+  published checksum file is now named `SHA256SUMS`; `upgrade` and both install
+  scripts read that name first and fall back to `checksums.txt`, so earlier
+  releases still verify.
 
 ### Changed
 
@@ -267,7 +277,7 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.6.0...HEAD
+[0.7.0]: https://github.com/sakakibara/holt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/sakakibara/holt/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/sakakibara/holt/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/sakakibara/holt/compare/v0.5.0...v0.5.1
