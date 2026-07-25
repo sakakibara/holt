@@ -301,6 +301,15 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
             try walker.enter(fsutil.io(), entry);
         }
     }
+    // The walk yields the filesystem's order, which differs across
+    // filesystems, and `filterMatches` preserves input order for ties and for
+    // an empty prefix -- so sort here, or the completion menu varies per
+    // machine.
+    std.mem.sort(Candidate, out.items, {}, struct {
+        fn lt(_: void, a: Candidate, b: Candidate) bool {
+            return std.mem.lessThan(u8, a.value, b.value);
+        }
+    }.lt);
     return out.toOwnedSlice(alloc);
 }
 
@@ -332,6 +341,15 @@ fn archivedProjects(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![
             try out.append(alloc, .{ .org = try alloc.dupe(u8, org_entry.name), .name = try alloc.dupe(u8, name_entry.name) });
         }
     }
+    // Directory iteration order is the filesystem's; sort so archived-project
+    // completions (and the org names derived from this list) read identically
+    // on every machine.
+    std.mem.sort(ArchivedProject, out.items, {}, struct {
+        fn lt(_: void, a: ArchivedProject, b: ArchivedProject) bool {
+            if (!std.mem.eql(u8, a.org, b.org)) return std.mem.lessThan(u8, a.org, b.org);
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.lt);
     return out.toOwnedSlice(alloc);
 }
 
