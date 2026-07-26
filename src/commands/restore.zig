@@ -19,9 +19,9 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.archived), .optional = true, .help = "unarchive this project and rebuild its hub" }),
-    all: cli.spec.Flag(.{ .help = "clone every missing repo and rebuild every hub (new-machine path)" }),
-    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "with --all, clone in up to N repos concurrently (default: auto; 1 = serial)" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.archived), .optional = true, .help = "unarchive this project and rebuild its hub" }),
+    all: cli.Flag(.{ .help = "clone every missing repo and rebuild every hub (new-machine path)" }),
+    jobs: cli.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "with --all, clone in up to N repos concurrently (default: auto; 1 = serial)" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -36,7 +36,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const all_flag = a.all;
     const project_spec = a.project;
 

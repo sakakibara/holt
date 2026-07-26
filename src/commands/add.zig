@@ -17,8 +17,8 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to add the repo to" }),
-    url: cli.spec.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to add the repo to" }),
+    url: cli.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -33,7 +33,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
     const raw = a.url;
 

@@ -27,8 +27,8 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    version: cli.spec.Pos([]const u8, .{ .optional = true, .help = "install this version instead of the latest release" }),
-    yes: cli.spec.Flag(.{ .help = "skip the confirmation prompt" }),
+    version: cli.Pos([]const u8, .{ .optional = true, .help = "install this version instead of the latest release" }),
+    yes: cli.Flag(.{ .help = "skip the confirmation prompt" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -46,7 +46,7 @@ pub const command = app.command(Spec, .{
 const default_api_url = "https://api.github.com/repos/sakakibara/holt/releases/latest";
 const default_download_base = "https://github.com/sakakibara/holt/releases/download";
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const version_arg = a.version;
     const auto_yes = a.yes;
     const alloc = ctx.alloc;

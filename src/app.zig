@@ -52,7 +52,7 @@ pub var environ_override: ?Env = null;
 /// - `cfg.messagePrefix` adds "holt: " uniformly, and cli-zig prints
 /// `diag.message` verbatim with that prefix prepended) and propagates the
 /// error; on success, wraps the config in a `Workspace`.
-pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.args.Diagnostic) anyerror!Context {
+pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.Diagnostic) anyerror!Context {
     _ = io;
     const env = environ_override orelse Env.current();
 
@@ -165,7 +165,7 @@ pub fn renderCommandHelp(w: *std.Io.Writer, prog_name: []const u8, cmd: anytype)
     if (cmd.details.len > 0) try w.print("\n{s}\n", .{cmd.details});
 }
 
-pub const HoltCli = cli.cli.Cli(.{
+pub const HoltCli = cli.App(.{
     .Context = Context,
     .Group = Group,
     .loadContext = loadContext,
@@ -265,7 +265,7 @@ pub const command_table = [_]Command{
 
 const SmokeSpec = struct {};
 
-fn smokeRun(ctx: *Ctx, _: cli.args.Args(SmokeSpec)) anyerror!u8 {
+fn smokeRun(ctx: *Ctx, _: cli.Args(SmokeSpec)) anyerror!u8 {
     try ctx.out.writeAll("smoke ok\n");
     return 0;
 }
@@ -339,7 +339,7 @@ test "HoltCli wiring: top-level help renders holt's group headings and footer" {
 
 test "HoltCli wiring: a command-body known error reports its friendly message verbatim" {
     const S = struct {
-        fn r(_: *Ctx, _: cli.args.Args(SmokeSpec)) anyerror!u8 {
+        fn r(_: *Ctx, _: cli.Args(SmokeSpec)) anyerror!u8 {
             return error.GitNotFound;
         }
     };
@@ -359,10 +359,10 @@ test "HoltCli wiring: a command-body known error reports its friendly message ve
 }
 
 const SeedSpec = struct {
-    seed: cli.spec.Pos([]const u8, .{ .complete = .{ .dynamic = "backend_seed" } }),
+    seed: cli.Pos([]const u8, .{ .complete = .{ .dynamic = "backend_seed" } }),
 };
 
-fn seedRun(_: *Ctx, _: cli.args.Args(SeedSpec)) anyerror!u8 {
+fn seedRun(_: *Ctx, _: cli.Args(SeedSpec)) anyerror!u8 {
     return 0;
 }
 

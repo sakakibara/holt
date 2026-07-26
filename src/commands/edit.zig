@@ -14,7 +14,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project_repo), .help = "the project or project/repo to open" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project_repo), .help = "the project or project/repo to open" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -33,7 +33,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const query = a.project;
 
     const ws = ctx.context.?.ws;

@@ -25,7 +25,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     _ = a;
 
     const cfg = ctx.context.?.ws.cfg;

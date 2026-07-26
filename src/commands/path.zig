@@ -14,7 +14,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    query: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project_repo), .optional = true, .help = "the project or project/repo to resolve" }),
+    query: cli.Pos([]const u8, .{ .complete = app.cat(.project_repo), .optional = true, .help = "the project or project/repo to resolve" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -29,7 +29,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     // An empty query (bare `holt path`, or `h` with no argument via the
     // shell function) means "the hub root itself", not a usage error - the
     // shell function relies on this to make bare `h` cd there.

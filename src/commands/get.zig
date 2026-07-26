@@ -15,8 +15,8 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    url: cli.spec.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
-    update: cli.spec.Flag(.{ .short = 'u', .help = "fast-forward an existing clone instead of re-cloning" }),
+    url: cli.Pos([]const u8, .{ .complete = .files, .help = "a git url, or owner/repo (host/owner/repo) shorthand" }),
+    update: cli.Flag(.{ .short = 'u', .help = "fast-forward an existing clone instead of re-cloning" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -39,7 +39,7 @@ pub const command = app.command(Spec, .{
     .needs_context = true,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const raw = a.url;
     const update = a.update;
 

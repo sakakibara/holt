@@ -15,7 +15,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to back up" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to back up" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -85,7 +85,7 @@ fn runTar(alloc: std.mem.Allocator, argv: []const []const u8) !proc.RunResult {
     return proc.run(alloc, retry.items, null);
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
 
     const ws = ctx.context.?.ws;

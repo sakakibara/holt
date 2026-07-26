@@ -25,10 +25,10 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    repo: cli.spec.Pos([]const u8, .{ .complete = app.cat(.local_repo), .help = "the short name of a local repo that has since gained a remote" }),
-    dry_run: cli.spec.Flag(.{ .help = "print the planned move and affected projects, then exit" }),
-    yes: cli.spec.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
-    force: cli.spec.Flag(.{ .short = 'f', .help = "promote even if the clone has unrecoverable local state (also skips the confirmation prompt)" }),
+    repo: cli.Pos([]const u8, .{ .complete = app.cat(.local_repo), .help = "the short name of a local repo that has since gained a remote" }),
+    dry_run: cli.Flag(.{ .help = "print the planned move and affected projects, then exit" }),
+    yes: cli.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
+    force: cli.Flag(.{ .short = 'f', .help = "promote even if the clone has unrecoverable local state (also skips the confirmation prompt)" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -230,7 +230,7 @@ fn printPlan(ctx: *app.Ctx, alloc: std.mem.Allocator, old_path: []const u8, new_
     }
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const name = a.repo;
     const dry_run = a.dry_run;
     const yes = a.yes;

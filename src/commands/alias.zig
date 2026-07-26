@@ -15,9 +15,9 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project owning the repo" }),
-    repo: cli.spec.Pos([]const u8, .{ .complete = app.cat(.repo), .help = "the member repo to alias" }),
-    name: cli.spec.Pos([]const u8, .{ .optional = true, .help = "the hub link name (omit to clear the alias)" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project owning the repo" }),
+    repo: cli.Pos([]const u8, .{ .complete = app.cat(.repo), .help = "the member repo to alias" }),
+    name: cli.Pos([]const u8, .{ .optional = true, .help = "the hub link name (omit to clear the alias)" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -64,7 +64,7 @@ fn hasDuplicateRel(links: []const hub.Link) bool {
     return false;
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
     const repo_name = a.repo;
     const new_name = a.name;

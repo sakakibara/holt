@@ -12,7 +12,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    name: cli.spec.Pos([]const u8, .{ .complete = app.cat(.backend), .optional = true, .help = "switch to this backend preset" }),
+    name: cli.Pos([]const u8, .{ .complete = app.cat(.backend), .optional = true, .help = "switch to this backend preset" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -42,7 +42,7 @@ fn hasPreset(presets: []const config.Preset, name: []const u8) bool {
     return false;
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const name_opt = a.name;
 
     const cfg = ctx.context.?.ws.cfg;

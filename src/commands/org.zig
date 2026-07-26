@@ -20,9 +20,9 @@ const testutil = @import("../testutil.zig");
 const hub = @import("../hub.zig");
 
 const RenameSpec = struct {
-    old_org: cli.spec.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the org to rename" }),
-    new_org: cli.spec.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the new org name (may already exist, if no project name collides)" }),
-    yes: cli.spec.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
+    old_org: cli.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the org to rename" }),
+    new_org: cli.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the new org name (may already exist, if no project name collides)" }),
+    yes: cli.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
 };
 
 const rename_command = app.command(RenameSpec, .{
@@ -58,7 +58,7 @@ fn runFallback(ctx: *app.Ctx) anyerror!u8 {
     return app.usageError(ctx, "usage: holt org rename <old-org> <new-org>", .{});
 }
 
-fn runRename(ctx: *app.Ctx, a: cli.args.Args(RenameSpec)) anyerror!u8 {
+fn runRename(ctx: *app.Ctx, a: cli.Args(RenameSpec)) anyerror!u8 {
     const old_org = a.old_org;
     const new_org = a.new_org;
     const yes = a.yes;

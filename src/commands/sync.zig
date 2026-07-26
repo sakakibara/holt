@@ -17,7 +17,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    dry_run: cli.spec.Flag(.{ .help = "report what would change without touching the hub" }),
+    dry_run: cli.Flag(.{ .help = "report what would change without touching the hub" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -32,7 +32,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const dry_run = a.dry_run;
 
     const ws = ctx.context.?.ws;

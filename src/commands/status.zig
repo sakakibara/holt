@@ -55,11 +55,11 @@ const Spec = struct {
     // org/jobs are options and must be parsed before the positional below: a
     // bare positional scan would otherwise mistake either's value token for
     // the project query.
-    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "with no <project> given, only show projects in this org" }),
-    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "probe up to N repos concurrently (default: auto; 1 = serial)" }),
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .optional = true, .help = "only show this project's member repos" }),
-    dirty: cli.spec.Flag(.{ .help = "only show repos with a finding (dirty, unpushed, missing)" }),
-    json: cli.spec.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --dirty)" }),
+    org: cli.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "with no <project> given, only show projects in this org" }),
+    jobs: cli.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "probe up to N repos concurrently (default: auto; 1 = serial)" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .optional = true, .help = "only show this project's member repos" }),
+    dirty: cli.Flag(.{ .help = "only show repos with a finding (dirty, unpushed, missing)" }),
+    json: cli.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --dirty)" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -138,7 +138,7 @@ fn probeTargets(alloc: std.mem.Allocator, ws: *const workspace.Workspace, target
     return .{ .repo_names = repo_names, .bounds = bounds, .results = results, .arenas = arenas };
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     if (a.jobs) |n| {
         if (n == 0) {
             return app.usageError(ctx, "-j/--jobs must be at least 1", .{});

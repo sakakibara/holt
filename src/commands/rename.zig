@@ -16,8 +16,8 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    old: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to rename" }),
-    new_name: cli.spec.Pos([]const u8, .{ .help = "the new <org>/<name>" }),
+    old: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to rename" }),
+    new_name: cli.Pos([]const u8, .{ .help = "the new <org>/<name>" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -32,7 +32,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const old_query = a.old;
     const new_spec = a.new_name;
 

@@ -52,7 +52,7 @@ fn runShow(ctx: *app.Ctx) anyerror!u8 {
     // `config edit` is routed to the subcommand before reaching here, so any
     // positional left is an unrecognized argument - name the accepted form.
     for (ctx.argv) |tok| {
-        if (!cli.spec.looksLikeFlag(tok)) {
+        if (!cli.looksLikeFlag(tok)) {
             return app.usageError(ctx, "usage: holt config [edit]", .{});
         }
     }
@@ -81,7 +81,7 @@ fn runShow(ctx: *app.Ctx) anyerror!u8 {
     return 0;
 }
 
-fn runEdit(ctx: *app.Ctx, _: cli.args.Args(EditSpec)) anyerror!u8 {
+fn runEdit(ctx: *app.Ctx, _: cli.Args(EditSpec)) anyerror!u8 {
     const alloc = ctx.alloc;
     const path = try config.configPath(alloc, app.envOf(ctx));
 

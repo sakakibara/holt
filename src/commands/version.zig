@@ -22,7 +22,7 @@ pub const command = app.command(Spec, .{
     .needs_context = false,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     _ = a;
     try ctx.out.print("holt {s}\n", .{build_options.version});
     return 0;

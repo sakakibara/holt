@@ -18,10 +18,10 @@ const testutil = @import("../testutil.zig");
 const proc = @import("../proc.zig");
 
 const Spec = struct {
-    count: cli.spec.Opt(usize, .{ .short = 'n', .value_name = "N", .help = "show only the N most recently committed projects (default 10)" }),
-    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "only include projects under this org" }),
-    json: cli.spec.Flag(.{ .help = "emit a JSON array (org, name, and commit timestamp) instead of plain text" }),
-    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "look up commit times in up to N clones concurrently (default: auto; 1 = serial)" }),
+    count: cli.Opt(usize, .{ .short = 'n', .value_name = "N", .help = "show only the N most recently committed projects (default 10)" }),
+    org: cli.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "only include projects under this org" }),
+    json: cli.Flag(.{ .help = "emit a JSON array (org, name, and commit timestamp) instead of plain text" }),
+    jobs: cli.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "look up commit times in up to N clones concurrently (default: auto; 1 = serial)" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -64,7 +64,7 @@ fn moreRecent(_: void, a: Entry, b: Entry) bool {
     return a.ts.? > b.ts.?;
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     if (a.jobs) |n| {
         if (n == 0) {
             return app.usageError(ctx, "-j/--jobs must be at least 1", .{});

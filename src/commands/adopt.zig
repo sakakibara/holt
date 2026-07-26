@@ -25,9 +25,9 @@ const testutil = @import("../testutil.zig");
 const Spec = struct {
     // Interpreted by count in run(): two positionals -> <project> <path>;
     // one positional -> <path> (standalone). Hence the generic roles here.
-    first: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the clone path, or the project to adopt into when a path follows" }),
-    second: cli.spec.Pos([]const u8, .{ .complete = .files, .optional = true, .help = "the clone path (when a project is given first)" }),
-    force: cli.spec.Flag(.{ .short = 'f', .help = "adopt even if the clone has unrecoverable local state" }),
+    first: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the clone path, or the project to adopt into when a path follows" }),
+    second: cli.Pos([]const u8, .{ .complete = .files, .optional = true, .help = "the clone path (when a project is given first)" }),
+    force: cli.Flag(.{ .short = 'f', .help = "adopt even if the clone has unrecoverable local state" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -69,7 +69,7 @@ fn localSafetyCheck(alloc: std.mem.Allocator, repo_path: []const u8) !recover.Ve
     return .{ .blockers = blockers };
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     // Two positionals -> (project, path); one -> (path), standalone.
     const project_query: ?[]const u8 = if (a.second != null) a.first else null;
     const path_arg: []const u8 = a.second orelse a.first;

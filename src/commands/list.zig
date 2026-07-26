@@ -11,10 +11,10 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    paths: cli.spec.Flag(.{ .help = "show each project's hub path instead of just its name" }),
-    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "only list projects under this org" }),
-    json: cli.spec.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --paths)" }),
-    repos: cli.spec.Flag(.{ .help = "list every clone in the code tree instead of projects" }),
+    paths: cli.Flag(.{ .help = "show each project's hub path instead of just its name" }),
+    org: cli.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "only list projects under this org" }),
+    json: cli.Flag(.{ .help = "emit a JSON array instead of plain text (ignores --paths)" }),
+    repos: cli.Flag(.{ .help = "list every clone in the code tree instead of projects" }),
 };
 
 /// A clone's code-tree key: its path relative to `code_root`, always
@@ -28,7 +28,7 @@ fn repoKey(alloc: std.mem.Allocator, code_root: []const u8, clone: []const u8) !
     return rel;
 }
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const ws = ctx.context.?.ws;
 
     if (a.repos) {

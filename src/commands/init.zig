@@ -9,7 +9,7 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    shell: cli.spec.Pos([]const u8, .{ .complete = .{ .choices = &.{ "fish", "zsh", "bash", "powershell" } }, .help = "the shell to emit integration code for" }),
+    shell: cli.Pos([]const u8, .{ .complete = .{ .choices = &.{ "fish", "zsh", "bash", "powershell" } }, .help = "the shell to emit integration code for" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -24,7 +24,7 @@ pub const command = app.command(Spec, .{
     .needs_context = false,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const name = a.shell;
 
     const sh = shell.parse(name) orelse {

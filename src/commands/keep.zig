@@ -13,7 +13,7 @@ const testutil = @import("../testutil.zig");
 const testing = std.testing;
 
 const Spec = struct {
-    path: cli.spec.Pos([]const u8, .{ .complete = .files, .help = "the loose file or dir at the hub root to keep in synced content" }),
+    path: cli.Pos([]const u8, .{ .complete = .files, .help = "the loose file or dir at the hub root to keep in synced content" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -29,7 +29,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const alloc = ctx.alloc;
 
     const p = (try common.projectFromCwd(ctx)) orelse {

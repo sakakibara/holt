@@ -19,9 +19,9 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    fix: cli.spec.Flag(.{ .help = "repair hub drift; never touches CONTENT or deletes a clone" }),
-    full: cli.spec.Flag(.{ .help = "extend the D1 symlink scan to the whole synced root, not just projects/ and archive/" }),
-    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "check clone integrity in up to N clones concurrently (default: auto; 1 = serial)" }),
+    fix: cli.Flag(.{ .help = "repair hub drift; never touches CONTENT or deletes a clone" }),
+    full: cli.Flag(.{ .help = "extend the D1 symlink scan to the whole synced root, not just projects/ and archive/" }),
+    jobs: cli.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "check clone integrity in up to N clones concurrently (default: auto; 1 = serial)" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -36,7 +36,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const fix = a.fix;
     const full = a.full;
     if (a.jobs) |n| {

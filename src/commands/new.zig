@@ -17,8 +17,8 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    org_name: cli.spec.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the org/name to create" }),
-    url: cli.spec.Pos([]const u8, .{ .complete = .files, .optional = true, .help = "a repo url to clone as the project's first member" }),
+    org_name: cli.Pos([]const u8, .{ .complete = app.cat(.org), .help = "the org/name to create" }),
+    url: cli.Pos([]const u8, .{ .complete = .files, .optional = true, .help = "a repo url to clone as the project's first member" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -37,7 +37,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const spec = a.org_name;
     const url = a.url;
 

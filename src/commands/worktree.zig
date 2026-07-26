@@ -18,9 +18,9 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    repo: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project_repo), .help = "the <project>/<repo> whose worktrees to manage" }),
-    branch: cli.spec.Pos([]const u8, .{ .value_name = "branch", .complete = app.cat(.worktree_branch), .optional = true, .help = "branch to check out in a new worktree; omit to list" }),
-    remove: cli.spec.Flag(.{ .short = 'r', .help = "remove the worktree for <branch> instead of creating it" }),
+    repo: cli.Pos([]const u8, .{ .complete = app.cat(.project_repo), .help = "the <project>/<repo> whose worktrees to manage" }),
+    branch: cli.Pos([]const u8, .{ .value_name = "branch", .complete = app.cat(.worktree_branch), .optional = true, .help = "branch to check out in a new worktree; omit to list" }),
+    remove: cli.Flag(.{ .short = 'r', .help = "remove the worktree for <branch> instead of creating it" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -41,7 +41,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 

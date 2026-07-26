@@ -28,12 +28,12 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    org: cli.spec.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "run in every member repo of every project in this org" }),
-    repo: cli.spec.Opt([]const u8, .{ .value_name = "repo", .complete = app.cat(.repo), .help = "run in only this member repo (single-project form only)" }),
-    jobs: cli.spec.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "run in up to N repos concurrently (default 1: serial, streaming live)" }),
-    all: cli.spec.Flag(.{ .help = "run in every member repo of every project in the workspace" }),
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .optional = true, .help = "the project whose member repos to run in" }),
-    cmd: cli.spec.Rest(.{ .help = "the command to run in each repo (after --)" }),
+    org: cli.Opt([]const u8, .{ .value_name = "org", .complete = app.cat(.org), .help = "run in every member repo of every project in this org" }),
+    repo: cli.Opt([]const u8, .{ .value_name = "repo", .complete = app.cat(.repo), .help = "run in only this member repo (single-project form only)" }),
+    jobs: cli.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "run in up to N repos concurrently (default 1: serial, streaming live)" }),
+    all: cli.Flag(.{ .help = "run in every member repo of every project in the workspace" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .optional = true, .help = "the project whose member repos to run in" }),
+    cmd: cli.Rest(.{ .help = "the command to run in each repo (after --)" }),
 };
 
 const about: app.About = .{
@@ -68,7 +68,7 @@ const Target = struct {
     clone_path: []const u8,
 };
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const cmd = a.cmd;
     if (cmd.len == 0) {
         return app.usageError(ctx, "missing command after --", .{});

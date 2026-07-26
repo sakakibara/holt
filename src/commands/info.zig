@@ -20,8 +20,8 @@ const color_red = "31";
 const color_green = "32";
 
 const Spec = struct {
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to inspect" }),
-    json: cli.spec.Flag(.{ .help = "emit a JSON object instead of human-readable text" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to inspect" }),
+    json: cli.Flag(.{ .help = "emit a JSON object instead of human-readable text" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -36,7 +36,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
 
     const ws = ctx.context.?.ws;

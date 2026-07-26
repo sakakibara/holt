@@ -15,11 +15,11 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    backend: cli.spec.Opt([]const u8, .{ .value_name = "name", .complete = app.cat(.backend_seed), .help = "activate a seeded preset (e.g. dropbox, icloud)" }),
-    synced_root: cli.spec.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "use this path directly instead of a preset" }),
-    code_root: cli.spec.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Code" }),
-    hub_root: cli.spec.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Projects" }),
-    force: cli.spec.Flag(.{ .help = "overwrite an existing config file" }),
+    backend: cli.Opt([]const u8, .{ .value_name = "name", .complete = app.cat(.backend_seed), .help = "activate a seeded preset (e.g. dropbox, icloud)" }),
+    synced_root: cli.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "use this path directly instead of a preset" }),
+    code_root: cli.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Code" }),
+    hub_root: cli.Opt([]const u8, .{ .value_name = "path", .complete = .files, .help = "defaults to ~/Projects" }),
+    force: cli.Flag(.{ .help = "overwrite an existing config file" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -41,7 +41,7 @@ pub const command = app.command(Spec, .{
 const default_code_root = "~/Code";
 const default_hub_root = "~/Projects";
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const backend_opt = a.backend;
     const synced_root_opt = a.synced_root;
     const code_root_opt = a.code_root;

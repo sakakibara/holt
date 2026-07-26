@@ -19,9 +19,9 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: cli.spec.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to archive" }),
-    prune: cli.spec.Flag(.{ .help = "also reclaim member clones that are safe to re-fetch" }),
-    yes: cli.spec.Flag(.{ .short = 'y', .help = "skip the prune confirmation prompt" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to archive" }),
+    prune: cli.Flag(.{ .help = "also reclaim member clones that are safe to re-fetch" }),
+    yes: cli.Flag(.{ .short = 'y', .help = "skip the prune confirmation prompt" }),
 };
 
 pub const command = app.command(Spec, .{
@@ -44,7 +44,7 @@ pub const command = app.command(Spec, .{
     ,
 }, run);
 
-fn run(ctx: *app.Ctx, a: cli.args.Args(Spec)) anyerror!u8 {
+fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const project_query = a.project;
 
     const ws = ctx.context.?.ws;
