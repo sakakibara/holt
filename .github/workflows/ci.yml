@@ -53,7 +53,7 @@ jobs:
             zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-
 
       - name: format check
-        run: zig fmt --check build.zig src
+        run: zig fmt --check build.zig src bench
 
       - name: zig build test
         run: zig build test --summary all
@@ -117,7 +117,7 @@ jobs:
             zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-
       - name: format check
         shell: bash
-        run: zig fmt --check build.zig src
+        run: zig fmt --check build.zig src bench
       - name: zig build test
         shell: bash
         run: zig build test --summary all
