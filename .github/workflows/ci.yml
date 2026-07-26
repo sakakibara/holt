@@ -20,6 +20,7 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +52,9 @@ jobs:
           restore-keys: |
             zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-
 
+      - name: format check
+        run: zig fmt --check build.zig src
+
       - name: zig build test
         run: zig build test --summary all
 
@@ -62,6 +66,7 @@ jobs:
   cross-compile:
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -94,6 +99,7 @@ jobs:
   test-windows:
     name: test (windows-latest)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - name: install zig
@@ -109,6 +115,9 @@ jobs:
           key: zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
           restore-keys: |
             zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-
+      - name: format check
+        shell: bash
+        run: zig fmt --check build.zig src
       - name: zig build test
         shell: bash
         run: zig build test --summary all
@@ -118,6 +127,7 @@ jobs:
   install-script:
     name: install.ps1 parse-check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - name: parse-check install.ps1
