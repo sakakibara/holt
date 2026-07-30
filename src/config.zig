@@ -139,10 +139,10 @@ const Raw = struct {
 
 /// Parses `[backends]` into presets. Each entry must be a table with a
 /// string `synced_root`; anything else is reported against the entry's name.
-fn parsePresets(alloc: std.mem.Allocator, path: []const u8, backends: ?toml.Value, diag: ?*diagnostic.Diagnostic) ![]Preset {
+fn parsePresets(alloc: std.mem.Allocator, shown: []const u8, backends: ?toml.Value, diag: ?*diagnostic.Diagnostic) ![]Preset {
     const v = backends orelse return &.{};
     if (v != .table) {
-        if (diag) |d| d.set(alloc, "{s}: [backends] must be a table", .{path});
+        if (diag) |d| d.set(alloc, "{s}: [backends] must be a table", .{shown});
         return error.MalformedBackends;
     }
 
@@ -151,7 +151,7 @@ fn parsePresets(alloc: std.mem.Allocator, path: []const u8, backends: ?toml.Valu
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
         const synced_root = entry.value_ptr.*.getT([]const u8, "synced_root") orelse {
-            if (diag) |d| d.set(alloc, "{s}: [backends.{s}] missing a string synced_root", .{ path, name });
+            if (diag) |d| d.set(alloc, "{s}: [backends.{s}] missing a string synced_root", .{ shown, name });
             return error.MalformedBackends;
         };
         try presets.append(alloc, .{ .name = name, .synced_root = synced_root });
@@ -221,9 +221,9 @@ pub fn load(alloc: std.mem.Allocator, env: Env, path: []const u8, diag: ?*diagno
 /// assert an absolute path. A relative value - a relative literal in the
 /// config, or a "~/..." expanded against a relative/unset $HOME - is caught
 /// here as a clean diagnostic instead of a downstream panic.
-fn ensureAbsolute(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, path: []const u8, label: []const u8, value: []const u8) !void {
+fn ensureAbsolute(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, shown: []const u8, label: []const u8, value: []const u8) !void {
     if (std.fs.path.isAbsolute(value)) return;
-    if (diag) |d| d.set(alloc, "{s}: {s} \"{s}\" is not an absolute path (check the config and $HOME)", .{ path, label, value });
+    if (diag) |d| d.set(alloc, "{s}: {s} \"{s}\" is not an absolute path (check the config and $HOME)", .{ shown, label, value });
     return error.RelativeRoot;
 }
 
@@ -235,10 +235,10 @@ fn ensureAbsolute(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, path:
 /// file as a directory the way POSIX does, so the kind has to be checked
 /// directly. Any other access error is left for the operation that actually
 /// needs the path to report in its own context.
-fn ensureDirOrAbsent(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, path: []const u8, label: []const u8, root: []const u8) !void {
+fn ensureDirOrAbsent(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, shown: []const u8, label: []const u8, root: []const u8) !void {
     const st = std.Io.Dir.cwd().statFile(fsutil.io(), root, .{}) catch return;
     if (st.kind != .directory) {
-        if (diag) |d| d.set(alloc, "{s}: {s} \"{s}\" exists but is not a directory", .{ path, label, root });
+        if (diag) |d| d.set(alloc, "{s}: {s} \"{s}\" exists but is not a directory", .{ shown, label, root });
         return error.RootNotDirectory;
     }
 }
@@ -247,19 +247,19 @@ fn ensureDirOrAbsent(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, pa
 /// reason available. `errs` is the diagnostic list `load` handed to
 /// `parseInto`; the streaming fast path never touches it, so any entries
 /// come from the canonical tree-decode rerun that produced `err`.
-fn setLoadDiag(d: *diagnostic.Diagnostic, alloc: std.mem.Allocator, path: []const u8, err: anyerror, errs: []const toml.Diagnostic) void {
+fn setLoadDiag(d: *diagnostic.Diagnostic, alloc: std.mem.Allocator, shown: []const u8, err: anyerror, errs: []const toml.Diagnostic) void {
     if (err == error.MissingField and errs.len > 0) {
         const e = errs[0];
         const top_level = e.path == null or e.path.?.len == 0;
         if (top_level) {
-            d.set(alloc, "{s}: no [workspace] table found", .{path});
+            d.set(alloc, "{s}: no [workspace] table found", .{shown});
             return;
         }
     }
     if (errs.len > 0) {
-        d.set(alloc, "{s}: invalid TOML: {s}", .{ path, errs[0].message });
+        d.set(alloc, "{s}: invalid TOML: {s}", .{ shown, errs[0].message });
     } else {
-        d.set(alloc, "{s}: invalid TOML: parse error", .{path});
+        d.set(alloc, "{s}: invalid TOML: parse error", .{shown});
     }
 }
 
