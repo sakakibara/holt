@@ -172,7 +172,51 @@ pub fn renderCommandHelp(w: *std.Io.Writer, prog_name: []const u8, cmd: anytype)
         }
     }
 
+    // The relations the parser enforces, declared once on the command. This
+    // renderer drops cli-zig's Args:/Commands: sections on purpose, but a
+    // refusal the user can actually trigger has to be stated somewhere, and
+    // prose beside the declaration is the duplication a declared `why`
+    // exists to remove.
+    if (cmd.constraints.len > 0) {
+        try w.writeAll("\nConstraints:\n");
+        for (cmd.constraints) |c| {
+            try w.writeAll("  ");
+            switch (c.kind) {
+                .exclusive => {
+                    try w.writeAll("at most one of ");
+                    try writeConstraintNames(w, c.subject);
+                },
+                .conflicts => {
+                    try writeConstraintNames(w, c.subject);
+                    try w.writeAll(" cannot combine with ");
+                    try writeConstraintNames(w, c.others);
+                },
+                .requires_any => {
+                    try writeConstraintNames(w, c.subject);
+                    try w.writeAll(" requires one of ");
+                    try writeConstraintNames(w, c.others);
+                },
+                .requires_all => {
+                    try writeConstraintNames(w, c.subject);
+                    try w.writeAll(" requires ");
+                    try writeConstraintNames(w, c.others);
+                },
+            }
+            if (c.why.len > 0) try w.print(" ({s})", .{c.why});
+            try w.writeByte('\n');
+        }
+    }
+
     if (cmd.details.len > 0) try w.print("\n{s}\n", .{cmd.details});
+}
+
+/// Already-spelled flag names, comma-joined: how a constraint line names
+/// either side of a relation.
+fn writeConstraintNames(w: *std.Io.Writer, names: []const []const u8) !void {
+    for (names, 0..) |n, i| {
+        if (i > 0) try w.writeAll(", ");
+        try w.writeAll(n);
+    }
 }
 
 pub const HoltCli = cli.App(.{

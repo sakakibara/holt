@@ -27,10 +27,13 @@ pub const command = app.command(Spec, .{
     .summary = "Create config.toml, picking or seeding a synced-storage backend",
     .usage = "holt setup [--backend <name>|--synced-root <path>] [--code-root <path>] [--hub-root <path>] [--force]",
     .group = .system,
-    .exclusive = &.{&.{ "backend", "synced_root" }},
+    .exclusive = &.{.{
+        .any_of = &.{ "backend", "synced_root" },
+        .why = "a backend preset resolves the synced root itself",
+    }},
     .details =
-    \\--backend and --synced-root are mutually exclusive. With neither given
-    \\and a real terminal attached, setup asks interactively.
+    \\With neither given and a real terminal attached, setup asks
+    \\interactively.
     \\
     \\Example:
     \\  holt setup --backend dropbox
