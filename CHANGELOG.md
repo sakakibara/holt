@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-07-31
 
 ### Added
 
@@ -21,9 +21,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   absolute before while a handful were contracted -- `holt create` showed the
   same clone path both ways depending on whether it succeeded. Output a caller
   parses is unchanged and stays absolute: the bare cd-friendly path line, `list
-  --paths`, and `config`'s `key = value` lines, which the `hir` shell function
-  greps `code_root` out of and joins inside quotes, where a `~` would never
-  expand.
+  --paths`, and `config`'s `key = value` lines, whose values a script joins
+  onto a relative key inside quotes, where a `~` would never expand.
 - A load diagnostic now names only what is wrong, leaving the path to the
   caller that already holds it. Marker and config failures used to bake the
   path into the message and have the caller print it alongside, so `holt
@@ -305,6 +304,7 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
+[0.8.0]: https://github.com/sakakibara/holt/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/sakakibara/holt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/sakakibara/holt/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/sakakibara/holt/compare/v0.5.1...v0.5.2
