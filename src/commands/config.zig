@@ -63,12 +63,14 @@ fn runShow(ctx: *app.Ctx) anyerror!u8 {
 
     var diag: diagnostic.Diagnostic = .{};
     const cfg = config.loadDefault(ctx.alloc, app.envOf(ctx), &diag) catch {
-        try ctx.err.print("holt: config file = {s}\n", .{path});
+        try ctx.err.print("holt: config file = {s}\n", .{try app.tilde(ctx, path)});
         try ctx.err.print("holt: {s}\n", .{diag.message});
         try ctx.err.writeAll("holt: fix it with \"holt config edit\" or \"holt setup\"\n");
         return 1;
     };
 
+    // Absolute, not tilde-contracted: `hir` (shell.zig) greps code_root out of
+    // these lines and joins it inside quotes, where a `~` would never expand.
     try ctx.out.print("synced_root = {s}\n", .{cfg.synced_root});
     try ctx.out.print("code_root = {s}\n", .{cfg.code_root});
     try ctx.out.print("hub_root = {s}\n", .{cfg.hub_root});
@@ -86,7 +88,7 @@ fn runEdit(ctx: *app.Ctx, _: cli.Args(EditSpec)) anyerror!u8 {
     const path = try config.configPath(alloc, app.envOf(ctx));
 
     if (!fsutil.exists(path)) {
-        try ctx.err.print("holt: no config at {s}; run \"holt setup\" to create one\n", .{path});
+        try ctx.err.print("holt: no config at {s}; run \"holt setup\" to create one\n", .{try app.tilde(ctx, path)});
         return 1;
     }
 

@@ -171,7 +171,7 @@ pub fn moveDir(ctx: *app.Ctx, from: []const u8, to: []const u8) !void {
     // a clone whose checkout lives on a different volume than code_root still
     // relocates instead of failing with CrossDevice.
     fsutil.moveTree(ctx.alloc, from, to) catch |err| {
-        try ctx.err.print("holt: failed to move {s} -> {s}: {s}\n", .{ from, to, @errorName(err) });
+        try ctx.err.print("holt: failed to move {s} -> {s}: {s}\n", .{ try app.tilde(ctx, from), try app.tilde(ctx, to), @errorName(err) });
         return err;
     };
 }
@@ -235,7 +235,7 @@ pub fn cloneIfAbsent(ctx: *app.Ctx, url: []const u8, clone_path: []const u8) !bo
         // clone that every later check reads as healthy. Refuse it with an
         // actionable message rather than silently reusing it.
         if (!try git.isCompleteClone(ctx.alloc, clone_path)) {
-            try ctx.err.print("holt: clone at {s} looks incomplete (an interrupted clone?); remove it and retry\n", .{clone_path});
+            try ctx.err.print("holt: clone at {s} looks incomplete (an interrupted clone?); remove it and retry\n", .{try app.tilde(ctx, clone_path)});
             return error.IncompleteClone;
         }
         return false;
@@ -262,7 +262,7 @@ pub fn cloneIfAbsent(ctx: *app.Ctx, url: []const u8, clone_path: []const u8) !bo
 /// instead of a raw error name.
 pub fn removeContent(ctx: *app.Ctx, path: []const u8) !void {
     std.Io.Dir.cwd().deleteTree(fsutil.io(), path) catch |err| {
-        try ctx.err.print("holt: failed to delete {s}: {s}\n", .{ path, @errorName(err) });
+        try ctx.err.print("holt: failed to delete {s}: {s}\n", .{ try app.tilde(ctx, path), @errorName(err) });
         return err;
     };
 }
@@ -420,8 +420,9 @@ test "moveDir: a move that fails reports both paths and the error, not a bare er
 
     const reported = err_w.written();
     try testing.expect(std.mem.indexOf(u8, reported, "failed to move") != null);
-    try testing.expect(std.mem.indexOf(u8, reported, from) != null);
-    try testing.expect(std.mem.indexOf(u8, reported, to) != null);
+    const env = app.envOf_current();
+    try testing.expect(std.mem.indexOf(u8, reported, try fsutil.contractTilde(arena, env, from)) != null);
+    try testing.expect(std.mem.indexOf(u8, reported, try fsutil.contractTilde(arena, env, to)) != null);
 }
 
 test "removeContent: a delete that fails reports the path and the error, not a bare error name" {
@@ -455,7 +456,7 @@ test "removeContent: a delete that fails reports the path and the error, not a b
 
         const reported = err_w.written();
         try testing.expect(std.mem.indexOf(u8, reported, "failed to delete") != null);
-        try testing.expect(std.mem.indexOf(u8, reported, target_path) != null);
+        try testing.expect(std.mem.indexOf(u8, reported, try fsutil.contractTilde(arena, app.envOf_current(), target_path)) != null);
     }
 }
 

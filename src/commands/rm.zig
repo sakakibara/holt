@@ -65,14 +65,14 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const others = try ws.projectsUsing(alloc, id);
     try ctx.out.print("removed {s} from {s}/{s}\n", .{ repo_name, p.org, p.name });
     if (others.len > 0) {
-        try ctx.out.print("clone at {s} still used by:", .{clone_path});
+        try ctx.out.print("clone at {s} still used by:", .{try app.tilde(ctx, clone_path)});
         for (others) |o| {
             const qualified = try o.qualified(alloc);
             try ctx.out.print(" {s}", .{qualified});
         }
         try ctx.out.writeByte('\n');
     } else {
-        try ctx.out.print("no project references {s}; clone kept\n", .{clone_path});
+        try ctx.out.print("no project references {s}; clone kept\n", .{try app.tilde(ctx, clone_path)});
     }
     return 0;
 }

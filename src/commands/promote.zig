@@ -188,7 +188,7 @@ fn resolveOrigin(
         return .{ .origin = r.origin, .new_id = r.id, .new_path = r.path, .move_needed = false };
     }
 
-    try ctx.err.print("holt: local clone for {s} not found at {s}\n", .{ name, old_path });
+    try ctx.err.print("holt: local clone for {s} not found at {s}\n", .{ name, try app.tilde(ctx, old_path) });
     return null;
 }
 
@@ -203,7 +203,7 @@ fn printResumeHint(ctx: *app.Ctx, alloc: std.mem.Allocator, done: []const Refere
         if (std.mem.eql(u8, std.fs.path.basename(new_path), name)) {
             try ctx.err.print("holt: promote failed before updating any project; re-run \"holt promote {s}\" to finish\n", .{name});
         } else {
-            try ctx.err.print("holt: promote failed before updating any project; the clone now lives at {s} and cannot be found automatically - update a project's marker or move it back to resume\n", .{new_path});
+            try ctx.err.print("holt: promote failed before updating any project; the clone now lives at {s} and cannot be found automatically - update a project's marker or move it back to resume\n", .{try app.tilde(ctx, new_path)});
         }
         return;
     }
@@ -220,9 +220,9 @@ fn printResumeHint(ctx: *app.Ctx, alloc: std.mem.Allocator, done: []const Refere
 /// confirmation.
 fn printPlan(ctx: *app.Ctx, alloc: std.mem.Allocator, old_path: []const u8, new_path: []const u8, move_needed: bool, referencing: []const Referencing) !void {
     if (move_needed) {
-        try ctx.out.print("move {s} -> {s}\n", .{ old_path, new_path });
+        try ctx.out.print("move {s} -> {s}\n", .{ try app.tilde(ctx, old_path), try app.tilde(ctx, new_path) });
     } else {
-        try ctx.out.print("clone already at {s}\n", .{new_path});
+        try ctx.out.print("clone already at {s}\n", .{try app.tilde(ctx, new_path)});
     }
     try ctx.out.print("rewrite {d} marker(s):\n", .{referencing.len});
     for (referencing) |ref| {
@@ -254,9 +254,9 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         const dest_origin = try git.remoteUrl(alloc, new_path);
         const same_remote = if (dest_origin) |d| std.mem.eql(u8, d, origin) else false;
         if (same_remote) {
-            try ctx.err.print("holt: destination {s} already cloned; resolve manually\n", .{new_path});
+            try ctx.err.print("holt: destination {s} already cloned; resolve manually\n", .{try app.tilde(ctx, new_path)});
         } else {
-            try ctx.err.print("holt: destination {s} already exists and is a different repo\n", .{new_path});
+            try ctx.err.print("holt: destination {s} already exists and is a different repo\n", .{try app.tilde(ctx, new_path)});
         }
         return 1;
     }
@@ -316,7 +316,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         };
     }
 
-    try ctx.out.print("moved {s} -> {s}\n", .{ old_path, new_path });
+    try ctx.out.print("moved {s} -> {s}\n", .{ try app.tilde(ctx, old_path), try app.tilde(ctx, new_path) });
     try ctx.out.print("{d} marker(s) updated, hub(s) rebuilt\n", .{referencing.len});
     return 0;
 }
@@ -464,8 +464,9 @@ test "run: --dry-run prints the planned move and affected projects, changing not
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "scratch", "--dry-run" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, local_clone_path) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, new_clone_path) != null);
+    const env = app.envOf_current();
+    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, env, local_clone_path)) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, env, new_clone_path)) != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "acme/first") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "acme/second") != null);
 
@@ -814,5 +815,5 @@ test "run: a local clone missing from both the old and new path is a hard error,
     const got = try testutil.runCmd(arena, command.run, ws, &.{"scratch"});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "not found at") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, local_clone_path) != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, try fsutil.contractTilde(arena, app.envOf_current(), local_clone_path)) != null);
 }

@@ -91,12 +91,12 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const abs_path = try fsutil.toAbsolute(alloc, path_arg);
 
     if (!fsutil.exists(abs_path)) {
-        try ctx.err.print("holt: no clone found at {s}\n", .{abs_path});
+        try ctx.err.print("holt: no clone found at {s}\n", .{try app.tilde(ctx, abs_path)});
         return 1;
     }
 
     if (!try git.inspectable(alloc, abs_path)) {
-        try ctx.err.print("holt: {s} is not a readable git repository\n", .{abs_path});
+        try ctx.err.print("holt: {s} is not a readable git repository\n", .{try app.tilde(ctx, abs_path)});
         return 1;
     }
 
@@ -138,7 +138,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     if (!try samePath(alloc, abs_path, clone_path)) {
         if (fsutil.exists(clone_path)) {
-            try ctx.err.print("holt: destination {s} already exists; refusing to overwrite\n", .{clone_path});
+            try ctx.err.print("holt: destination {s} already exists; refusing to overwrite\n", .{try app.tilde(ctx, clone_path)});
             return 1;
         }
 
@@ -149,7 +149,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         // data-loss risk from the move) gates a local adopt.
         var verdict = if (origin != null) try recover.check(alloc, abs_path) else try localSafetyCheck(alloc, abs_path);
         if (!verdict.safe() and !force) {
-            try ctx.err.print("holt: {s} has unrecoverable local state, refusing to adopt (use --force to override):\n", .{abs_path});
+            try ctx.err.print("holt: {s} has unrecoverable local state, refusing to adopt (use --force to override):\n", .{try app.tilde(ctx, abs_path)});
             try verdict.render(ctx.err);
             return 1;
         }
@@ -191,12 +191,13 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     const rel = try id.relPath(alloc);
     try ctx.out.print("{s}\n", .{final_path});
-    try ctx.err.print("adopted {s} -> {s}\n", .{ rel, try fsutil.contractTilde(alloc, app.envOf(ctx), final_path) });
+    try ctx.err.print("adopted {s} -> {s}\n", .{ rel, try app.tilde(ctx, final_path) });
     return 0;
 }
 
 fn reportUnfinishedAdopt(ctx: *app.Ctx, org: []const u8, name: []const u8, clone_path: []const u8, err: anyerror) !void {
-    try ctx.err.print("holt: the clone was moved to {s} but updating {s}/{s} failed: {s}; re-run \"holt adopt {s}/{s} {s}\" to finish\n", .{ clone_path, org, name, @errorName(err), org, name, clone_path });
+    const shown = try app.tilde(ctx, clone_path);
+    try ctx.err.print("holt: the clone was moved to {s} but updating {s}/{s} failed: {s}; re-run \"holt adopt {s}/{s} {s}\" to finish\n", .{ shown, org, name, @errorName(err), org, name, shown });
 }
 
 /// Clones `bare` to `dest` and repoints origin at `fake_origin` - a URL
@@ -413,7 +414,7 @@ test "run: a marker-save failure after the move names the new clone path and re-
 
         const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", stray_path });
         try testing.expectEqual(@as(u8, 1), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.err, new_clone_path) != null);
+        try testing.expect(std.mem.indexOf(u8, got.err, try fsutil.contractTilde(arena, app.envOf_current(), new_clone_path)) != null);
         try testing.expect(std.mem.indexOf(u8, got.err, "re-run") != null);
         try testing.expect(std.mem.indexOf(u8, got.err, "holt adopt acme/proj") != null);
 
@@ -471,7 +472,7 @@ test "run: a nonexistent path is a hard error, not a crash" {
     const missing_path = try std.fs.path.join(arena, &.{ root, "does-not-exist" });
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", missing_path });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, missing_path) != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, try fsutil.contractTilde(arena, app.envOf_current(), missing_path)) != null);
 }
 
 test "run: one-arg standalone adopt moves a clone to its ghq path with no marker and no hub" {

@@ -149,14 +149,14 @@ fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const M
             continue;
         }
         std.Io.Dir.cwd().deleteTree(fsutil.io(), m.clone_path) catch |err| {
-            try ctx.err.print("holt: could not reclaim {s}: {s}\n", .{ m.clone_path, @errorName(err) });
+            try ctx.err.print("holt: could not reclaim {s}: {s}\n", .{ try app.tilde(ctx, m.clone_path), @errorName(err) });
             continue;
         };
         if (std.fs.path.dirname(m.clone_path)) |owner_dir| {
             fsutil.rmdirIfEmpty(owner_dir);
             if (std.fs.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
         }
-        try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, try fsutil.contractTilde(alloc, app.envOf(ctx), m.clone_path) });
+        try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, try app.tilde(ctx, m.clone_path) });
     }
 }
 

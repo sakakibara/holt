@@ -68,7 +68,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     var failed_path: []const u8 = p.content_path;
     removeContentMarkerLast(alloc, p.content_path, &failed_path) catch |err| {
-        try ctx.err.print("holt: failed to delete {s}: {s} (run \"holt delete {s}\" again)\n", .{ failed_path, @errorName(err), qualified });
+        try ctx.err.print("holt: failed to delete {s}: {s} (run \"holt delete {s}\" again)\n", .{ try app.tilde(ctx, failed_path), @errorName(err), qualified });
         return 1;
     };
 
@@ -80,7 +80,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         const others = try ws.projectsUsing(alloc, id);
         if (others.len == 0) {
             const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-            try ctx.out.print("clone at {s} is now unreferenced; remove it manually if no longer needed\n", .{try fsutil.contractTilde(alloc, app.envOf(ctx), clone_path)});
+            try ctx.out.print("clone at {s} is now unreferenced; remove it manually if no longer needed\n", .{try app.tilde(ctx, clone_path)});
         }
     }
 

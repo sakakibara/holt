@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Paths inside messages now contract `$HOME` to `~` everywhere. Most printed
+  absolute before while a handful were contracted -- `holt create` showed the
+  same clone path both ways depending on whether it succeeded. Output a caller
+  parses is unchanged and stays absolute: the bare cd-friendly path line, `list
+  --paths`, and `config`'s `key = value` lines, which the `hir` shell function
+  greps `code_root` out of and joins inside quotes, where a `~` would never
+  expand.
+
 ## [0.7.0] - 2026-07-24
 
 ### Security

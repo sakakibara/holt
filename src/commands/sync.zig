@@ -52,7 +52,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         try ctx.out.print("{s}: created {d}, retargeted {d}, removed {d}, conflicts {d}\n", .{
             qualified, report.created, report.retargeted, report.removed, report.conflicts.len,
         });
-        for (report.conflicts) |c| try ctx.out.print("  conflict: {s}\n", .{c});
+        for (report.conflicts) |c| try ctx.out.print("  conflict: {s}\n", .{try app.tilde(ctx, c)});
 
         if (report.skipped_unprivileged.len > 0) {
             try ctx.out.print("  {d} content file(s) not surfaced at the hub root (needs Developer Mode for file links):\n", .{report.skipped_unprivileged.len});
@@ -86,7 +86,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 fn pruneOrphanHubs(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, dry_run: bool) !u32 {
     switch (try fsutil.linkState(alloc, ws.cfg.hub_root)) {
         .symlink => {
-            try ctx.err.print("holt: hub_root {s} is a symlink; skipping orphan-hub pruning to avoid deleting content through it\n", .{ws.cfg.hub_root});
+            try ctx.err.print("holt: hub_root {s} is a symlink; skipping orphan-hub pruning to avoid deleting content through it\n", .{try app.tilde(ctx, ws.cfg.hub_root)});
             return 0;
         },
         else => {},

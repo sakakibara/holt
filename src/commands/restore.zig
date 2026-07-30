@@ -135,7 +135,7 @@ fn runAll(ctx: *app.Ctx, jobs_cap: ?usize) anyerror!u8 {
 
             if (results[ji].ok) {
                 if (!success_printed[ji]) {
-                    try ctx.out.print("{s}: cloned {s} -> {s}\n", .{ qualified, repo_name, clone_path });
+                    try ctx.out.print("{s}: cloned {s} -> {s}\n", .{ qualified, repo_name, try app.tilde(ctx, clone_path) });
                     success_printed[ji] = true;
                 }
             } else {
@@ -182,7 +182,7 @@ fn runUnarchive(ctx: *app.Ctx, spec: []const u8) anyerror!u8 {
     const archive_path = try std.fs.path.join(alloc, &.{ archive_root, on.org, on.name });
     const archive_marker = try std.fs.path.join(alloc, &.{ archive_path, marker.marker_basename });
     if (!fsutil.exists(archive_marker)) {
-        try ctx.err.print("holt: no archived project at {s}\n", .{archive_path});
+        try ctx.err.print("holt: no archived project at {s}\n", .{try app.tilde(ctx, archive_path)});
         return 1;
     }
 

@@ -48,13 +48,13 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const parent_real = try fsutil.realPathOrSelf(alloc, std.fs.path.dirname(abs) orelse abs);
     const hub_real = try fsutil.realPathOrSelf(alloc, p.hub_path);
     if (!std.mem.eql(u8, parent_real, hub_real)) {
-        try ctx.err.print("holt: keep only accepts an entry at the project root ({s})\n", .{p.hub_path});
+        try ctx.err.print("holt: keep only accepts an entry at the project root ({s})\n", .{try app.tilde(ctx, p.hub_path)});
         return 1;
     }
 
     switch (try fsutil.linkState(alloc, abs)) {
         .missing => {
-            try ctx.err.print("holt: no such entry {s}\n", .{abs});
+            try ctx.err.print("holt: no such entry {s}\n", .{try app.tilde(ctx, abs)});
             return 1;
         },
         .symlink => {

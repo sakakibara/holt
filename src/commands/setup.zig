@@ -52,7 +52,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const path = try config.configPath(alloc, app.envOf(ctx));
 
     if (fsutil.exists(path) and !force) {
-        try ctx.err.print("holt: config already exists at {s} (use --force to overwrite)\n", .{path});
+        try ctx.err.print("holt: config already exists at {s} (use --force to overwrite)\n", .{try app.tilde(ctx, path)});
         return 1;
     }
 
@@ -81,13 +81,13 @@ fn writeConfig(ctx: *app.Ctx, path: []const u8, active: ?[]const u8, direct_root
 
     writeBody(alloc, path, body) catch |err| switch (err) {
         error.AccessDenied => {
-            try ctx.err.print("holt: cannot write config to {s}: permission denied (is the directory writable?)\n", .{path});
+            try ctx.err.print("holt: cannot write config to {s}: permission denied (is the directory writable?)\n", .{try app.tilde(ctx, path)});
             return 1;
         },
         else => return err,
     };
 
-    try ctx.out.print("wrote {s}\n", .{path});
+    try ctx.out.print("wrote {s}\n", .{try app.tilde(ctx, path)});
     return 0;
 }
 
@@ -102,7 +102,7 @@ fn writeBody(alloc: std.mem.Allocator, path: []const u8, body: []const u8) !void
 fn warnIfMissing(ctx: *app.Ctx, raw_root: []const u8) !void {
     const expanded = try fsutil.expandTilde(ctx.alloc, app.envOf(ctx), raw_root);
     if (!fsutil.exists(expanded)) {
-        try ctx.err.print("holt: warning: {s} does not exist yet\n", .{expanded});
+        try ctx.err.print("holt: warning: {s} does not exist yet\n", .{try app.tilde(ctx, expanded)});
     }
 }
 
@@ -193,7 +193,7 @@ test "run: --backend dropbox writes a config that loads with backend dropbox, na
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const path = try config.configPath(arena, app.envOf_current());
-    try testing.expect(std.mem.indexOf(u8, got.out, path) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), path)) != null);
 
     const cfg = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("dropbox", cfg.backend.?);

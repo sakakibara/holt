@@ -98,7 +98,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     _ = try hub.reconcile(alloc, &ws, &p, false);
 
-    const shown = try fsutil.contractTilde(alloc, app.envOf(ctx), clone_path);
+    const shown = try app.tilde(ctx, clone_path);
     try ctx.out.print("added {s} to {s}/{s}\n", .{ id.repo, p.org, p.name });
     if (cloned) {
         try ctx.out.print("cloned {s} -> {s}\n", .{ url, shown });

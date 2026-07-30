@@ -67,7 +67,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
             return app.usageError(ctx, "--remove needs a <branch>", .{});
         }
         const listing = git.worktreeList(alloc, clone_path) catch {
-            try ctx.err.print("holt: could not list worktrees for {s}\n", .{clone_path});
+            try ctx.err.print("holt: could not list worktrees for {s}\n", .{try app.tilde(ctx, clone_path)});
             return 1;
         };
         defer alloc.free(listing);
@@ -88,7 +88,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         // link reconciles away.
         fsutil.rmdirIfEmpty(worktrees_dir);
         try reconcileUsers(ctx, ws, id);
-        try ctx.out.print("removed worktree {s}\n", .{wt_path});
+        try ctx.out.print("removed worktree {s}\n", .{try app.tilde(ctx, wt_path)});
         return 0;
     }
 

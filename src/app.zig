@@ -8,6 +8,7 @@ const Env = @import("env").Env;
 const cli = @import("cli");
 const workspace = @import("workspace.zig");
 const config = @import("config.zig");
+const fsutil = @import("fsutil.zig");
 const diagnostic = @import("diag.zig");
 const completion_source = @import("completion_source.zig");
 const testing = std.testing;
@@ -76,6 +77,15 @@ pub fn envOf_current() Env {
 pub fn envOf(ctx: *Ctx) Env {
     if (ctx.context) |c| return c.env;
     return envOf_current();
+}
+
+/// A path for a line the user reads, with `$HOME` contracted to `~`. Output a
+/// caller parses keeps its absolute path: the bare-path stdout payload, `list
+/// --paths`, and `config`'s `key = value` lines (holt's own `hir` shell
+/// function greps `code_root` out of them and joins it inside quotes, where a
+/// `~` would never expand).
+pub fn tilde(ctx: *Ctx, path: []const u8) ![]u8 {
+    return fsutil.contractTilde(ctx.alloc, envOf(ctx), path);
 }
 
 /// Dynamic shell-completion source: the one hook cli-zig's engine calls for

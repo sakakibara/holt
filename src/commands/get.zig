@@ -82,7 +82,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         // Guard the "already present" fast path against an interrupted clone:
         // a `.git` with no commits is not a usable clone to report or update.
         if (!try git.isCompleteClone(alloc, clone_path)) {
-            try ctx.err.print("holt: clone at {s} looks incomplete (an interrupted clone?); remove it and retry\n", .{clone_path});
+            try ctx.err.print("holt: clone at {s} looks incomplete (an interrupted clone?); remove it and retry\n", .{try app.tilde(ctx, clone_path)});
             return 1;
         }
         if (!update) {
@@ -94,7 +94,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         if (res.status != 0) {
             const trimmed = std.mem.trim(u8, res.stderr, " \t\r\n");
             const cause = if (trimmed.len == 0) "git pull failed" else trimmed;
-            try ctx.err.print("holt: failed to update {s}: {s}\n", .{ clone_path, cause });
+            try ctx.err.print("holt: failed to update {s}: {s}\n", .{ try app.tilde(ctx, clone_path), cause });
             return 1;
         }
         try ctx.out.print("{s}\n", .{clone_path});

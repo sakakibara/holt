@@ -47,14 +47,14 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     if (a.json) return runJson(ctx, &ws, &p);
 
     try ctx.out.print("{s}/{s}\n", .{ p.org, p.name });
-    try ctx.out.print("content: {s}\n", .{try fsutil.contractTilde(alloc, app.envOf(ctx), p.content_path)});
-    try ctx.out.print("hub: {s}\n", .{try fsutil.contractTilde(alloc, app.envOf(ctx), p.hub_path)});
+    try ctx.out.print("content: {s}\n", .{try app.tilde(ctx, p.content_path)});
+    try ctx.out.print("hub: {s}\n", .{try app.tilde(ctx, p.hub_path)});
 
     for (p.marker.repos.keys()) |repo_name| {
         const id = try p.repoIdentity(alloc, repo_name);
         const rel = try id.relPath(alloc);
         const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-        try ctx.out.print("  {s}: {s} ({s}) [", .{ repo_name, rel, try fsutil.contractTilde(alloc, app.envOf(ctx), clone_path) });
+        try ctx.out.print("  {s}: {s} ({s}) [", .{ repo_name, rel, try app.tilde(ctx, clone_path) });
         if (!fsutil.exists(clone_path)) {
             try ui.color(ctx.context.?.color, ctx.out, color_red, "missing");
         } else if (!try git.inspectable(alloc, clone_path)) {

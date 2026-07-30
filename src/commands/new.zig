@@ -116,7 +116,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     try ctx.out.print("{s}\n", .{hub_path});
     try ctx.err.print("created {s}/{s}\n", .{ on.org, on.name });
     if (clone_path) |cp| {
-        const shown = try fsutil.contractTilde(alloc, app.envOf(ctx), cp);
+        const shown = try app.tilde(ctx, cp);
         if (cloned) {
             try ctx.err.print("cloned {s} -> {s}\n", .{ url.?, shown });
         } else {

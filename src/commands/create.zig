@@ -86,7 +86,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     }
 
     if (fsutil.exists(clone_path)) {
-        try ctx.err.print("holt: {s} already exists; use `holt adopt` to register an existing clone\n", .{clone_path});
+        try ctx.err.print("holt: {s} already exists; use `holt adopt` to register an existing clone\n", .{try app.tilde(ctx, clone_path)});
         return 1;
     }
 
@@ -100,7 +100,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const res = try git.run(alloc, &.{ "git", "init", "-q", "-b", "main", clone_path }, null);
     if (res.status != 0) {
         const cause = std.mem.trim(u8, res.stderr, " \t\r\n");
-        try ctx.err.print("holt: git init failed at {s}: {s}\n", .{ clone_path, cause });
+        try ctx.err.print("holt: git init failed at {s}: {s}\n", .{ try app.tilde(ctx, clone_path), cause });
         return 1;
     }
 
@@ -108,7 +108,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         const rr = try git.run(alloc, &.{ "git", "-C", clone_path, "remote", "add", "origin", origin }, null);
         if (rr.status != 0) {
             const cause = std.mem.trim(u8, rr.stderr, " \t\r\n");
-            try ctx.err.print("holt: failed to set origin on {s}: {s}\n", .{ clone_path, cause });
+            try ctx.err.print("holt: failed to set origin on {s}: {s}\n", .{ try app.tilde(ctx, clone_path), cause });
             return 1;
         }
     }
@@ -129,7 +129,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     }
 
     try ctx.out.print("{s}\n", .{clone_path});
-    try ctx.err.print("created {s}\n", .{try fsutil.contractTilde(alloc, app.envOf(ctx), clone_path)});
+    try ctx.err.print("created {s}\n", .{try app.tilde(ctx, clone_path)});
     return 0;
 }
 
