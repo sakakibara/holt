@@ -15,6 +15,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   --paths`, and `config`'s `key = value` lines, which the `hir` shell function
   greps `code_root` out of and joins inside quotes, where a `~` would never
   expand.
+- A load diagnostic now names only what is wrong, leaving the path to the
+  caller that already holds it. Marker and config failures used to bake the
+  path into the message and have the caller print it alongside, so `holt
+  list`, `holt doctor`, and `holt config` each reported the same file twice on
+  one line.
+- `holt doctor` reports every path in its findings against `~` as well,
+  including the backend line.
 
 ## [0.7.0] - 2026-07-24
 

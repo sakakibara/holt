@@ -162,22 +162,26 @@ fn parsePresets(alloc: std.mem.Allocator, path: []const u8, backends: ?toml.Valu
 /// Parses the `[workspace]` and `[backends]` tables at `path`, resolves the
 /// active synced_root (spec 3.2), and tilde-expands all three roots.
 pub fn load(alloc: std.mem.Allocator, env: Env, path: []const u8, diag: ?*diagnostic.Diagnostic) !Config {
+    // Diagnostics name the config the way its owner would write it; `path`
+    // itself stays absolute, since that is what gets opened.
+    const shown = try fsutil.contractTilde(alloc, env, path);
+
     const src = std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, alloc, .limited(1 << 20)) catch |err| {
-        if (diag) |d| d.set(alloc, "{s}: {s}", .{ path, @errorName(err) });
+        if (diag) |d| d.set(alloc, "{s}: {s}", .{ shown, @errorName(err) });
         return err;
     };
 
     var errs: std.ArrayList(toml.Diagnostic) = .empty;
     const raw = toml.parseInto(Raw, alloc, src, .{ .errors = &errs }) catch |err| {
-        if (diag) |d| setLoadDiag(d, alloc, path, err, errs.items);
+        if (diag) |d| setLoadDiag(d, alloc, shown, err, errs.items);
         return err;
     };
     const ws = raw.workspace;
 
-    const presets = try parsePresets(alloc, path, raw.backends, diag);
+    const presets = try parsePresets(alloc, shown, raw.backends, diag);
 
     if (ws.backend != null and ws.synced_root != null) {
-        if (diag) |d| d.set(alloc, "{s}: set either workspace.backend or workspace.synced_root, not both", .{path});
+        if (diag) |d| d.set(alloc, "{s}: set either workspace.backend or workspace.synced_root, not both", .{shown});
         return error.ConfigConflict;
     }
 
@@ -186,23 +190,23 @@ pub fn load(alloc: std.mem.Allocator, env: Env, path: []const u8, diag: ?*diagno
             for (presets) |p| {
                 if (std.mem.eql(u8, p.name, name)) break :blk p.synced_root;
             }
-            if (diag) |d| d.set(alloc, "{s}: backend \"{s}\" is not defined in [backends]; add it or run \"holt setup\"", .{ path, name });
+            if (diag) |d| d.set(alloc, "{s}: backend \"{s}\" is not defined in [backends]; add it or run \"holt setup\"", .{ shown, name });
             return error.UnknownBackend;
         }
         if (ws.synced_root) |sr| break :blk sr;
-        if (diag) |d| d.set(alloc, "{s}: no workspace.backend or workspace.synced_root set; run \"holt setup\"", .{path});
+        if (diag) |d| d.set(alloc, "{s}: no workspace.backend or workspace.synced_root set; run \"holt setup\"", .{shown});
         return error.NoSyncedRoot;
     };
 
     const synced_root = try fsutil.expandTilde(alloc, env, synced_root_raw);
     const code_root = try fsutil.expandTilde(alloc, env, ws.code_root);
     const hub_root = try fsutil.expandTilde(alloc, env, ws.hub_root);
-    try ensureAbsolute(diag, alloc, path, "synced_root", synced_root);
-    try ensureAbsolute(diag, alloc, path, "code_root", code_root);
-    try ensureAbsolute(diag, alloc, path, "hub_root", hub_root);
-    try ensureDirOrAbsent(diag, alloc, path, "synced_root", synced_root);
-    try ensureDirOrAbsent(diag, alloc, path, "code_root", code_root);
-    try ensureDirOrAbsent(diag, alloc, path, "hub_root", hub_root);
+    try ensureAbsolute(diag, alloc, shown, "synced_root", synced_root);
+    try ensureAbsolute(diag, alloc, shown, "code_root", code_root);
+    try ensureAbsolute(diag, alloc, shown, "hub_root", hub_root);
+    try ensureDirOrAbsent(diag, alloc, shown, "synced_root", synced_root);
+    try ensureDirOrAbsent(diag, alloc, shown, "code_root", code_root);
+    try ensureDirOrAbsent(diag, alloc, shown, "hub_root", hub_root);
 
     return .{
         .backend = ws.backend,
@@ -275,7 +279,7 @@ pub fn loadDefault(alloc: std.mem.Allocator, env: Env, diag: ?*diagnostic.Diagno
 /// instead of the real config location.
 fn loadFromPath(alloc: std.mem.Allocator, env: Env, path: []const u8, diag: ?*diagnostic.Diagnostic) !Config {
     if (!fsutil.exists(path)) {
-        if (diag) |d| d.set(alloc, "{s}: no holt config file; run \"holt setup\" to create one", .{path});
+        if (diag) |d| d.set(alloc, "{s}: no holt config file; run \"holt setup\" to create one", .{try fsutil.contractTilde(alloc, env, path)});
         return error.NoConfig;
     }
     return load(alloc, env, path, diag);

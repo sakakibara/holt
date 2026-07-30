@@ -71,7 +71,7 @@ fn testWorkspace(alloc: std.mem.Allocator, root: []const u8, backend: ?[]const u
         .synced_root = try std.fs.path.join(alloc, &.{ root, "synced" }),
         .code_root = try std.fs.path.join(alloc, &.{ root, "code" }),
         .hub_root = try std.fs.path.join(alloc, &.{ root, "hub" }),
-    } };
+    }, .env = app.envOf_current() };
 }
 
 test "run: two presets, one active, lists both with expanded synced_root, marks the active one, shows exists/missing" {

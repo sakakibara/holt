@@ -163,7 +163,7 @@ pub fn testWorkspace(alloc: std.mem.Allocator, root: []const u8) !workspace.Work
         .synced_root = try std.fs.path.join(alloc, &.{ root, "synced" }),
         .code_root = try std.fs.path.join(alloc, &.{ root, "code" }),
         .hub_root = try std.fs.path.join(alloc, &.{ root, "hub" }),
-    } };
+    }, .env = app.envOf_current() };
 }
 
 /// `git init` plus one empty commit at `clone_path` (created if missing), so

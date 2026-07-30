@@ -47,18 +47,18 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     const ws = ctx.context.?.ws;
     const report = try doctor.run(ctx.alloc, &ws, .{ .full = full, .fix = fix, .jobs = a.jobs });
-    try renderBackend(ctx.out, &ws.cfg);
-    try render(ctx.out, &report, ctx.context.?.color);
+    try renderBackend(ctx, &ws.cfg);
+    try render(ctx, &report);
     return if (report.ok()) 0 else 1;
 }
 
 /// Informational: names the active backend and whether its resolved
 /// synced_root exists on disk. Never affects doctor's pass/fail exit code -
 /// a missing synced_root may just be an unmounted cloud.
-fn renderBackend(w: *std.Io.Writer, cfg: *const config.Config) !void {
+fn renderBackend(ctx: *app.Ctx, cfg: *const config.Config) !void {
     const name = cfg.backend orelse "(direct synced_root)";
     const status = if (fsutil.exists(cfg.synced_root)) "exists" else "missing";
-    try w.print("backend: {s} -> {s} [{s}]\n", .{ name, cfg.synced_root, status });
+    try ctx.out.print("backend: {s} -> {s} [{s}]\n", .{ name, try app.tilde(ctx, cfg.synced_root), status });
 }
 
 fn passFail(w: *std.Io.Writer, color_enabled: bool, name: []const u8, passed: bool) !void {
@@ -71,15 +71,18 @@ fn passFail(w: *std.Io.Writer, color_enabled: bool, name: []const u8, passed: bo
     try w.writeByte('\n');
 }
 
-fn render(w: *std.Io.Writer, report: *const doctor.Report, color_enabled: bool) !void {
+fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
+    const w = ctx.out;
+    const color_enabled = ctx.context.?.color;
+
     try passFail(w, color_enabled, "no symlinks under projects/archive", report.d1_offenders.len == 0);
-    for (report.d1_offenders) |p| try w.print("  symlink: {s}\n", .{p});
+    for (report.d1_offenders) |p| try w.print("  symlink: {s}\n", .{try app.tilde(ctx, p)});
 
     try passFail(w, color_enabled, "code is outside the synced folder", report.d2_ok);
     try passFail(w, color_enabled, "hub is outside the synced folder", report.d3_ok);
 
     try passFail(w, color_enabled, "markers parse", report.marker_failures.len == 0);
-    for (report.marker_failures) |f| try w.print("  {s}: {s}\n", .{ f.path, f.message });
+    for (report.marker_failures) |f| try w.print("  {s}: {s}\n", .{ try app.tilde(ctx, f.path), f.message });
 
     try passFail(w, color_enabled, "markers present locally", report.evicted_markers.len == 0);
     for (report.evicted_markers) |e| try w.print("  {s}/{s}: marker evicted from local storage (hint: open its folder to download it)\n", .{ e.org, e.name });
@@ -88,10 +91,10 @@ fn render(w: *std.Io.Writer, report: *const doctor.Report, color_enabled: bool) 
     for (report.bad_identities) |b| try w.print("  {s}: {s}\n", .{ b.project, b.repo });
 
     try passFail(w, color_enabled, "clones present", report.missing_clones.len == 0);
-    for (report.missing_clones) |m| try w.print("  {s}: {s} missing at {s} (hint: holt restore --all)\n", .{ m.project, m.repo, m.path });
+    for (report.missing_clones) |m| try w.print("  {s}: {s} missing at {s} (hint: holt restore --all)\n", .{ m.project, m.repo, try app.tilde(ctx, m.path) });
 
     try passFail(w, color_enabled, "clones intact", report.broken_clones.len == 0);
-    for (report.broken_clones) |b| try w.print("  {s}: {s} at {s} is an incomplete clone (hint: remove it and re-clone)\n", .{ b.project, b.repo, b.path });
+    for (report.broken_clones) |b| try w.print("  {s}: {s} at {s} is an incomplete clone (hint: remove it and re-clone)\n", .{ b.project, b.repo, try app.tilde(ctx, b.path) });
 
     var drift_ok = true;
     for (report.drift) |d| {
@@ -111,20 +114,20 @@ fn render(w: *std.Io.Writer, report: *const doctor.Report, color_enabled: bool) 
     try passFail(w, color_enabled, "dangling hub links", report.dangling_links.len == 0);
     for (report.dangling_links) |d| {
         const hint = if (d.is_local) "re-adopt the clone" else "holt restore --all";
-        try w.print("  {s} -> {s} (hint: {s})\n", .{ d.link_path, d.target, hint });
+        try w.print("  {s} -> {s} (hint: {s})\n", .{ try app.tilde(ctx, d.link_path), try app.tilde(ctx, d.target), hint });
     }
 
     try passFail(w, color_enabled, "no archive/active shadow", report.shadows.len == 0);
     for (report.shadows) |s| try w.print("  {s}/{s} (hint: delete or restore one)\n", .{ s.org, s.name });
 
     try passFail(w, color_enabled, "no orphaned content", report.orphaned_content.len == 0);
-    for (report.orphaned_content) |o| try w.print("  {s} (hint: leftover content with no marker; remove it manually or restore its marker)\n", .{o.path});
+    for (report.orphaned_content) |o| try w.print("  {s} (hint: leftover content with no marker; remove it manually or restore its marker)\n", .{try app.tilde(ctx, o.path)});
 
     try passFail(w, color_enabled, "aliases valid", report.stale_aliases.len == 0);
     for (report.stale_aliases) |a| try w.print("  {s}: alias \"{s}\" has no such member\n", .{ a.project, a.alias });
 
     try passFail(w, color_enabled, "no conflict copies", report.conflict_copies.len == 0);
-    for (report.conflict_copies) |c| try w.print("  {s} (hint: a cloud-sync conflict copy; merge what you need, then delete it)\n", .{c.path});
+    for (report.conflict_copies) |c| try w.print("  {s} (hint: a cloud-sync conflict copy; merge what you need, then delete it)\n", .{try app.tilde(ctx, c.path)});
 
     var temps_ok = true;
     for (report.clone_temps) |t| {
@@ -133,7 +136,7 @@ fn render(w: *std.Io.Writer, report: *const doctor.Report, color_enabled: bool) 
     try passFail(w, color_enabled, "no stale clone temporaries", temps_ok);
     for (report.clone_temps) |t| {
         const status = if (t.removed) "removed" else "run doctor --fix to remove";
-        try w.print("  {s} ({s})\n", .{ t.path, status });
+        try w.print("  {s} ({s})\n", .{ try app.tilde(ctx, t.path), status });
     }
 
     if (builtin.os.tag == .windows and report.unsurfaced_files.len > 0) {
@@ -227,7 +230,7 @@ test "run: a stale clone temp is reported, and --fix removes it" {
     const before = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), before.code);
     try testing.expect(std.mem.indexOf(u8, before.out, "no stale clone temporaries: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, before.out, temp) != null);
+    try testing.expect(std.mem.indexOf(u8, before.out, try fsutil.contractTilde(arena, app.envOf_current(), temp)) != null);
 
     const after = try testutil.runCmd(arena, command.run, ws, &.{"--fix"});
     try testing.expect(std.mem.indexOf(u8, after.out, "no stale clone temporaries: PASS") != null);
@@ -268,7 +271,7 @@ test "run: a clean workspace passes every check and exits 0" {
     try testing.expect(std.mem.indexOf(u8, got.out, "no orphaned content: PASS") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "aliases valid: PASS") != null);
 
-    const want_backend_line = try std.fmt.allocPrint(arena, "backend: (direct synced_root) -> {s} [exists]\n", .{ws.cfg.synced_root});
+    const want_backend_line = try std.fmt.allocPrint(arena, "backend: (direct synced_root) -> {s} [exists]\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
     try testing.expect(std.mem.indexOf(u8, got.out, want_backend_line) != null);
 }
 
@@ -290,7 +293,7 @@ test "run: reports the active backend name and flags a missing synced_root as in
     // not flip an otherwise-clean doctor run to a failing exit code.
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const want_backend_line = try std.fmt.allocPrint(arena, "backend: dropbox -> {s} [missing]\n", .{ws.cfg.synced_root});
+    const want_backend_line = try std.fmt.allocPrint(arena, "backend: dropbox -> {s} [missing]\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
     try testing.expect(std.mem.indexOf(u8, got.out, want_backend_line) != null);
 }
 
@@ -362,11 +365,11 @@ test "run: dangling hub links catches a deleted remote clone and a cloneless loc
     try testing.expect(std.mem.indexOf(u8, got.out, "dangling hub links: FAIL") != null);
 
     const remote_target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" });
-    const remote_line = try std.fmt.allocPrint(arena, "{s} (hint: holt restore --all)", .{remote_target});
+    const remote_line = try std.fmt.allocPrint(arena, "{s} (hint: holt restore --all)", .{try fsutil.contractTilde(arena, app.envOf_current(), remote_target)});
     try testing.expect(std.mem.indexOf(u8, got.out, remote_line) != null);
 
     const local_target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
-    const local_line = try std.fmt.allocPrint(arena, "{s} (hint: re-adopt the clone)", .{local_target});
+    const local_line = try std.fmt.allocPrint(arena, "{s} (hint: re-adopt the clone)", .{try fsutil.contractTilde(arena, app.envOf_current(), local_target)});
     try testing.expect(std.mem.indexOf(u8, got.out, local_line) != null);
 
     // The local repo's missing clone is invisible to the clones-present check,
@@ -413,7 +416,7 @@ test "run: a marker-less dir under an org is orphaned content" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "no orphaned content: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, leftover) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), leftover)) != null);
 }
 
 test "run: cloud conflict copies are reported; NAS/sync metadata dirs are not orphaned content" {

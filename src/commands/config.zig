@@ -63,7 +63,8 @@ fn runShow(ctx: *app.Ctx) anyerror!u8 {
 
     var diag: diagnostic.Diagnostic = .{};
     const cfg = config.loadDefault(ctx.alloc, app.envOf(ctx), &diag) catch {
-        try ctx.err.print("holt: config file = {s}\n", .{try app.tilde(ctx, path)});
+        // The diagnostic already leads with the config's path; printing it
+        // again above would name the same file twice.
         try ctx.err.print("holt: {s}\n", .{diag.message});
         try ctx.err.writeAll("holt: fix it with \"holt config edit\" or \"holt setup\"\n");
         return 1;
@@ -192,7 +193,7 @@ test "run: with no argument, a broken config reports the path and diagnostic ins
     const got = try testutil.runCmd(arena, command.run, null, &.{});
 
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, path) != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, try fsutil.contractTilde(arena, app.envOf_current(), path)) != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "fix it with \"holt config edit\"") != null);
 }

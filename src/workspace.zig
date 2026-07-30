@@ -3,6 +3,7 @@
 //! back to one of them.
 
 const std = @import("std");
+const Env = @import("env").Env;
 const config = @import("config.zig");
 const marker = @import("marker.zig");
 const identity = @import("identity.zig");
@@ -42,6 +43,10 @@ pub const FindResult = union(enum) {
 
 pub const Workspace = struct {
     cfg: config.Config,
+    /// The environment `cfg` was resolved in - carried so a path this
+    /// workspace reports can be shown against the caller's own $HOME rather
+    /// than the process's.
+    env: Env,
 
     pub fn projectsRoot(self: Workspace, alloc: std.mem.Allocator) ![]u8 {
         return std.fs.path.join(alloc, &.{ self.cfg.synced_root, "projects" });
@@ -64,7 +69,7 @@ pub const Workspace = struct {
         var projects: std.ArrayList(Project) = .empty;
         for (entries) |entry| switch (entry) {
             .ok => |p| try projects.append(alloc, p),
-            .failed => |f| std.debug.print("warning: skipping unparseable marker at {s}: {s}\n", .{ f.path, f.message }),
+            .failed => |f| std.debug.print("warning: skipping unparseable marker at {s}: {s}\n", .{ try fsutil.contractTilde(alloc, self.env, f.path), f.message }),
             .evicted => |e| std.debug.print("warning: {s}/{s} marker is evicted from local storage; open its folder to download it\n", .{ e.org, e.name }),
         };
 
@@ -412,7 +417,7 @@ test "list: a conflict-copy project or org directory is never adopted as a proje
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     const proot = try ws.projectsRoot(arena);
     try testutil.writeMarker(arena, proot, "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
     // A whole-dir conflict copy of the project - marker and all, exactly what a
@@ -437,7 +442,7 @@ test "scanProjects: a dir whose marker is evicted becomes an evicted entry, not 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     const proot = try ws.projectsRoot(arena);
     try testutil.writeMarker(arena, proot, "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
 
@@ -475,7 +480,7 @@ test "list: finds all orgs and projects, sorted by org/name" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .{ .version = 1, .org = "zebra", .name = "aardvark", .repos = emptyRepos() });
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gadget", .{ .version = 1, .org = "acme", .name = "gadget", .repos = emptyRepos() });
@@ -501,7 +506,7 @@ test "list: a broken marker warns and is skipped, others still listed" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", .{ .version = 1, .org = "acme", .name = "good", .repos = emptyRepos() });
 
     const broken_dir = try std.fs.path.join(arena, &.{ root, "projects", "acme", "broken" });
@@ -525,7 +530,7 @@ test "find: exact org/name match" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
 
     const result = try ws.find(arena, "acme/widget");
@@ -545,7 +550,7 @@ test "find: unique short name match" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
 
     const result = try ws.find(arena, "widget");
@@ -565,7 +570,7 @@ test "find: ambiguous exact name reports all candidates" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", .{ .version = 1, .org = "other", .name = "widget", .repos = emptyRepos() });
 
@@ -586,7 +591,7 @@ test "find: case-insensitive subsequence match" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dotfiles", .{ .version = 1, .org = "acme", .name = "dotfiles", .repos = emptyRepos() });
 
     const result = try ws.find(arena, "dtf");
@@ -606,7 +611,7 @@ test "find: a prefix match wins over a looser subsequence match" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     // "wid" is a prefix of "widget" and only a scattered subsequence of
     // "worldwide-cdn" (w..i..d): the prefix tier decides, so widget wins
     // uniquely rather than the two being ambiguous.
@@ -629,7 +634,7 @@ test "find: smartcase - lowercase is case-insensitive, an uppercase letter makes
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "Widget", .{ .version = 1, .org = "acme", .name = "Widget", .repos = emptyRepos() });
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", .{ .version = 1, .org = "other", .name = "widget", .repos = emptyRepos() });
 
@@ -655,7 +660,7 @@ test "find: no match returns none" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
 
     const result = try ws.find(arena, "zzz");
@@ -672,7 +677,7 @@ test "hasMalformedMarker: true for a corrupt marker, false for no such dir and f
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
 
     const broken_dir = try std.fs.path.join(arena, &.{ root, "projects", "acme", "broken" });
@@ -695,7 +700,7 @@ test "projectsUsing: returns both projects sharing one identity" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const ws: Workspace = .{ .cfg = try testConfig(arena, root) };
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
 
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "shared", "https://github.com/acme/shared");

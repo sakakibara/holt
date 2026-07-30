@@ -152,7 +152,7 @@ fn testWorkspace(arena: std.mem.Allocator, root: []const u8, code_root: []const 
         .synced_root = @constCast(root),
         .code_root = @constCast(code_root),
         .hub_root = std.fs.path.join(arena, &.{ root, "hub" }) catch unreachable,
-    } };
+    }, .env = app.envOf_current() };
 }
 
 test "run: <project>/<repo>@<branch> resolves the worktree path, and misses report" {

@@ -58,6 +58,10 @@ const Raw = struct {
 
 /// Loads and validates the marker at `path`. All returned memory lives in
 /// `alloc` (the caller's per-command arena); nothing is individually freed.
+///
+/// A diagnostic names only what is wrong, never the path it was read from:
+/// the caller already holds `path` and is the one that knows how to show it
+/// (contracted for a person, absolute for a machine).
 pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagnostic) !Marker {
     const src = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, alloc, .limited(1 << 20));
 
@@ -65,20 +69,20 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
     const raw = json.parseInto(Raw, alloc, src, .{ .errors = &errs }) catch |err| {
         if (diag) |d| {
             if (errs.items.len > 0) {
-                d.set(alloc, "malformed marker at {s}: {s}", .{ path, errs.items[0].message });
+                d.set(alloc, "{s}", .{errs.items[0].message});
             } else {
-                d.set(alloc, "malformed marker at {s}: {s}", .{ path, @errorName(err) });
+                d.set(alloc, "{s}", .{@errorName(err)});
             }
         }
         return err;
     };
 
     if (raw.version != marker_version) {
-        if (diag) |d| d.set(alloc, "unsupported marker version {d} at {s} (want {d})", .{ raw.version, path, marker_version });
+        if (diag) |d| d.set(alloc, "unsupported marker version {d} (want {d})", .{ raw.version, marker_version });
         return error.UnsupportedMarkerVersion;
     }
     if (raw.repos != .object) {
-        if (diag) |d| d.set(alloc, "malformed marker at {s}: \"repos\" must be an object", .{path});
+        if (diag) |d| d.set(alloc, "\"repos\" must be an object", .{});
         return error.MalformedMarker;
     }
 
@@ -86,7 +90,7 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
     var it = raw.repos.object.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.* != .string) {
-            if (diag) |d| d.set(alloc, "malformed marker at {s}: repos.{s} must be a string", .{ path, entry.key_ptr.* });
+            if (diag) |d| d.set(alloc, "repos.{s} must be a string", .{entry.key_ptr.*});
             return error.MalformedMarker;
         }
         try repos.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
@@ -95,13 +99,13 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
     var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     if (raw.aliases) |av| {
         if (av != .object) {
-            if (diag) |d| d.set(alloc, "malformed marker at {s}: \"aliases\" must be an object", .{path});
+            if (diag) |d| d.set(alloc, "\"aliases\" must be an object", .{});
             return error.MalformedMarker;
         }
         var ait = av.object.iterator();
         while (ait.next()) |entry| {
             if (entry.value_ptr.* != .string) {
-                if (diag) |d| d.set(alloc, "malformed marker at {s}: aliases.{s} must be a string", .{ path, entry.key_ptr.* });
+                if (diag) |d| d.set(alloc, "aliases.{s} must be a string", .{entry.key_ptr.*});
                 return error.MalformedMarker;
             }
             try aliases.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);

@@ -62,7 +62,7 @@ pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.Diagnostic) 
         diag.message = try alloc.dupe(u8, holt_diag.message);
         return err;
     };
-    return .{ .ws = .{ .cfg = cfg }, .color = color_enabled, .env = env };
+    return .{ .ws = .{ .cfg = cfg, .env = env }, .color = color_enabled, .env = env };
 }
 
 /// The environment before any context exists -- `main` deciding on color, say.

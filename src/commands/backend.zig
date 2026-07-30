@@ -177,7 +177,7 @@ fn testWorkspace(alloc: std.mem.Allocator, root: []const u8, backend: ?[]const u
         .synced_root = try std.fs.path.join(alloc, &.{ root, "synced" }),
         .code_root = try std.fs.path.join(alloc, &.{ root, "code" }),
         .hub_root = try std.fs.path.join(alloc, &.{ root, "hub" }),
-    } };
+    }, .env = app.envOf_current() };
 }
 
 fn writeConfigFixture(alloc: std.mem.Allocator, tmp: *testing.TmpDir, content: []const u8) ![]u8 {

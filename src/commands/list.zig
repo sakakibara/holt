@@ -119,7 +119,7 @@ fn testWorkspace(arena: std.mem.Allocator, root: []const u8) workspace.Workspace
         .synced_root = @constCast(root),
         .code_root = @constCast(@as([]const u8, "/code")),
         .hub_root = std.fs.path.join(arena, &.{ root, "hub" }) catch unreachable,
-    } };
+    }, .env = app.envOf_current() };
 }
 
 fn threeProjectSandbox(arena: std.mem.Allocator, tmp: *testing.TmpDir) !workspace.Workspace {
