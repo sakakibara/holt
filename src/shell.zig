@@ -38,7 +38,7 @@ const fish_snippet =
     \\end
     \\
     \\function hir
-    \\    set -l root (holt config | string match -rg '^code_root = (.*)')
+    \\    set -l root (holt path --root code)
     \\    set -l key (holt list --repos | fzf)
     \\    if test -z "$key"
     \\        return 1
@@ -84,7 +84,7 @@ const posix_hhi =
     \\
     \\hir() {
     \\    local root key
-    \\    root="$(holt config | sed -n 's/^code_root = //p')"
+    \\    root="$(holt path --root code)"
     \\    key="$(holt list --repos | fzf)"
     \\    if [ -z "$key" ]; then
     \\        return 1
@@ -188,7 +188,7 @@ const powershell_snippet =
     \\}
     \\
     \\function hir {
-    \\    $root = (holt config | Select-String '^code_root = (.*)').Matches.Groups[1].Value
+    \\    $root = holt path --root code
     \\    $key = holt list --repos | fzf
     \\    if ([string]::IsNullOrEmpty($key)) {
     \\        return
@@ -281,9 +281,12 @@ test "snippet: every shell defines hir wired to `holt list --repos | fzf`" {
     }
 }
 
-test "snippet: hir resolves the relative key via code_root from holt config" {
+test "snippet: hir joins its relative key onto code_root from the path accessor, not a parsed report" {
     inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt config") != null);
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt path --root code") != null);
+        // Parsing `holt config` would tie navigation to a human-facing
+        // report's wording and to its paths staying uncontracted.
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt config") == null);
     }
 }
 

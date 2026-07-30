@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `holt path --root <code|hub|synced>` prints one configured root as a single
+  absolute line, the same contract as every other `holt path` form. The `hir`
+  shell function now reads `code_root` from it. It previously recovered the
+  value by grepping `holt config`, which made a report written for a person
+  load-bearing for navigation: relabelling a line, or showing its path against
+  `~`, would have broken `cd` in every shell, since a quoted `~` never expands.
+
 ### Changed
 
 - Paths inside messages now contract `$HOME` to `~` everywhere. Most printed

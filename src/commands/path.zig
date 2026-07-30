@@ -15,17 +15,23 @@ const testutil = @import("../testutil.zig");
 
 const Spec = struct {
     query: cli.Pos([]const u8, .{ .complete = app.cat(.project_repo), .optional = true, .help = "the project or project/repo to resolve" }),
+    root: cli.Opt([]const u8, .{ .value_name = "which", .complete = .{ .choices = &.{ "code", "hub", "synced" } }, .help = "print a configured root instead of resolving a query" }),
 };
 
 pub const command = app.command(Spec, .{
     .name = "path",
     .summary = "Print the filesystem path for a project or project/repo",
-    .usage = "holt path [<project>|<project>/<repo>]",
+    .usage = "holt path [<project>|<project>/<repo>] | holt path --root <code|hub|synced>",
     .group = .navigate,
     .needs_context = true,
     .details =
+    \\The resolved path is the sole line on stdout, so `cd $(holt path ...)`
+    \\works. `--root` prints one configured root the same way, for a script
+    \\that needs to build a path itself rather than parse `holt config`.
+    \\
     \\Example:
     \\  holt path myproj/backend
+    \\  holt path --root code
     ,
 }, run);
 
@@ -36,12 +42,35 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const query = a.query orelse "";
     const ws = ctx.context.?.ws;
 
+    if (a.root) |which| {
+        if (query.len > 0) {
+            return app.usageError(ctx, "--root takes no query argument", .{});
+        }
+        return runRoot(ctx, ws, which);
+    }
+
     if (query.len == 0) {
         try ctx.out.print("{s}\n", .{ws.cfg.hub_root});
         return 0;
     }
 
     return resolve(ctx, ws, query);
+}
+
+/// Prints one configured root, absolute and alone on stdout - the machine
+/// accessor for the values `holt config` reports to a person.
+fn runRoot(ctx: *app.Ctx, ws: workspace.Workspace, which: []const u8) anyerror!u8 {
+    const root = if (std.mem.eql(u8, which, "code"))
+        ws.cfg.code_root
+    else if (std.mem.eql(u8, which, "hub"))
+        ws.cfg.hub_root
+    else if (std.mem.eql(u8, which, "synced"))
+        ws.cfg.synced_root
+    else
+        return app.usageError(ctx, "unknown root \"{s}\" (want code, hub, or synced)", .{which});
+
+    try ctx.out.print("{s}\n", .{root});
+    return 0;
 }
 
 fn resolve(ctx: *app.Ctx, ws: workspace.Workspace, query: []const u8) anyerror!u8 {
@@ -199,6 +228,66 @@ test "run: bare query (empty positional) prints the hub root" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{ws.cfg.hub_root}), got.out);
+}
+
+test "run: --root prints each configured root alone, absolute, with no query needed" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const cases = [_]struct { which: []const u8, want: []const u8 }{
+        .{ .which = "code", .want = ws.cfg.code_root },
+        .{ .which = "hub", .want = ws.cfg.hub_root },
+        .{ .which = "synced", .want = ws.cfg.synced_root },
+    };
+    for (cases) |c| {
+        const got = try testutil.runCmd(arena, command.run, ws, &.{ "--root", c.which });
+        try testing.expectEqual(@as(u8, 0), got.code);
+        // Sole line, absolute: `hir` joins it onto a relative key inside
+        // quotes, where a `~` would never expand.
+        try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{c.want}), got.out);
+        try testing.expect(std.fs.path.isAbsolute(std.mem.trimEnd(u8, got.out, "\n")));
+    }
+}
+
+test "run: an unknown --root value is a usage error naming the accepted roots" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "--root", "archive" });
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "archive") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "code, hub, or synced") != null);
+    try testing.expectEqualStrings("", got.out);
+}
+
+test "run: --root with a query is a usage error, not a silently ignored argument" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "--root", "code", "acme/proj" });
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expectEqualStrings("", got.out);
 }
 
 test "run: a project query prints the hub path" {

@@ -146,6 +146,45 @@ test "run: with no argument, prints the three roots, the active backend, and the
     try testing.expect(std.mem.indexOf(u8, got.out, path) != null);
 }
 
+test "run: each root line stays `<key> = <absolute>`, parseable by an hir copied from an older holt" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
+    defer xdg_override.restore();
+
+    const synced_root = try std.fs.path.join(arena, &.{ root, "synced" });
+    const content = try std.fmt.allocPrint(arena,
+        \\[workspace]
+        \\synced_root = "{s}"
+        \\
+    , .{try config.tomlEscape(arena, synced_root)});
+    _ = try writeConfigFile(arena, root, content);
+
+    const got = try testutil.runCmd(arena, command.run, null, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    // `hir` reads these lines with a `^<key> = (.*)` match and joins the value
+    // onto a relative repo key inside quotes. Current shell snippets call
+    // `holt path --root code` instead, but a snippet already copied into a
+    // user's dotfiles keeps parsing this, so the shape has to hold: one space
+    // either side of `=`, and a value no shell has to expand.
+    for ([_][]const u8{ "synced_root", "code_root", "hub_root" }) |key| {
+        const prefix = try std.fmt.allocPrint(arena, "{s} = ", .{key});
+        const at = std.mem.indexOf(u8, got.out, prefix) orelse return error.TestUnexpectedResult;
+        const rest = got.out[at + prefix.len ..];
+        const value = rest[0 .. std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len];
+        try testing.expect(value.len > 0);
+        try testing.expect(std.fs.path.isAbsolute(value));
+        try testing.expect(value[0] != '~');
+    }
+}
+
 test "run: with no argument in direct mode, the backend line reads (direct synced_root)" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

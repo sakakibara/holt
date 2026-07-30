@@ -265,7 +265,7 @@ list, or `holt <command> --help` for one command's usage.
 
 | Command | Description |
 | --- | --- |
-| `holt path [<project>\|<project>/<repo>]` | Print the filesystem path for a project or project/repo |
+| `holt path [<project>\|<project>/<repo>] \| --root <code\|hub\|synced>` | Print the filesystem path for a project, a project/repo, or a configured root |
 | `holt list [--paths] [--org <org>] [--json]` | List every project in the workspace |
 | `holt status [<project>] [--dirty] [--org <org>] [--json]` | Show git status across a project's (or every project's) member repos |
 | `holt recent [-n N] [--org <org>] [--json]` | List projects ordered by their most recent commit |
@@ -302,6 +302,9 @@ Without `--json`, a few outputs are still a stable contract:
 
 - `holt path <project>` prints one absolute hub path; `holt path
   <project>/<repo>` prints the repo's real clone path; `holt path` alone prints
-  the hub root.
+  the hub root; `holt path --root <code|hub|synced>` prints one configured
+  root. Every form prints a single absolute path and nothing else, so a script
+  building its own paths should read a root here rather than parse `holt
+  config`, whose output is written for a person.
 - `holt list` prints one `org/name` per line; `--paths` appends a tab and the
   hub path.
