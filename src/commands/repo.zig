@@ -133,16 +133,28 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
         }
     }
 
-    if (fsutil.exists(clone_path)) {
-        try ctx.err.print("holt: {s} already exists; use `holt repo adopt` to register an existing clone\n", .{try app.tilde(ctx, clone_path)});
-        return 1;
-    }
-
     // Resolve -p BEFORE any filesystem work, so a bad project fails without
     // leaving an orphaned git init behind.
     var project: ?project_mod.Project = null;
     if (a.project) |project_query| {
         project = (try common.resolveOne(ctx, project_query)) orelse return 1;
+    }
+
+    // Serialize with any other holt mutating this same project, then hold the
+    // clone-path lock nested inside it - the fixed content-before-clone order
+    // get/adopt/remove also use, so no two of them can deadlock. The clone
+    // lock spans the init and the marker write, so a concurrent `repo remove
+    // <key> --clone --force` cannot delete the fresh repo in between.
+    var content_lock: ?projectlock.Handle = null;
+    defer if (content_lock) |l| l.release();
+    if (project) |*p| content_lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
+
+    var clone_lock = try projectlock.acquire(alloc, app.envOf(ctx), clone_path);
+    defer clone_lock.release();
+
+    if (fsutil.exists(clone_path)) {
+        try ctx.err.print("holt: {s} already exists; use `holt repo adopt` to register an existing clone\n", .{try app.tilde(ctx, clone_path)});
+        return 1;
     }
 
     const res = try git.run(alloc, &.{ "git", "init", "-q", "-b", "main", clone_path }, null);
@@ -162,8 +174,8 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
     }
 
     if (project) |*p| {
-        var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
-        defer lock.release();
+        // Re-read under the lock so this load-modify-save acts on the current
+        // marker rather than a snapshot a concurrent run may have superseded.
         p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 
         const member_value = if (target.origin) |origin|
