@@ -48,8 +48,21 @@ pub const Identity = struct {
 
 /// Identity for a repo with no remote yet; relPath is "local/<name>". Unlike
 /// fromUrl, fields borrow `name`/static strings rather than owning memory.
+/// `name` must satisfy `isSafeLocalName` - this constructor does no parsing
+/// of its own, so a caller taking the name from user input or a marker file
+/// checks it first.
 pub fn local(name: []const u8) Identity {
     return .{ .host = "local", .owner = "", .repo = name };
+}
+
+/// A local repo name must be a single safe path segment: no separator, no
+/// `..`, no leading `.`/`~` (each would escape or shadow the `local/` bucket
+/// under code_root, which `clonePath` joins without normalizing).
+pub fn isSafeLocalName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    if (name[0] == '.' or name[0] == '~') return false;
+    for (name) |c| if (c == '/' or c == '\\') return false;
+    return true;
 }
 
 const Parsed = struct {
@@ -319,6 +332,15 @@ test "relPath and clonePath join host/owner/repo, including subgroup owners" {
     const want_clone = try std.fs.path.join(testing.allocator, &.{ "/code", "gitlab.com", "a", "b", "c" });
     defer testing.allocator.free(want_clone);
     try testing.expectEqualStrings(want_clone, clone);
+}
+
+test "isSafeLocalName: accepts a plain segment, rejects traversal, separators, and dot/tilde leads" {
+    for ([_][]const u8{ "scratch", "my.repo", "a-b_c", "x~y" }) |name| {
+        try testing.expect(isSafeLocalName(name));
+    }
+    for ([_][]const u8{ "", ".", "..", ".hidden", "~x", "a/b", "..\\..\\evil", "../../outside/victim" }) |bad| {
+        try testing.expect(!isSafeLocalName(bad));
+    }
 }
 
 test "local: isLocal, relPath, and clonePath" {

@@ -113,15 +113,6 @@ fn classify(alloc: std.mem.Allocator, spec: []const u8) !Target {
     return .{ .id = try identity.fromUrl(alloc, url), .origin = url };
 }
 
-/// A local repo name must be a single safe path segment: no separator, no
-/// `..`, no leading `.`/`~` (each would escape or shadow the `local/` bucket).
-fn isSafeLocalName(name: []const u8) bool {
-    if (name.len == 0) return false;
-    if (name[0] == '.' or name[0] == '~') return false;
-    for (name) |c| if (c == '/' or c == '\\') return false;
-    return true;
-}
-
 fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
     const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
@@ -136,7 +127,7 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
     const clone_path = try target.id.clonePath(alloc, ws.cfg.code_root);
 
     if (target.id.isLocal()) {
-        if (!isSafeLocalName(a.spec)) {
+        if (!identity.isSafeLocalName(a.spec)) {
             try ctx.err.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
             return 1;
         }
@@ -654,9 +645,16 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
 
 /// Resolves a code-tree key as `holt list --repos` prints it
 /// (`<host>/<owner>/<repo>` or `local/<name>`) to an identity, so a clone with
-/// no remaining project reference can still be named.
+/// no remaining project reference can still be named. The `local/` suffix is
+/// held to the same single-safe-segment rule `fromUrl` applies to every other
+/// segment: `clonePath` joins without normalizing, so a `..` here would name a
+/// path outside code_root for the caller to delete.
 fn identityFromKey(alloc: std.mem.Allocator, key: []const u8) !identity.Identity {
-    if (std.mem.startsWith(u8, key, "local/")) return identity.local(key["local/".len..]);
+    if (std.mem.startsWith(u8, key, "local/")) {
+        const name = key["local/".len..];
+        if (!identity.isSafeLocalName(name)) return error.UnrecognizedUrl;
+        return identity.local(name);
+    }
     return identity.fromUrl(alloc, try identity.expand(alloc, key));
 }
 
@@ -2447,6 +2445,42 @@ test "remove: -p with an unparseable marker url refuses without falling back to 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
     try testing.expectEqual(@as(usize, 1), loaded.repos.count());
+}
+
+test "remove: --clone with a traversing local/ key is refused, leaving the outside target intact" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // A clean, fully-pushed checkout outside code_root: every gate after the
+    // key is resolved (references, worktrees, recover.check) would pass it, so
+    // only refusing the key itself keeps it.
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const outside = try std.fs.path.join(arena, &.{ sb.root, "outside", "victim" });
+    try cloneWithOrigin(&sb, bare, outside, "https://holt-test.invalid/acme/victim");
+
+    // The key the identity path is derived from: code_root/local/<suffix>
+    // resolves to the checkout outside code_root, which is what makes it a
+    // deletable target rather than a name that fails to exist.
+    const key = "local/../../outside/victim";
+    const derived = try std.fs.path.join(arena, &.{ ws.cfg.code_root, key });
+    try testing.expectEqualStrings(outside, try std.fs.path.resolve(arena, &.{derived}));
+
+    for ([_][]const []const u8{
+        &.{ key, "--clone" },
+        &.{ key, "--clone", "--force" },
+    }) |argv| {
+        const got = try testutil.runCmd(arena, remove_command.run, ws, argv);
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "not a known repo or code-tree key") != null);
+        try testing.expect(fsutil.exists(outside));
+        try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ outside, ".git" })));
+    }
 }
 
 test "promote: presents its argument as a local repo, not a project selector" {
