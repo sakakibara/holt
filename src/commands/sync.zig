@@ -45,10 +45,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         const report = try hub.reconcile(alloc, &ws, &p, dry_run);
         if (report.created == 0 and report.retargeted == 0 and report.removed == 0 and
             report.conflicts.len == 0 and report.skipped_unprivileged.len == 0 and
-            report.unresolved_members.len == 0) continue;
+            report.unresolved_members.len == 0 and report.ignored_aliases.len == 0) continue;
 
         changed += 1;
-        if (report.conflicts.len > 0 or report.unresolved_members.len > 0) unhealthy = true;
+        if (report.conflicts.len > 0 or report.unresolved_members.len > 0 or
+            report.ignored_aliases.len > 0) unhealthy = true;
         const qualified = try p.qualified(alloc);
         try ctx.out.print("{s}: created {d}, retargeted {d}, removed {d}, conflicts {d}\n", .{
             qualified, report.created, report.retargeted, report.removed, report.conflicts.len,
@@ -56,6 +57,10 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         for (report.conflicts) |c| try ctx.out.print("  conflict: {s}\n", .{try app.tilde(ctx, c)});
         for (report.unresolved_members) |repo_name| try ctx.out.print(
             "  unresolved member: {s} (marker url is not a usable repo url; no hub link)\n",
+            .{repo_name},
+        );
+        for (report.ignored_aliases) |repo_name| try ctx.out.print(
+            "  ignored alias: {s} (marker alias is not a valid hub link name; linked under its own name)\n",
             .{repo_name},
         );
 
@@ -72,9 +77,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     try printPromotable(ctx, &ws, alloc, all);
 
     // A conflict means a real file sits where a hub symlink must go; an
-    // unresolved member means a marker entry names no reachable repo. Either
-    // way the hub is left incomplete and only the user can resolve it, so
-    // surface it in the exit code (like doctor) rather than reporting success.
+    // unresolved member means a marker entry names no reachable repo; an
+    // ignored alias means the hub link a marker asked for was not a name holt
+    // will build. Each leaves the hub other than the marker describes and only
+    // the user can resolve it, so surface it in the exit code (like doctor)
+    // rather than reporting success.
     return if (unhealthy) 1 else 0;
 }
 
@@ -301,6 +308,37 @@ test "run: a hub conflict is reported and exits nonzero" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "conflict:") != null);
+}
+
+test "run: a marker alias that is not a link name is named, and plants nothing outside the hub" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://github.com/acme/widget");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "widget", "../../../../planted");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "ignored alias: widget") != null);
+
+    // The member links under its own name, and the traversal target the alias
+    // aimed at outside hub_root is never written.
+    switch (try fsutil.linkState(arena, try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "widget" }))) {
+        .symlink => {},
+        else => return error.TestUnexpectedResult,
+    }
+    try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(arena, try std.fs.path.join(arena, &.{ root, "planted" })));
 }
 
 test "run: a marker member with an unusable url is named, the rest of the workspace still syncs" {

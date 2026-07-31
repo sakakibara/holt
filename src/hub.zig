@@ -27,6 +27,7 @@ pub const ReconcileReport = struct {
     conflicts: [][]u8 = &.{},
     skipped_unprivileged: [][]u8 = &.{},
     unresolved_members: [][]const u8 = &.{},
+    ignored_aliases: [][]const u8 = &.{},
 };
 
 /// The hub links a project wants, plus the marker keys that produced none.
@@ -35,7 +36,23 @@ pub const Desired = struct {
     /// Marker keys whose stored url resolves to no identity. Such a member
     /// gets no `code/` link - holt cannot know where its clone would live.
     unresolved: [][]const u8,
+    /// Marker keys whose `aliases` value is not a usable hub link name. Such
+    /// a member links under its derived name instead.
+    ignored_aliases: [][]const u8,
 };
+
+/// A hub link name must be a single safe path segment: non-empty, no `/` or
+/// `\` separator, no `.`/`..` directory reference, no leading `~`. Each would
+/// let the link land outside the hub, which joins the name without
+/// normalizing it. Marker `aliases` values are synced data, so the name they
+/// supply is held to this rule wherever it is read, not only where written.
+pub fn isValidLinkName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    if (name[0] == '~') return false;
+    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+    for (name) |c| if (c == '/' or c == '\\') return false;
+    return true;
+}
 
 // Test seam: forces file-target link creation to report "skipped for lack of
 // privilege", so the no-privilege degrade path (unreachable on an admin CI
@@ -55,8 +72,10 @@ fn flattenOwner(alloc: std.mem.Allocator, owner: []const u8) ![]u8 {
 /// One content link per top-level entry in the project's content dir (except
 /// the marker file and the reserved "code" name), plus one `code/<name>` link
 /// per marker repo whose url resolves. A member carrying a marker `aliases`
-/// entry links as `code/<alias>`, overriding both the flat name and collision
-/// owner-qualification. For the rest, a repo's short name (`identity.repo`)
+/// entry that is a valid link name links as `code/<alias>`, overriding both
+/// the flat name and collision owner-qualification; an alias that is not is
+/// returned in `ignored_aliases` and leaves its member on the derived name.
+/// For the rest, a repo's short name (`identity.repo`)
 /// shared by more than one non-aliased member forces every member of that
 /// group to link owner-qualified (`code/<owner>-<repo>`, "/" flattened to
 /// "-", local repos as `code/local-<name>`); non-colliding repos stay flat as
@@ -104,15 +123,30 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
     const repo_names = resolved_names.items;
     const ids = resolved_ids.items;
 
-    for (repo_names, ids) |name, id| {
-        const code_name = if (p.marker.aliases.get(name)) |alias|
-            try alloc.dupe(u8, alias)
+    // An alias that is not a usable link name is dropped rather than turned
+    // into a path, and its member keeps the name it derives from its own
+    // identity - which also puts it back into the collision grouping below.
+    var ignored_aliases: std.ArrayList([]const u8) = .empty;
+    const aliases = try alloc.alloc(?[]const u8, repo_names.len);
+    for (repo_names, aliases) |name, *slot| {
+        slot.* = null;
+        const alias = p.marker.aliases.get(name) orelse continue;
+        if (isValidLinkName(alias)) {
+            slot.* = alias;
+        } else {
+            try ignored_aliases.append(alloc, name);
+        }
+    }
+
+    for (ids, aliases) |id, alias| {
+        const code_name = if (alias) |a|
+            try alloc.dupe(u8, a)
         else blk: {
             // Owner-qualify only when another non-aliased member shares this
             // short name; aliased members no longer occupy their flat name.
             var collisions: u32 = 0;
-            for (repo_names, ids) |other_name, other| {
-                if (p.marker.aliases.contains(other_name)) continue;
+            for (ids, aliases) |other, other_alias| {
+                if (other_alias != null) continue;
                 if (std.mem.eql(u8, other.repo, id.repo)) collisions += 1;
             }
             if (collisions > 1) {
@@ -147,6 +181,7 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
     return .{
         .links = try links.toOwnedSlice(alloc),
         .unresolved = try unresolved.toOwnedSlice(alloc),
+        .ignored_aliases = try ignored_aliases.toOwnedSlice(alloc),
     };
 }
 
@@ -281,8 +316,10 @@ fn hasCodeLink(links: []const Link) bool {
 /// link, or left behind by the sweep, are reported as conflicts and never
 /// touched. A member whose marker url does not resolve is reported in
 /// `unresolved_members` and otherwise passed over, so one bad entry costs
-/// that member its link and nothing else. `dry_run` computes the identical
-/// report without writing anything to disk.
+/// that member its link and nothing else; a member whose alias is not a valid
+/// link name is reported in `ignored_aliases` and linked under its derived
+/// name. `dry_run` computes the identical report without writing anything to
+/// disk.
 pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Project, dry_run: bool) !ReconcileReport {
     var report: ReconcileReport = .{};
     var conflicts: std.ArrayList([]u8) = .empty;
@@ -346,6 +383,7 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
     report.conflicts = try conflicts.toOwnedSlice(alloc);
     report.skipped_unprivileged = try skipped.toOwnedSlice(alloc);
     report.unresolved_members = desired.unresolved;
+    report.ignored_aliases = desired.ignored_aliases;
     return report;
 }
 
@@ -647,6 +685,122 @@ test "desiredLinks: aliasing one of two colliding members frees the other to sta
     }
     try testing.expect(saw_alias);
     try testing.expect(saw_flat_docs);
+}
+
+test "isValidLinkName: accepts a plain segment, refuses every form that leaves the code dir" {
+    try testing.expect(isValidLinkName("gadget"));
+    try testing.expect(isValidLinkName("my-docs"));
+    try testing.expect(isValidLinkName("web.app"));
+
+    try testing.expect(!isValidLinkName(""));
+    try testing.expect(!isValidLinkName("."));
+    try testing.expect(!isValidLinkName(".."));
+    try testing.expect(!isValidLinkName("/"));
+    try testing.expect(!isValidLinkName("../../evil"));
+    try testing.expect(!isValidLinkName("a/b"));
+    try testing.expect(!isValidLinkName("..\\..\\evil"));
+    try testing.expect(!isValidLinkName("a\\b"));
+    try testing.expect(!isValidLinkName("~"));
+    try testing.expect(!isValidLinkName("~/evil"));
+    try testing.expect(!isValidLinkName("~evil"));
+}
+
+test "desiredLinks: a traversing alias is ignored and the member keeps its derived name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    var p = try testProject(arena, &ws, "acme", "proj", repos);
+    try p.marker.aliases.put(arena, "holt", "../../../../evil");
+
+    const desired = try desiredLinks(arena, &ws, &p);
+
+    try testing.expectEqual(@as(usize, 1), desired.ignored_aliases.len);
+    try testing.expectEqualStrings("holt", desired.ignored_aliases[0]);
+    try testing.expectEqual(@as(usize, 1), desired.links.len);
+    try testing.expect(hasRel(desired.links, "code/holt"));
+}
+
+test "desiredLinks: a backslash alias is ignored, since it traverses on Windows" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    var p = try testProject(arena, &ws, "acme", "proj", repos);
+    try p.marker.aliases.put(arena, "holt", "..\\..\\evil");
+
+    const desired = try desiredLinks(arena, &ws, &p);
+
+    try testing.expectEqual(@as(usize, 1), desired.ignored_aliases.len);
+    try testing.expectEqualStrings("holt", desired.ignored_aliases[0]);
+    try testing.expect(hasRel(desired.links, "code/holt"));
+}
+
+test "desiredLinks: a member whose alias is ignored rejoins the collision grouping" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
+    try repos.put(arena, "docs-b", "https://github.com/acme/docs");
+    var p = try testProject(arena, &ws, "org", "proj", repos);
+    try p.marker.aliases.put(arena, "docs-a", "../evil");
+
+    const desired = try desiredLinks(arena, &ws, &p);
+
+    try testing.expectEqual(@as(usize, 1), desired.ignored_aliases.len);
+    try testing.expect(hasRel(desired.links, "code/sakakibara-docs"));
+    try testing.expect(hasRel(desired.links, "code/acme-docs"));
+    try testing.expect(!hasRel(desired.links, "code/docs"));
+}
+
+test "reconcile: an ignored alias links the member under its own name, nothing outside the hub" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
+    var p = try testProject(arena, &ws, "acme", "proj", repos);
+    try p.marker.aliases.put(arena, "holt", "../../../../planted");
+
+    // A symlink where the traversal points: it must survive untouched, since
+    // replaceLink would otherwise remove it before writing its own.
+    const planted = try std.fs.path.join(arena, &.{ root, "planted" });
+    try fsutil.replaceSymlink("/nowhere", planted);
+
+    const report = try reconcile(arena, &ws, &p, false);
+
+    try testing.expectEqual(@as(usize, 1), report.ignored_aliases.len);
+    try testing.expectEqualStrings("holt", report.ignored_aliases[0]);
+    try testing.expectEqual(@as(u32, 1), report.created);
+    try testing.expect(try symlinkExists(arena, try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" })));
+    switch (try fsutil.linkState(arena, planted)) {
+        .symlink => |t| try testing.expectEqualStrings("/nowhere", t),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "desiredLinks: a member whose url does not resolve is reported, not raised" {

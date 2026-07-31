@@ -1036,15 +1036,6 @@ pub const alias_command = app.command(AliasSpec, .{
 
 const reserved_link_names = [_][]const u8{ "docs", "assets", "links" };
 
-/// A hub link name must be a single path segment: non-empty, no "/", and
-/// not a "."/".." directory reference.
-fn isValidLinkName(name: []const u8) bool {
-    if (name.len == 0) return false;
-    if (std.mem.indexOfScalar(u8, name, '/') != null) return false;
-    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
-    return true;
-}
-
 fn isReserved(name: []const u8) bool {
     for (reserved_link_names) |r| {
         if (std.mem.eql(u8, name, r)) return true;
@@ -1084,7 +1075,7 @@ fn runAlias(ctx: *app.Ctx, a: cli.Args(AliasSpec)) anyerror!u8 {
     }
 
     if (new_name) |name| {
-        if (!isValidLinkName(name)) {
+        if (!hub.isValidLinkName(name)) {
             try ctx.err.print("holt: \"{s}\" is not a valid link name (must be a single path segment)\n", .{name});
             return 1;
         }
@@ -3357,6 +3348,32 @@ test "alias: an alias colliding with a reserved link name errors and changes not
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
     try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
+}
+
+test "alias: an alias carrying a path separator errors and changes nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    for ([_][]const u8{ "../../evil", "..\\..\\evil", "~evil" }) |bad| {
+        const got = try testutil.runCmd(arena, alias_command.run, ws, &.{ "widget", bad, "-p", "proj" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "not a valid link name") != null);
+
+        const loaded = try marker.load(arena, marker_path, null);
+        try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
+    }
 }
 
 test "alias: an alias colliding with another member's link errors and changes nothing" {

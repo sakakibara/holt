@@ -58,6 +58,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reconciles every other project, and exits nonzero. A marker synced from
   another machine used to end the run at `internal error: UnrecognizedUrl`,
   naming neither the project nor the member.
+- A marker `aliases` value is held to the hub link-name rule where it is read,
+  not only where `holt repo alias` writes it, and the rule now also refuses a
+  backslash (a path separator on Windows) and a leading `~`. A hand-edited or
+  synced marker aliasing a repo to `../../../../elsewhere` used to build that
+  link path verbatim, planting a symlink outside `hub_root` -- and replacing
+  one already there -- while `holt sync` reported success. Such an alias is now
+  ignored: the repo links under its own name, `holt sync` names the alias under
+  its project, and the run exits nonzero.
 
 ## [0.8.1] - 2026-07-31
 
