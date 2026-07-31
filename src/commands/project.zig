@@ -6,7 +6,6 @@
 //! and hub; clones under Code/ are always kept.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const cli = @import("cli");
 const app = @import("../app.zig");
 const marker = @import("../marker.zig");
