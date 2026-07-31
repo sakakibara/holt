@@ -1,15 +1,12 @@
-//! `holt restore --all | <project>`: rebuilds derived state that isn't
-//! synced content. `--all` clones every member repo missing from
-//! `code_root` and rebuilds every project's hub (the new-machine path);
-//! `<project>` moves an archived project back into `projects/` (a pure-file
-//! move within the synced tree) and rebuilds its hub.
+//! `holt restore [<project>]`: clones every member repo missing from
+//! `code_root` and rebuilds hubs. With no argument, every project is
+//! restored; with one, only that project.
 
 const std = @import("std");
 const cli = @import("cli");
 const app = @import("../app.zig");
 const project_mod = @import("../project.zig");
 const common = @import("common.zig");
-const marker = @import("../marker.zig");
 const git = @import("../git.zig");
 const hub = @import("../hub.zig");
 const fsutil = @import("../fsutil.zig");
@@ -19,41 +16,40 @@ const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
 const Spec = struct {
-    project: cli.Pos([]const u8, .{ .complete = app.cat(.archived), .optional = true, .help = "unarchive this project and rebuild its hub" }),
-    all: cli.Flag(.{ .help = "clone every missing repo and rebuild every hub (new-machine path)" }),
-    jobs: cli.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "with --all, clone in up to N repos concurrently (default: auto; 1 = serial)" }),
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .optional = true, .help = "only restore this project (default: every project)" }),
+    jobs: cli.Opt(usize, .{ .short = 'j', .value_name = "N", .help = "clone in up to N repos concurrently (default: auto; 1 = serial)" }),
 };
 
 pub const command = app.command(Spec, .{
     .name = "restore",
-    .summary = "Clone missing repos and rebuild hubs, or unarchive one project",
-    .usage = "holt restore --all [-j N] | <project>",
+    .summary = "Clone missing repos and rebuild hubs",
+    .usage = "holt restore [<project>] [-j N]",
     .group = .maintain,
     .needs_context = true,
     .details =
+    \\Clones every member repo missing from the code tree and rebuilds hubs.
+    \\With no argument, every project; with one, just that project.
+    \\
     \\Example:
-    \\  holt restore --all
+    \\  holt restore
+    \\  holt restore acme/widget
     ,
 }, run);
 
 fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
-    const all_flag = a.all;
-    const project_spec = a.project;
-
-    if (all_flag and project_spec != null) {
-        return app.usageError(ctx, "cannot combine --all with a project argument", .{});
-    }
-    if (!all_flag and project_spec == null) {
-        return app.usageError(ctx, "requires --all or a <project> argument", .{});
-    }
     if (a.jobs) |n| {
         if (n == 0) {
             return app.usageError(ctx, "-j/--jobs must be at least 1", .{});
         }
     }
 
-    if (all_flag) return runAll(ctx, a.jobs);
-    return runUnarchive(ctx, project_spec.?);
+    const ws = ctx.context.?.ws;
+    const targets = if (a.project) |q| blk: {
+        const p = (try common.resolveOne(ctx, q)) orelse return 1;
+        break :blk try ctx.alloc.dupe(project_mod.Project, &.{p});
+    } else try ws.list(ctx.alloc);
+
+    return runProjects(ctx, targets, a.jobs);
 }
 
 /// One missing clone to fetch. Many markers can reference the same repo (the
@@ -83,17 +79,16 @@ fn cloneJob(_: void, arena: std.mem.Allocator, job: CloneJob) CloneOutcome {
     return .{ .ok = true, .message = "" };
 }
 
-fn runAll(ctx: *app.Ctx, jobs_cap: ?usize) anyerror!u8 {
+fn runProjects(ctx: *app.Ctx, targets: []const project_mod.Project, jobs_cap: ?usize) anyerror!u8 {
     const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
-    const all = try ws.list(alloc);
 
     // Gather every missing remote clone, deduped by real clone path so a repo
     // shared across projects is fetched once, not once per referencing marker.
     var had_error = false;
     var jobs: std.ArrayList(CloneJob) = .empty;
     var job_of_path = std.StringHashMap(usize).init(alloc);
-    for (all) |p| {
+    for (targets) |p| {
         const qualified = try p.qualified(alloc);
         for (p.marker.repos.keys()) |repo_name| {
             const id = p.repoIdentity(alloc, repo_name) catch {
@@ -122,7 +117,7 @@ fn runAll(ctx: *app.Ctx, jobs_cap: ?usize) anyerror!u8 {
     const fail_reported = try alloc.alloc(bool, jobs.items.len);
     @memset(fail_reported, false);
 
-    for (all) |p| {
+    for (targets) |p| {
         const qualified = try p.qualified(alloc);
         var attempted_any = false;
 
@@ -170,47 +165,7 @@ fn runAll(ctx: *app.Ctx, jobs_cap: ?usize) anyerror!u8 {
     return if (had_error) 1 else 0;
 }
 
-fn runUnarchive(ctx: *app.Ctx, spec: []const u8) anyerror!u8 {
-    const ws = ctx.context.?.ws;
-    const alloc = ctx.alloc;
-
-    const on = common.parseOrgName(spec) orelse {
-        return app.usageError(ctx, "{s}", .{try common.parseOrgNameMessage(alloc, spec)});
-    };
-
-    const archive_root = try ws.archiveRoot(alloc);
-    const archive_path = try std.fs.path.join(alloc, &.{ archive_root, on.org, on.name });
-    const archive_marker = try std.fs.path.join(alloc, &.{ archive_path, marker.marker_basename });
-    if (!fsutil.exists(archive_marker)) {
-        try ctx.err.print("holt: no archived project at {s}\n", .{try app.tilde(ctx, archive_path)});
-        return 1;
-    }
-
-    const projects_root = try ws.projectsRoot(alloc);
-    const dest_path = try std.fs.path.join(alloc, &.{ projects_root, on.org, on.name });
-    if (fsutil.exists(dest_path)) {
-        try ctx.err.print("holt: {s}/{s} already exists in projects\n", .{ on.org, on.name });
-        return 1;
-    }
-
-    common.moveDir(ctx, archive_path, dest_path) catch return 1;
-
-    const marker_path = try std.fs.path.join(alloc, &.{ dest_path, marker.marker_basename });
-    const m = try marker.load(alloc, marker_path, null);
-    const hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, on.org, on.name });
-    const p: project_mod.Project = .{ .org = on.org, .name = on.name, .content_path = dest_path, .hub_path = hub_path, .marker = m };
-    _ = hub.reconcile(alloc, &ws, &p, false) catch |err| {
-        try common.reportHubFailure(ctx, on.org, on.name, err);
-        return 1;
-    };
-
-    if (std.fs.path.dirname(archive_path)) |old_archive_org_dir| fsutil.rmdirIfEmpty(old_archive_org_dir);
-
-    try ctx.out.print("restored {s}/{s}\n", .{ on.org, on.name });
-    return 0;
-}
-
-test "run: --all clones every missing member repo from its bare and rebuilds each hub" {
+test "run: with no project argument, clones every missing member repo from its bare and rebuilds each hub" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -241,7 +196,7 @@ test "run: --all clones every missing member repo from its bare and rebuilds eac
     });
     defer override.restore();
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "cloned repoa") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "cloned repob") != null);
@@ -265,7 +220,7 @@ test "run: --all clones every missing member repo from its bare and rebuilds eac
     }
 }
 
-test "run: --all reports and continues past an unreachable repo, still cloning and hubbing the rest" {
+test "run: with no project argument, reports and continues past an unreachable repo, still cloning and hubbing the rest" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -294,7 +249,7 @@ test "run: --all reports and continues past an unreachable repo, still cloning a
     });
     defer override.restore();
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "cloned repogood") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "failed to clone") != null);
@@ -319,7 +274,7 @@ test "run: --all reports and continues past an unreachable repo, still cloning a
     }
 }
 
-test "run: --all warns when a local repo's clone is missing and cannot be re-cloned" {
+test "run: with no project argument, warns when a local repo's clone is missing and cannot be re-cloned" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -335,7 +290,7 @@ test "run: --all warns when a local repo's clone is missing and cannot be re-clo
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "proj", "docs" }));
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "acme/proj") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "scratch") != null);
@@ -348,7 +303,7 @@ test "run: --all warns when a local repo's clone is missing and cannot be re-clo
     }
 }
 
-test "run: --all on an already-complete project just rebuilds the hub" {
+test "run: with no project argument, an already-complete project just rebuilds its hub" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -362,7 +317,7 @@ test "run: --all on an already-complete project just rebuilds the hub" {
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "empty", "docs" }));
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "no missing clones") != null);
 
@@ -373,7 +328,7 @@ test "run: --all on an already-complete project just rebuilds the hub" {
     }
 }
 
-test "run: --all clones a repo shared by two projects exactly once and links both hubs" {
+test "run: with no project argument, clones a repo shared by two projects exactly once and links both hubs" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -400,7 +355,7 @@ test "run: --all clones a repo shared by two projects exactly once and links bot
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{.{ .url = url, .bare = bare }});
     defer override.restore();
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     // Cloned exactly once despite two referencing markers.
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "cloned lib"));
@@ -422,16 +377,16 @@ test "run: --all clones a repo shared by two projects exactly once and links bot
     }
 }
 
-test "run: --all with -j 0 is a usage error" {
+test "run: -j 0 is a usage error" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const got = try testutil.runCmd(arena, command.run, null, &.{ "--all", "-j", "0" });
+    const got = try testutil.runCmd(arena, command.run, null, &.{ "-j", "0" });
     try testing.expectEqual(@as(u8, 2), got.code);
 }
 
-test "run: --all reports a repo whose marker url cannot resolve and exits nonzero" {
+test "run: with no project argument, reports a repo whose marker url cannot resolve and exits nonzero" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -448,13 +403,13 @@ test "run: --all reports a repo whose marker url cannot resolve and exits nonzer
     try repos.put(arena, "bad", "github.com");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"--all"});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "acme/proj") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "malformed marker url") != null);
 }
 
-test "run: <project> unarchives, moving the marker back and rebuilding its hub" {
+test "run: a project argument matching no project exits 1 and reports on stderr" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -465,65 +420,12 @@ test "run: <project> unarchives, moving the marker back and rebuilding its hub" 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget", "docs" }));
-
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
-    try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "restored acme/widget") != null);
-
-    const archive_dir = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget" });
-    try testing.expect(!fsutil.exists(archive_dir));
-
-    const marker_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", marker.marker_basename });
-    try testing.expect(fsutil.exists(marker_path));
-
-    const docs_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "widget", "docs" });
-    switch (try fsutil.linkState(arena, docs_link)) {
-        .symlink => {},
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-test "run: unarchiving the only project in an org prunes the emptied archive org dir" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    const ws = try testutil.testWorkspace(arena, root);
-
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-
-    const archive_org_dir = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme" });
-    try testing.expect(fsutil.exists(archive_org_dir));
-
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
-    try testing.expectEqual(@as(u8, 0), got.code);
-
-    try testing.expect(!fsutil.exists(archive_org_dir));
-}
-
-test "run: unarchiving a project with no archive entry is a hard error" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    const ws = try testutil.testWorkspace(arena, root);
-
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/nope"});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no archived project") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
 }
 
-test "run: unarchiving over an existing project is a hard error, archive kept" {
+test "run: a bare project argument re-clones that project only, it does not unarchive" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -533,32 +435,11 @@ test "run: unarchiving over an existing project is a hard error, archive kept" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
 
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
-    try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "already exists") != null);
-
-    const archive_marker = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget", marker.marker_basename });
-    try testing.expect(fsutil.exists(archive_marker));
-}
-
-test "run: --all together with a project argument is a usage error" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const got = try testutil.runCmd(arena, command.run, null, &.{ "--all", "acme/widget" });
-    try testing.expectEqual(@as(u8, 2), got.code);
-}
-
-test "run: neither --all nor a project argument is a usage error" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const got = try testutil.runCmd(arena, command.run, null, &.{});
-    try testing.expectEqual(@as(u8, 2), got.code);
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
+    // The archive path is `project unarchive`'s job now.
+    try testing.expect(std.mem.indexOf(u8, got.err, "no archived project") == null);
 }

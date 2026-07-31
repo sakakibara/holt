@@ -91,7 +91,7 @@ fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
     for (report.bad_identities) |b| try w.print("  {s}: {s}\n", .{ b.project, b.repo });
 
     try passFail(w, color_enabled, "clones present", report.missing_clones.len == 0);
-    for (report.missing_clones) |m| try w.print("  {s}: {s} missing at {s} (hint: holt restore --all)\n", .{ m.project, m.repo, try app.tilde(ctx, m.path) });
+    for (report.missing_clones) |m| try w.print("  {s}: {s} missing at {s} (hint: holt restore)\n", .{ m.project, m.repo, try app.tilde(ctx, m.path) });
 
     try passFail(w, color_enabled, "clones intact", report.broken_clones.len == 0);
     for (report.broken_clones) |b| try w.print("  {s}: {s} at {s} is an incomplete clone (hint: remove it and re-clone)\n", .{ b.project, b.repo, try app.tilde(ctx, b.path) });
@@ -113,7 +113,7 @@ fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
 
     try passFail(w, color_enabled, "dangling hub links", report.dangling_links.len == 0);
     for (report.dangling_links) |d| {
-        const hint = if (d.is_local) "re-adopt the clone" else "holt restore --all";
+        const hint = if (d.is_local) "re-adopt the clone" else "holt restore";
         try w.print("  {s} -> {s} (hint: {s})\n", .{ try app.tilde(ctx, d.link_path), try app.tilde(ctx, d.target), hint });
     }
 
@@ -365,7 +365,7 @@ test "run: dangling hub links catches a deleted remote clone and a cloneless loc
     try testing.expect(std.mem.indexOf(u8, got.out, "dangling hub links: FAIL") != null);
 
     const remote_target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" });
-    const remote_line = try std.fmt.allocPrint(arena, "{s} (hint: holt restore --all)", .{try fsutil.contractTilde(arena, app.envOf_current(), remote_target)});
+    const remote_line = try std.fmt.allocPrint(arena, "{s} (hint: holt restore)", .{try fsutil.contractTilde(arena, app.envOf_current(), remote_target)});
     try testing.expect(std.mem.indexOf(u8, got.out, remote_line) != null);
 
     const local_target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });

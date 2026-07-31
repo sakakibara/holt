@@ -7,8 +7,9 @@
 //! project's content dir to a new org/name, rewrites its marker, and rebuilds
 //! its hub at the new location; the clone under Code/ never moves. `archive
 //! <project>` moves a project's content dir out of projects/ into archive/
-//! and drops its hub, leaving its clones untouched (`holt restore` reverses
-//! the move).
+//! and drops its hub, leaving its clones untouched. `unarchive <project>`
+//! reverses that: moves the content dir back into projects/ and rebuilds the
+//! hub.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -50,16 +51,16 @@ pub const new_command = app.command(Spec, .{
 
 pub const command: app.Command = .{
     .name = "project",
-    .summary = "Create, remove, rename, and archive projects",
-    .usage = "holt project <new|remove|rename|archive> ...",
+    .summary = "Create, remove, rename, archive, and unarchive projects",
+    .usage = "holt project <new|remove|rename|archive|unarchive> ...",
     .group = .create,
-    .subcommands = &.{ new_command, remove_command, rename_command, archive_command },
+    .subcommands = &.{ new_command, remove_command, rename_command, archive_command, unarchive_command },
     .needs_context = true,
     .run = runFallback,
 };
 
 fn runFallback(ctx: *app.Ctx) anyerror!u8 {
-    return app.usageError(ctx, "usage: holt project <new|remove|rename|archive> ...", .{});
+    return app.usageError(ctx, "usage: holt project <new|remove|rename|archive|unarchive> ...", .{});
 }
 
 fn runNew(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
@@ -420,7 +421,63 @@ fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const M
     }
 }
 
-const restore_cmd = @import("restore.zig");
+const UnarchiveSpec = struct {
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.archived), .help = "the project to unarchive" }),
+};
+
+pub const unarchive_command = app.command(UnarchiveSpec, .{
+    .name = "unarchive",
+    .summary = "Move an archived project back into projects/ and rebuild its hub",
+    .usage = "holt project unarchive <project>",
+    .group = .create,
+    .needs_context = true,
+    .details =
+    \\Example:
+    \\  holt project unarchive acme/widget
+    ,
+}, runUnarchive);
+
+fn runUnarchive(ctx: *app.Ctx, a: cli.Args(UnarchiveSpec)) anyerror!u8 {
+    const spec = a.project;
+
+    const ws = ctx.context.?.ws;
+    const alloc = ctx.alloc;
+
+    const on = common.parseOrgName(spec) orelse {
+        return app.usageError(ctx, "{s}", .{try common.parseOrgNameMessage(alloc, spec)});
+    };
+
+    const archive_root = try ws.archiveRoot(alloc);
+    const archive_path = try std.fs.path.join(alloc, &.{ archive_root, on.org, on.name });
+    const archive_marker = try std.fs.path.join(alloc, &.{ archive_path, marker.marker_basename });
+    if (!fsutil.exists(archive_marker)) {
+        try ctx.err.print("holt: no archived project at {s}\n", .{try app.tilde(ctx, archive_path)});
+        return 1;
+    }
+
+    const projects_root = try ws.projectsRoot(alloc);
+    const dest_path = try std.fs.path.join(alloc, &.{ projects_root, on.org, on.name });
+    if (fsutil.exists(dest_path)) {
+        try ctx.err.print("holt: {s}/{s} already exists in projects\n", .{ on.org, on.name });
+        return 1;
+    }
+
+    common.moveDir(ctx, archive_path, dest_path) catch return 1;
+
+    const marker_path = try std.fs.path.join(alloc, &.{ dest_path, marker.marker_basename });
+    const m = try marker.load(alloc, marker_path, null);
+    const hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, on.org, on.name });
+    const p: project_mod.Project = .{ .org = on.org, .name = on.name, .content_path = dest_path, .hub_path = hub_path, .marker = m };
+    _ = hub.reconcile(alloc, &ws, &p, false) catch |err| {
+        try common.reportHubFailure(ctx, on.org, on.name, err);
+        return 1;
+    };
+
+    if (std.fs.path.dirname(archive_path)) |old_archive_org_dir| fsutil.rmdirIfEmpty(old_archive_org_dir);
+
+    try ctx.out.print("restored {s}/{s}\n", .{ on.org, on.name });
+    return 0;
+}
 
 test "new: creates content dirs and marker, and names the next step on stderr" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -919,7 +976,7 @@ test "rename: no matching project exits 1 and reports on stderr" {
     try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
 }
 
-test "archive: moves content into archive/, drops the hub, and restore round-trips it back" {
+test "archive: moves content into archive/, drops the hub, and unarchive round-trips it back" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -948,8 +1005,8 @@ test "archive: moves content into archive/, drops the hub, and restore round-tri
     try testing.expect(fsutil.exists(archived_content));
     try testing.expect(!fsutil.exists(p.hub_path));
 
-    const restore_got = try testutil.runCmd(arena, restore_cmd.command.run, ws, &.{"acme/widget"});
-    try testing.expectEqual(@as(u8, 0), restore_got.code);
+    const unarchive_got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), unarchive_got.code);
 
     try testing.expect(fsutil.exists(projects_content));
     try testing.expect(!fsutil.exists(archived_content));
@@ -1156,4 +1213,95 @@ test "archive: no matching project exits 1 and reports on stderr" {
     const got = try testutil.runCmd(arena, archive_command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+}
+
+test "unarchive: moves an archived project back into projects/ and rebuilds its hub" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget", "docs" }));
+
+    const got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "restored acme/widget") != null);
+
+    const archive_dir = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget" });
+    try testing.expect(!fsutil.exists(archive_dir));
+
+    const marker_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", marker.marker_basename });
+    try testing.expect(fsutil.exists(marker_path));
+
+    const docs_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "widget", "docs" });
+    switch (try fsutil.linkState(arena, docs_link)) {
+        .symlink => {},
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "unarchive: unarchiving the only project in an org prunes the emptied archive org dir" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const archive_org_dir = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme" });
+    try testing.expect(fsutil.exists(archive_org_dir));
+
+    const got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    try testing.expect(!fsutil.exists(archive_org_dir));
+}
+
+test "unarchive: a project with no archive entry is a hard error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/nope"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "no archived project") != null);
+}
+
+test "unarchive: unarchiving over an existing project is a hard error, archive kept" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "already exists") != null);
+
+    const archive_marker = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget", marker.marker_basename });
+    try testing.expect(fsutil.exists(archive_marker));
 }
