@@ -47,6 +47,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `holt project new` names the next step when it creates a project with no
   repos, since such a project has no `code/` directory yet.
 
+### Fixed
+
+- `holt sync` no longer aborts the whole workspace over one marker entry whose
+  url does not resolve. It skips that member -- which gets no hub link, since
+  holt cannot know where its clone would live -- names it under its project,
+  reconciles every other project, and exits nonzero. A marker synced from
+  another machine used to end the run at `internal error: UnrecognizedUrl`,
+  naming neither the project nor the member.
+
 ## [0.8.1] - 2026-07-31
 
 ### Changed

@@ -1071,7 +1071,7 @@ fn runAlias(ctx: *app.Ctx, a: cli.Args(AliasSpec)) anyerror!u8 {
         }
 
         try p.marker.aliases.put(alloc, repo_name, name);
-        const links = try hub.desiredLinks(alloc, &ws, &p);
+        const links = (try hub.desiredLinks(alloc, &ws, &p)).links;
         if (hasDuplicateRel(links)) {
             try ctx.err.print("holt: alias \"{s}\" collides with another hub link in {s}/{s}\n", .{ name, p.org, p.name });
             return 1;

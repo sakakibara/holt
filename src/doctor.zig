@@ -462,7 +462,7 @@ fn findUnsurfacedFiles(alloc: std.mem.Allocator, ws: *const Workspace, projects:
     if (builtin.os.tag == .windows) {
         var out: std.ArrayList(Unsurfaced) = .empty;
         for (projects) |p| {
-            const links = try hub.desiredLinks(alloc, ws, &p);
+            const links = (try hub.desiredLinks(alloc, ws, &p)).links;
             for (links) |l| {
                 if (l.kind != .file) continue;
                 const link_path = try std.fs.path.join(alloc, &.{ p.hub_path, l.rel });
@@ -522,14 +522,10 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
     }
 
     for (scan.ok) |p| {
-        // A repo with an unparseable URL already surfaced above; hub.reconcile
-        // resolves every member's identity again internally and would only
-        // repeat the same failure, so this project's hub is skipped rather
-        // than aborting the whole doctor run.
-        const dry_report = hub.reconcile(alloc, ws, &p, true) catch |err| switch (err) {
-            error.UnrecognizedUrl => continue,
-            else => return err,
-        };
+        // A repo with an unparseable URL is already surfaced above as a bad
+        // identity; hub.reconcile passes it over and reconciles the project's
+        // remaining links, so the drift picture stays complete either way.
+        const dry_report = try hub.reconcile(alloc, ws, &p, true);
 
         var fixed = false;
         if (opts.fix and (dry_report.created > 0 or dry_report.retargeted > 0 or dry_report.removed > 0)) {

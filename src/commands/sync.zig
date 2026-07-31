@@ -40,19 +40,24 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const all = try ws.list(alloc);
 
     var changed: u32 = 0;
-    var had_conflict = false;
+    var unhealthy = false;
     for (all) |p| {
         const report = try hub.reconcile(alloc, &ws, &p, dry_run);
         if (report.created == 0 and report.retargeted == 0 and report.removed == 0 and
-            report.conflicts.len == 0 and report.skipped_unprivileged.len == 0) continue;
+            report.conflicts.len == 0 and report.skipped_unprivileged.len == 0 and
+            report.unresolved_members.len == 0) continue;
 
         changed += 1;
-        if (report.conflicts.len > 0) had_conflict = true;
+        if (report.conflicts.len > 0 or report.unresolved_members.len > 0) unhealthy = true;
         const qualified = try p.qualified(alloc);
         try ctx.out.print("{s}: created {d}, retargeted {d}, removed {d}, conflicts {d}\n", .{
             qualified, report.created, report.retargeted, report.removed, report.conflicts.len,
         });
         for (report.conflicts) |c| try ctx.out.print("  conflict: {s}\n", .{try app.tilde(ctx, c)});
+        for (report.unresolved_members) |repo_name| try ctx.out.print(
+            "  unresolved member: {s} (marker url is not a usable repo url; no hub link)\n",
+            .{repo_name},
+        );
 
         if (report.skipped_unprivileged.len > 0) {
             try ctx.out.print("  {d} content file(s) not surfaced at the hub root (needs Developer Mode for file links):\n", .{report.skipped_unprivileged.len});
@@ -66,10 +71,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     try printPromotable(ctx, &ws, alloc, all);
 
-    // A conflict means a real file sits where a hub symlink must go - the hub
-    // is left broken and only the user can resolve it, so surface it in the
-    // exit code (like doctor) rather than reporting success.
-    return if (had_conflict) 1 else 0;
+    // A conflict means a real file sits where a hub symlink must go; an
+    // unresolved member means a marker entry names no reachable repo. Either
+    // way the hub is left incomplete and only the user can resolve it, so
+    // surface it in the exit code (like doctor) rather than reporting success.
+    return if (unhealthy) 1 else 0;
 }
 
 /// Removes hub trees left behind by a project that was renamed, archived, or
@@ -295,6 +301,47 @@ test "run: a hub conflict is reported and exits nonzero" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "conflict:") != null);
+}
+
+test "run: a marker member with an unusable url is named, the rest of the workspace still syncs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // A marker synced from another machine can carry a `local:` value that
+    // escapes the local bucket; it must cost that one member its hub link and
+    // nothing else.
+    var poisoned: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try poisoned.put(arena, "evil", "local:../../evil");
+    try poisoned.put(arena, "holt", "https://github.com/sakakibara/holt");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = poisoned });
+
+    var sound: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try sound.put(arena, "docs", "https://github.com/acme/docs");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "gadget", .{ .version = 1, .org = "zebra", .name = "gadget", .repos = sound });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "acme/widget") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "unresolved member: evil") != null);
+
+    // The poisoned project's sound member still links, and the untouched
+    // project is reconciled rather than abandoned.
+    switch (try fsutil.linkState(arena, try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "widget", "code", "holt" }))) {
+        .symlink => {},
+        else => return error.TestUnexpectedResult,
+    }
+    switch (try fsutil.linkState(arena, try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "zebra", "gadget", "code", "docs" }))) {
+        .symlink => {},
+        else => return error.TestUnexpectedResult,
+    }
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ root, "evil" })));
 }
 
 test "run: --dry-run reports the same changes without writing anything" {

@@ -26,6 +26,15 @@ pub const ReconcileReport = struct {
     removed: u32 = 0,
     conflicts: [][]u8 = &.{},
     skipped_unprivileged: [][]u8 = &.{},
+    unresolved_members: [][]const u8 = &.{},
+};
+
+/// The hub links a project wants, plus the marker keys that produced none.
+pub const Desired = struct {
+    links: []Link,
+    /// Marker keys whose stored url resolves to no identity. Such a member
+    /// gets no `code/` link - holt cannot know where its clone would live.
+    unresolved: [][]const u8,
 };
 
 // Test seam: forces file-target link creation to report "skipped for lack of
@@ -45,14 +54,16 @@ fn flattenOwner(alloc: std.mem.Allocator, owner: []const u8) ![]u8 {
 
 /// One content link per top-level entry in the project's content dir (except
 /// the marker file and the reserved "code" name), plus one `code/<name>` link
-/// per marker repo. A member carrying a marker `aliases` entry links as
-/// `code/<alias>`, overriding both the flat name and collision
+/// per marker repo whose url resolves. A member carrying a marker `aliases`
+/// entry links as `code/<alias>`, overriding both the flat name and collision
 /// owner-qualification. For the rest, a repo's short name (`identity.repo`)
 /// shared by more than one non-aliased member forces every member of that
 /// group to link owner-qualified (`code/<owner>-<repo>`, "/" flattened to
 /// "-", local repos as `code/local-<name>`); non-colliding repos stay flat as
-/// `code/<repo>`.
-pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Project) ![]Link {
+/// `code/<repo>`. A member whose url does not resolve is returned in
+/// `unresolved` for the caller to report, and takes no part in the collision
+/// grouping.
+pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Project) !Desired {
     var links: std.ArrayList(Link) = .empty;
 
     // Mirror every top-level content entry into the hub, except holt's own
@@ -76,9 +87,22 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
         }
     }
 
-    const repo_names = p.marker.repos.keys();
-    const ids = try alloc.alloc(identity.Identity, repo_names.len);
-    for (repo_names, 0..) |name, i| ids[i] = try p.repoIdentity(alloc, name);
+    var resolved_names: std.ArrayList([]const u8) = .empty;
+    var resolved_ids: std.ArrayList(identity.Identity) = .empty;
+    var unresolved: std.ArrayList([]const u8) = .empty;
+    for (p.marker.repos.keys()) |name| {
+        const id = p.repoIdentity(alloc, name) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                try unresolved.append(alloc, name);
+                continue;
+            },
+        };
+        try resolved_names.append(alloc, name);
+        try resolved_ids.append(alloc, id);
+    }
+    const repo_names = resolved_names.items;
+    const ids = resolved_ids.items;
 
     for (repo_names, ids) |name, id| {
         const code_name = if (p.marker.aliases.get(name)) |alias|
@@ -120,7 +144,10 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
         }
     }
 
-    return links.toOwnedSlice(alloc);
+    return .{
+        .links = try links.toOwnedSlice(alloc),
+        .unresolved = try unresolved.toOwnedSlice(alloc),
+    };
 }
 
 /// Classifies a content entry as a directory or a file link target. Uses the
@@ -239,23 +266,36 @@ fn linkOrSkip(link: Link, link_path: []const u8) !fsutil.LinkResult {
     return fsutil.replaceLink(link.target, link_path, link.kind == .dir);
 }
 
+/// True iff any desired link lives under `code/`, which is what decides
+/// whether the hub needs a `code` container at all.
+fn hasCodeLink(links: []const Link) bool {
+    for (links) |l| {
+        if (std.mem.startsWith(u8, l.rel, "code/")) return true;
+    }
+    return false;
+}
+
 /// Idempotently reconciles the on-disk hub to `desiredLinks(ws, p)`: creates
 /// missing links, retargets links pointing at the wrong place, and sweeps
 /// away stale symlinks no longer desired. Real files/dirs blocking a desired
 /// link, or left behind by the sweep, are reported as conflicts and never
-/// touched. `dry_run` computes the identical report without writing
-/// anything to disk.
+/// touched. A member whose marker url does not resolve is reported in
+/// `unresolved_members` and otherwise passed over, so one bad entry costs
+/// that member its link and nothing else. `dry_run` computes the identical
+/// report without writing anything to disk.
 pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Project, dry_run: bool) !ReconcileReport {
     var report: ReconcileReport = .{};
     var conflicts: std.ArrayList([]u8) = .empty;
     var skipped: std.ArrayList([]u8) = .empty;
 
-    const links = try desiredLinks(alloc, ws, p);
+    const desired = try desiredLinks(alloc, ws, p);
+    const links = desired.links;
+    const want_code_dir = hasCodeLink(links);
     const code_dir_path = try std.fs.path.join(alloc, &.{ p.hub_path, "code" });
 
     if (!dry_run) {
         try fsutil.ensureDir(p.hub_path);
-        if (p.marker.repos.keys().len > 0) try fsutil.ensureDir(code_dir_path);
+        if (want_code_dir) try fsutil.ensureDir(code_dir_path);
     }
 
     for (links, 0..) |link, i| {
@@ -301,10 +341,11 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
     try sweepDir(alloc, p.hub_path, "", links, p.content_path, ws.cfg.code_root, dry_run, &report, &conflicts);
     try sweepDir(alloc, code_dir_path, "code/", links, p.content_path, ws.cfg.code_root, dry_run, &report, &conflicts);
 
-    if (!dry_run and p.marker.repos.keys().len == 0) fsutil.rmdirIfEmpty(code_dir_path);
+    if (!dry_run and !want_code_dir) fsutil.rmdirIfEmpty(code_dir_path);
 
     report.conflicts = try conflicts.toOwnedSlice(alloc);
     report.skipped_unprivileged = try skipped.toOwnedSlice(alloc);
+    report.unresolved_members = desired.unresolved;
     return report;
 }
 
@@ -409,7 +450,7 @@ test "desiredLinks: content links plus one flat code link per repo, absolute tar
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
 
-    const links = try desiredLinks(arena, &ws, &p);
+    const links = (try desiredLinks(arena, &ws, &p)).links;
     try testing.expectEqual(@as(usize, 4), links.len);
 
     const docs = findRel(links, "docs") orelse return error.TestUnexpectedResult;
@@ -450,7 +491,7 @@ test "desiredLinks: mirrors every content entry except the marker and code" {
         .data = "{}\n",
     });
 
-    const links = try desiredLinks(arena, &ws, &p);
+    const links = (try desiredLinks(arena, &ws, &p)).links;
 
     // docs, assets, notes, plan.md are mirrored; .holt.json is not; code/holt is the repo link.
     try testing.expect(hasRel(links, "docs"));
@@ -481,7 +522,7 @@ test "desiredLinks: tags a content directory .dir and a content file .file" {
         .data = "hi",
     });
 
-    const links = try desiredLinks(arena, &ws, &p);
+    const links = (try desiredLinks(arena, &ws, &p)).links;
 
     const docs = findRel(links, "docs") orelse return error.TestUnexpectedResult;
     const notes = findRel(links, "notes.md") orelse return error.TestUnexpectedResult;
@@ -508,7 +549,7 @@ test "desiredLinks: colliding short names go owner-qualified, others stay flat" 
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "org", "proj", repos);
 
-    const links = try desiredLinks(arena, &ws, &p);
+    const links = (try desiredLinks(arena, &ws, &p)).links;
 
     var saw_sakakibara_docs = false;
     var saw_acme_docs = false;
@@ -540,7 +581,7 @@ test "desiredLinks: colliding local repo qualifies as local-<name>" {
     try repos.put(arena, "scratch2", "https://github.com/acme/scratch");
     const p = try testProject(arena, &ws, "org", "proj", repos);
 
-    const links = try desiredLinks(arena, &ws, &p);
+    const links = (try desiredLinks(arena, &ws, &p)).links;
 
     var saw_local = false;
     for (links) |l| {
@@ -564,7 +605,7 @@ test "desiredLinks: an aliased repo links as code/<alias> at its real clone path
     var p = try testProject(arena, &ws, "acme", "proj", repos);
     try p.marker.aliases.put(arena, "holt", "gadget");
 
-    const links = try desiredLinks(arena, &ws, &p);
+    const links = (try desiredLinks(arena, &ws, &p)).links;
 
     var saw_alias = false;
     for (links) |l| {
@@ -596,7 +637,7 @@ test "desiredLinks: aliasing one of two colliding members frees the other to sta
     var p = try testProject(arena, &ws, "org", "proj", repos);
     try p.marker.aliases.put(arena, "docs-a", "mydocs");
 
-    const links = try desiredLinks(arena, &ws, &p);
+    const links = (try desiredLinks(arena, &ws, &p)).links;
 
     var saw_alias = false;
     var saw_flat_docs = false;
@@ -606,6 +647,77 @@ test "desiredLinks: aliasing one of two colliding members frees the other to sta
     }
     try testing.expect(saw_alias);
     try testing.expect(saw_flat_docs);
+}
+
+test "desiredLinks: a member whose url does not resolve is reported, not raised" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "evil", "local:../../evil");
+    try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
+    const p = try testProject(arena, &ws, "acme", "proj", repos);
+
+    const desired = try desiredLinks(arena, &ws, &p);
+
+    try testing.expectEqual(@as(usize, 1), desired.unresolved.len);
+    try testing.expectEqualStrings("evil", desired.unresolved[0]);
+    try testing.expect(hasRel(desired.links, "code/holt"));
+    try testing.expect(!hasRel(desired.links, "code/evil"));
+}
+
+test "reconcile: an unresolvable member costs only its own link" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "evil", "local:../../evil");
+    try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
+    const p = try testProject(arena, &ws, "acme", "proj", repos);
+
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+
+    const report = try reconcile(arena, &ws, &p, false);
+
+    try testing.expectEqual(@as(usize, 1), report.unresolved_members.len);
+    try testing.expectEqualStrings("evil", report.unresolved_members[0]);
+    // docs plus code/holt: the sound member and the content mirror are linked.
+    try testing.expectEqual(@as(u32, 2), report.created);
+    try testing.expect(try symlinkExists(arena, try std.fs.path.join(arena, &.{ p.hub_path, "docs" })));
+    try testing.expect(try symlinkExists(arena, try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" })));
+    // Nothing is created for the bad member, above all not outside the hub.
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ root, "evil" })));
+}
+
+test "reconcile: a project whose every member is unresolvable grows no code dir" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+
+    const ws = try testutil.testWorkspace(arena, root);
+    const repos = try oneRepo(arena, "evil", "local:../../evil");
+    const p = try testProject(arena, &ws, "acme", "proj", repos);
+
+    const report = try reconcile(arena, &ws, &p, false);
+
+    try testing.expectEqual(@as(usize, 1), report.unresolved_members.len);
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ p.hub_path, "code" })));
 }
 
 test "reconcile: code dir exists only when the project has repos" {

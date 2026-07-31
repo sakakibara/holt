@@ -144,12 +144,9 @@ fn runProjects(ctx: *app.Ctx, targets: []const project_mod.Project, jobs_cap: ?u
         }
 
         // A member whose url won't resolve was already reported above;
-        // reconcile would only re-hit the same failure, so skip this project's
-        // hub rather than aborting the whole restore.
-        _ = hub.reconcile(alloc, &ws, &p, false) catch |err| switch (err) {
-            error.UnrecognizedUrl => continue,
-            else => return err,
-        };
+        // reconcile passes it over, so the project's remaining links are still
+        // rebuilt.
+        _ = try hub.reconcile(alloc, &ws, &p, false);
         if (!attempted_any) try ctx.out.print("{s}: hub rebuilt, no missing clones\n", .{qualified});
 
         // A local repo has no remote to re-clone, so a missing clone after
