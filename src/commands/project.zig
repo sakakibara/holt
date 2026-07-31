@@ -262,26 +262,42 @@ test "new: a url argument is rejected - populating a project is repo get's job" 
     try testing.expectEqual(@as(u8, 2), got.code);
 }
 
+// This test always passes --yes: ui.confirm blocks on real stdin, and a test
+// run has no interactive stdin to feed it.
 test "remove: deletes content and hub, keeps the clone, and reports it unreferenced" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var sb = try testutil.Sandbox.init(testing.allocator);
-    defer sb.deinit();
-    const ws = try testutil.testWorkspace(arena, sb.root);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
 
-    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/proj", "--yes" });
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try fsutil.ensureDir(clone_path);
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/widget", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-
-    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
-    try testing.expect(!fsutil.exists(marker_path));
-    try testing.expect(std.mem.indexOf(u8, got.out, "deleted acme/proj") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "deleted acme/widget") != null);
+    // The unreferenced-clone note tilde-abbreviates the path for display.
+    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), clone_path)) != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "unreferenced") != null);
+
+    try testing.expect(!fsutil.exists(p.content_path));
+    try testing.expect(!fsutil.exists(p.hub_path));
+    try testing.expect(fsutil.exists(clone_path));
 }
 
 test "remove: --yes deleting the last project in an org prunes the emptied org's content and hub dirs" {
