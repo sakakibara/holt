@@ -48,6 +48,31 @@ fn parseYesNo(line: []const u8) bool {
     return trimmed.len > 0 and (trimmed[0] == 'y' or trimmed[0] == 'Y');
 }
 
+// Test seam: when set, the prompts below answer from this buffer instead of
+// the process's stdin, which under the test runner carries the build
+// protocol. Each read consumes one line; an exhausted buffer reads as EOF.
+pub var stdin_for_test: ?[]const u8 = null;
+
+/// One line from stdin, without its terminator. Null means no line: end of
+/// input, or a line longer than `buf`.
+fn takeLine(buf: []u8) !?[]const u8 {
+    if (stdin_for_test) |*canned| {
+        if (canned.len == 0) return null;
+        const nl = std.mem.indexOfScalar(u8, canned.*, '\n') orelse {
+            defer canned.* = canned.*[canned.len..];
+            return canned.*;
+        };
+        defer canned.* = canned.*[nl + 1 ..];
+        return canned.*[0..nl];
+    }
+
+    var stdin_reader = std.Io.File.stdin().reader(fsutil.io(), buf);
+    return stdin_reader.interface.takeDelimiter('\n') catch |err| switch (err) {
+        error.StreamTooLong => null,
+        error.ReadFailed => err,
+    };
+}
+
 /// Prints `message` to `w` and blocks on a line from stdin. EOF or anything
 /// not starting with y/Y counts as "no".
 pub fn confirm(w: *std.Io.Writer, message: []const u8) !bool {
@@ -55,12 +80,7 @@ pub fn confirm(w: *std.Io.Writer, message: []const u8) !bool {
     try w.flush();
 
     var buf: [256]u8 = undefined;
-    var stdin_reader = std.Io.File.stdin().reader(fsutil.io(), &buf);
-    const line = stdin_reader.interface.takeDelimiter('\n') catch |err| switch (err) {
-        error.StreamTooLong => return false,
-        error.ReadFailed => return err,
-    } orelse return false;
-
+    const line = try takeLine(&buf) orelse return false;
     return parseYesNo(line);
 }
 
@@ -78,12 +98,7 @@ pub fn confirmTyped(w: *std.Io.Writer, message: []const u8, expected: []const u8
     try w.flush();
 
     var buf: [256]u8 = undefined;
-    var stdin_reader = std.Io.File.stdin().reader(fsutil.io(), &buf);
-    const line = stdin_reader.interface.takeDelimiter('\n') catch |err| switch (err) {
-        error.StreamTooLong => return false,
-        error.ReadFailed => return err,
-    } orelse return false;
-
+    const line = try takeLine(&buf) orelse return false;
     return matchesExpected(line, expected);
 }
 
@@ -101,12 +116,7 @@ pub fn prompt(alloc: std.mem.Allocator, w: *std.Io.Writer, message: []const u8) 
     try w.flush();
 
     var buf: [1024]u8 = undefined;
-    var stdin_reader = std.Io.File.stdin().reader(fsutil.io(), &buf);
-    const line = stdin_reader.interface.takeDelimiter('\n') catch |err| switch (err) {
-        error.StreamTooLong => return "",
-        error.ReadFailed => return err,
-    } orelse return "";
-
+    const line = try takeLine(&buf) orelse return "";
     return alloc.dupe(u8, trimLine(line));
 }
 
@@ -162,6 +172,19 @@ test "parseYesNo: y/yes/Y match, everything else including empty does not" {
     try testing.expect(!parseYesNo("no"));
     try testing.expect(!parseYesNo(""));
     try testing.expect(!parseYesNo("\r"));
+}
+
+test "confirm: prints the message, accepts a y line, and declines at end of input" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    stdin_for_test = "y\n";
+    defer stdin_for_test = null;
+    try testing.expect(try confirm(&aw.writer, "delete it?"));
+    try testing.expectEqualStrings("delete it? [y/N] ", aw.written());
+
+    // Nothing left to read - what a non-interactive caller gets - is a "no".
+    try testing.expect(!try confirm(&aw.writer, "delete it?"));
 }
 
 test "matchesExpected: exact match, whitespace-tolerant, rejects wrong name or prefix" {

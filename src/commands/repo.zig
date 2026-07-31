@@ -19,16 +19,18 @@
 //! recorded as a project member. Like `promote`, relocating the clone is
 //! gated by `recover.check` and a destination that already exists is never
 //! overwritten.
-//! `remove <repo> [-p <project>] [--clone] [--force]` unlinks a repo from a
-//! project's marker (-p) and, only when asked, deletes its checkout under
-//! code_root (--clone). At least one of -p and --clone is required. --clone
-//! refuses while any active project still references the repo, naming them;
-//! refuses while a linked worktree exists (its objects live in the clone's
-//! .git, so --force does not override this); and refuses on dirty, stashed,
-//! or unpushed local state unless --force - the same `recover.check` gate
-//! `adopt` and `promote` apply. Without -p, <repo> is a code-tree key (as
-//! `holt list --repos` prints it); with -p it is the member's short name in
-//! that project's marker.
+//! `remove <repo> [-p <project>] [--clone] [--yes] [--force]` unlinks a repo
+//! from a project's marker (-p) and, only when asked, deletes its checkout
+//! under code_root (--clone). At least one of -p and --clone is required.
+//! --clone refuses while any active project still references the repo, naming
+//! them; refuses while a linked worktree exists (its objects live in the
+//! clone's .git, so --force does not override this); and refuses on dirty,
+//! stashed, or unpushed local state unless --force - the same `recover.check`
+//! gate `adopt` and `promote` apply. Once every gate passes it names the
+//! checkout and asks; only --yes skips that prompt, --force does not, since
+//! --force is what waived the recoverability gate. Without -p, <repo> is a
+//! code-tree key (as `holt list --repos` prints it); with -p it is the
+//! member's short name in that project's marker.
 //! `promote <repo> [--dry-run] [--yes] [--force]` moves a local repo
 //! (recorded in markers as `local:<repo>`) to its real remote identity, once
 //! its clone has grown an origin. The single most destructive operation in
@@ -512,13 +514,14 @@ const RemoveSpec = struct {
     repo: cli.Pos([]const u8, .{ .complete = app.cat(.repo), .help = "the member repo name, or a code-tree key when --clone is used alone" }),
     project: cli.Opt([]const u8, .{ .short = 'p', .value_name = "project", .complete = app.cat(.project), .help = "unlink the repo from this project" }),
     clone: cli.Flag(.{ .help = "also delete the checkout under code_root" }),
+    yes: cli.Flag(.{ .short = 'y', .help = "skip the confirmation prompt --clone asks before deleting" }),
     force: cli.Flag(.{ .short = 'f', .help = "delete the checkout even with unrecoverable local state" }),
 };
 
 pub const remove_command = app.command(RemoveSpec, .{
     .name = "remove",
     .summary = "Unlink a repo from a project, and optionally delete its checkout",
-    .usage = "holt repo remove <repo> [-p <project>] [--clone] [--force]",
+    .usage = "holt repo remove <repo> [-p <project>] [--clone] [--yes] [--force]",
     .group = .create,
     .needs_context = true,
     .details =
@@ -527,6 +530,10 @@ pub const remove_command = app.command(RemoveSpec, .{
     \\still references it, while a linked worktree exists (--force does not
     \\override this), or on dirty, stashed, or unpushed state unless --force.
     \\At least one of -p and --clone is required.
+    \\
+    \\--clone names the checkout and asks before deleting it. Only --yes skips
+    \\that prompt; --force does not, since --force is what waived the
+    \\recoverability check.
     \\
     \\Example:
     \\  holt repo remove widget -p acme/proj
@@ -659,6 +666,22 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
             try ctx.err.print("holt: {s} has unrecoverable local state, refusing to delete (use --force to override):\n", .{try app.tilde(ctx, clone_path)});
             try verdict.render(ctx.err);
             return 1;
+        }
+    }
+
+    // Asked last, once every gate has passed, so nobody confirms a delete the
+    // command then refuses. The clone lock stays held across the answer, so a
+    // concurrent command that would come to reference this clone still blocks
+    // on it and cannot slip a marker write past the reference check above.
+    if (!a.yes) {
+        const detail = if (a.force)
+            "--force waived the recoverability check, so whatever it holds may be unrecoverable"
+        else
+            "it is clean and pushed, so it can be cloned again from its remote";
+        const msg = try std.fmt.allocPrint(alloc, "delete the local checkout at {s}? {s}", .{ try app.tilde(ctx, clone_path), detail });
+        if (!try ui.confirm(ctx.out, msg)) {
+            try ctx.out.writeAll("delete cancelled; clone kept\n");
+            return 0;
         }
     }
 
@@ -2198,9 +2221,88 @@ test "remove: --clone deletes an unreferenced checkout" {
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
 
-    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone" });
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(!fsutil.exists(clone_path));
+}
+
+test "remove: --clone asks before deleting, --force does not skip the prompt, only --yes does" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+
+    // Nothing to read is a "no", which is what a non-interactive invocation
+    // gets: the prompt names the checkout and the clone survives.
+    ui.stdin_for_test = "";
+    defer ui.stdin_for_test = null;
+
+    const declined = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone" });
+    try testing.expectEqual(@as(u8, 0), declined.code);
+    try testing.expect(std.mem.indexOf(u8, declined.out, "delete the local checkout at") != null);
+    try testing.expect(std.mem.indexOf(u8, declined.out, "widget") != null);
+    try testing.expect(std.mem.indexOf(u8, declined.out, "clone kept") != null);
+    try testing.expect(fsutil.exists(clone_path));
+
+    // The invocation that waives the recoverability check is asked too, and
+    // told what --force means for the checkout it is about to destroy.
+    {
+        var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), clone_path, .{});
+        defer dir.close(fsutil.io());
+        try dir.writeFile(fsutil.io(), .{ .sub_path = "untracked.txt", .data = "hi\n" });
+    }
+
+    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force" });
+    try testing.expectEqual(@as(u8, 0), forced.code);
+    try testing.expect(std.mem.indexOf(u8, forced.out, "delete the local checkout at") != null);
+    try testing.expect(std.mem.indexOf(u8, forced.out, "may be unrecoverable") != null);
+    try testing.expect(fsutil.exists(clone_path));
+
+    // --yes is the one thing that deletes without asking.
+    const accepted = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force", "--yes" });
+    try testing.expectEqual(@as(u8, 0), accepted.code);
+    try testing.expect(std.mem.indexOf(u8, accepted.out, "delete the local checkout at") == null);
+    try testing.expect(!fsutil.exists(clone_path));
+}
+
+test "remove: --clone with -p keeps the clone when the prompt is declined, but the unlink still stands" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", .{ .version = 1, .org = "acme", .name = "only", .repos = repos });
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+
+    ui.stdin_for_test = "";
+    defer ui.stdin_for_test = null;
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "clone kept") != null);
+    try testing.expect(fsutil.exists(clone_path));
+
+    // Declining the delete does not undo the unlink that already happened.
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "only", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
 }
 
 test "remove: --clone refuses to delete a clone that has a linked worktree, even with --force" {
@@ -2257,7 +2359,7 @@ test "remove: --clone reports an unreadable directory as unreadable, and --force
     try testing.expect(std.mem.indexOf(u8, refused.err, "other worktree(s)") == null);
     try testing.expect(fsutil.exists(clone_path));
 
-    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force" });
+    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force", "--yes" });
     try testing.expectEqual(@as(u8, 0), forced.code);
     try testing.expect(!fsutil.exists(clone_path));
 }
@@ -2287,7 +2389,7 @@ test "remove: --clone refuses a dirty clone without --force, then proceeds with 
     try testing.expect(std.mem.indexOf(u8, refused.err, "unrecoverable local state") != null);
     try testing.expect(fsutil.exists(clone_path));
 
-    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force" });
+    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force", "--yes" });
     try testing.expectEqual(@as(u8, 0), forced.code);
     try testing.expect(!fsutil.exists(clone_path));
 }
@@ -2473,7 +2575,7 @@ test "remove: -p and --clone together unlink and delete when nothing else refere
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
 
-    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone" });
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(!fsutil.exists(clone_path));
 

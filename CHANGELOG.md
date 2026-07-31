@@ -44,6 +44,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gate `--force` does not override: a worktree's objects and its unpushed
   commits live in the main clone's `.git`, which the recoverability check
   cannot see into.
+- `holt repo remove --clone` names the checkout and asks before deleting it.
+  `-y`/`--yes` skips that prompt; `--force` does not, since `--force` is what
+  waived the recoverability check.
 - `holt project new` names the next step when it creates a project with no
   repos, since such a project has no `code/` directory yet.
 

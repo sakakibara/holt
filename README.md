@@ -260,7 +260,7 @@ list, or `holt <command> --help` for one command's usage.
 | `holt repo new <spec> [-p <project>]` | Create a git repo from scratch, standalone or as a project member |
 | `holt repo get <url> [-p <project>] [--update]` | Clone a repo into the code tree, standalone or as a project member (`url` accepts `owner/repo` or `host/owner/repo` shorthand) |
 | `holt repo adopt <path> [-p <project>] [--force]` | Register an existing clone, moving it to its identity path, standalone or as a project member |
-| `holt repo remove <repo> [-p <project>] [--clone] [--force]` | Unlink a repo from a project, or delete its checkout with `--clone` (refuses while another project still references it or a worktree exists; `--force` only overrides dirty, stashed, or unpushed state) |
+| `holt repo remove <repo> [-p <project>] [--clone] [--yes] [--force]` | Unlink a repo from a project, or delete its checkout with `--clone` (refuses while another project still references it or a worktree exists; `--force` only overrides dirty, stashed, or unpushed state; the delete is confirmed unless `--yes`) |
 | `holt repo promote <repo> [--dry-run] [--yes] [--force]` | Move a local repo to its real remote identity once it has an origin (previews and confirms unless `--yes`/`--force`) |
 | `holt repo alias <repo> [<name>] -p <project>` | Name the hub link a repo browses under |
 
