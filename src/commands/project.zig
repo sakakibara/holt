@@ -6,6 +6,7 @@
 //! and hub; clones under Code/ are always kept.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli");
 const app = @import("../app.zig");
 const marker = @import("../marker.zig");
@@ -157,7 +158,7 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
 
     var failed_path: []const u8 = p.content_path;
     removeContentMarkerLast(alloc, p.content_path, &failed_path) catch |err| {
-        try ctx.err.print("holt: failed to delete {s}: {s} (run \"holt delete {s}\" again)\n", .{ try app.tilde(ctx, failed_path), @errorName(err), qualified });
+        try ctx.err.print("holt: failed to delete {s}: {s} (run \"holt project remove {s}\" again)\n", .{ try app.tilde(ctx, failed_path), @errorName(err), qualified });
         return 1;
     };
 
@@ -281,4 +282,148 @@ test "remove: deletes content and hub, keeps the clone, and reports it unreferen
     try testing.expect(!fsutil.exists(marker_path));
     try testing.expect(std.mem.indexOf(u8, got.out, "deleted acme/proj") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "unreferenced") != null);
+}
+
+test "remove: --yes deleting the last project in an org prunes the emptied org's content and hub dirs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/widget", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const old_org_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    try testing.expect(!fsutil.exists(old_org_content));
+    const old_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
+    try testing.expect(!fsutil.exists(old_org_hub));
+}
+
+test "remove: --yes deleting one of two projects in an org leaves the org's content and hub dirs in place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .{ .version = 1, .org = "acme", .name = "gizmo", .repos = .empty });
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+    const gizmo_p = switch (try ws.find(arena, "acme/gizmo")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &gizmo_p, false);
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/widget", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const old_org_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    try testing.expect(fsutil.exists(old_org_content));
+    const old_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
+    try testing.expect(fsutil.exists(old_org_hub));
+    const remaining_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "gizmo" });
+    try testing.expect(fsutil.exists(remaining_content));
+}
+
+test "remove: --yes on a project with no repos deletes cleanly with no orphan report" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/empty", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "deleted acme/empty") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "unreferenced") == null);
+}
+
+test "remove: no matching project exits 1 and reports on stderr" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "nope", "--yes" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+}
+
+test "remove: a partial content-delete failure keeps the marker, so the project stays listable and remove is re-runnable" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+
+    // A child inside a read-only dir cannot be removed, so deleteTree of
+    // "locked" fails and the marker (deleted last) survives. Mode bits don't
+    // gate access on Windows, so this whole simulation is POSIX-only.
+    const locked_rel = "synced/projects/acme/widget/locked";
+    try tmp.dir.createDirPath(testing.io, locked_rel ++ "/nested");
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o555), .{});
+        defer tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+
+        const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/widget", "--yes" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "failed to delete") != null);
+        try testing.expect(std.mem.indexOf(u8, got.err, "holt project remove acme/widget") != null);
+
+        const marker_path = try p.markerPath(arena);
+        try testing.expect(fsutil.exists(marker_path));
+        switch (try ws.find(arena, "acme/widget")) {
+            .one => {},
+            else => return error.TestUnexpectedResult,
+        }
+
+        // Restore perms and re-run: remove now completes fully.
+        try tmp.dir.setFilePermissions(testing.io, locked_rel, std.Io.File.Permissions.fromMode(0o755), .{});
+        const again = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/widget", "--yes" });
+        try testing.expectEqual(@as(u8, 0), again.code);
+        try testing.expect(!fsutil.exists(p.content_path));
+    }
 }
