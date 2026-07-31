@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-07-31
+
+### Changed
+
+- `holt setup --help` lists the `--backend`/`--synced-root` exclusion under a
+  `Constraints:` section, and the error naming it now carries the reason. The
+  rule was declared once for the parser and written out a second time in the
+  command's prose, so the two could drift and only one of them reached the
+  person who tripped it; cli-zig 0.3.0 lets the declaration carry its own
+  reason, and the prose is gone.
+- Windows: a `HOME` in POSIX form (`/c/Users/me`, as Git Bash and MSYS2 export
+  it) is no longer taken as the home directory -- it resolves against whatever
+  drive happens to be current, so it names no stable location. `USERPROFILE`
+  is used instead. Inherited from env-zig 0.1.2; holt moved from 0.1.1 to
+  0.2.1 in this release, along with toml 0.4.0 -> 0.6.0 and json 0.2.0 ->
+  0.3.0, all additive.
+
 ## [0.8.0] - 2026-07-31
 
 ### Added
