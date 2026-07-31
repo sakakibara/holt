@@ -71,9 +71,9 @@ a single `code/<repo>@worktrees` link, so a project opened at its hub root
 (an editor, an agent) reaches every branch's checkout at
 `code/<repo>@worktrees/<branch>`. git owns the tree inside that link, so slashy
 branch names (`feature/new-auth`) just nest, with no flattening. Navigate to
-one with `h <project>/<repo>@<branch>` (the branch tab-completes). `archive
---prune` never reclaims a clone that has worktrees, since they may hold
-uncommitted work.
+one with `h <project>/<repo>@<branch>` (the branch tab-completes). `holt
+project archive --prune` never reclaims a clone that has worktrees, since they
+may hold uncommitted work.
 
 ## Install
 
@@ -249,6 +249,7 @@ list, or `holt <command> --help` for one command's usage.
 | `holt project unarchive <project>` | Move an archived project back into `projects/` and rebuild its hub |
 | `holt restore [<project>] [-j N]` | Clone every missing repo (in parallel, deduped by clone) and rebuild hubs, for one project or the whole workspace |
 | `holt project remove <project> [--yes]` | Remove a project's content and hub (clones kept); type `org/name` to confirm unless `--yes` |
+| `holt keep <path>` | Promote a loose file at the hub root into the project's synced content, leaving a symlink |
 | `holt backup <project>` | Tar a project's content dir into synced `backups/` |
 | `holt info <project> [--json]` | Show a project's paths and member repos |
 
@@ -268,7 +269,7 @@ list, or `holt <command> --help` for one command's usage.
 | Command | Description |
 | --- | --- |
 | `holt path [<project>\|<project>/<repo>] \| --root <code\|hub\|synced>` | Print the filesystem path for a project, a project/repo, or a configured root |
-| `holt list [--paths] [--org <org>] [--json]` | List every project in the workspace |
+| `holt list [--paths] [--repos] [--org <org>] [--json]` | List every project in the workspace, or with `--repos` every clone in the code tree by its key |
 | `holt status [<project>] [--dirty] [--org <org>] [--json]` | Show git status across a project's (or every project's) member repos |
 | `holt recent [-n N] [--org <org>] [--json]` | List projects ordered by their most recent commit |
 | `holt edit <project>` or `holt edit <project>/<repo>` | Open a project's docs in `$EDITOR`, or a member repo's clone |

@@ -21,14 +21,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   intake verbs now take the project the same way.
 - **Breaking.** `restore` no longer unarchives. It dispatched on `--all`
   between cloning every missing repo and moving one directory inside the synced
-  tree. Unarchiving is `holt project unarchive`; `restore` takes an optional
-  project to scope the re-clone, which was not previously possible.
+  tree. Unarchiving is `holt project unarchive`. `holt restore <project>` was
+  accepted before and meant something else -- it unarchived that project --
+  where it now scopes the re-clone to that project's repos; the whole-workspace
+  re-clone is the bare `holt restore`, which `--all` used to select.
+- **Breaking.** Creating a project and its first repo in one command is gone:
+  `holt new <org>/<name> [url]` took an optional url and cloned it as the first
+  member. `holt project new` creates the project alone, and `holt repo get
+  <url> -p <project>` adds the repo, so one command no longer both creates a
+  project and touches the code tree.
+- An ambiguous or unrecognized project query no longer empties the repo slot in
+  completions: it offers the union of every member repo name in the workspace
+  rather than nothing, which is also what `holt repo remove <repo> -p
+  <project>` needs, since its project comes after the repo.
 
 ### Added
 
 - `holt repo remove <repo> --clone` deletes a checkout, refusing while any
   project still references it and refusing on dirty, stashed, or unpushed state
   unless `--force`. Nothing removed a clone before except `archive --prune`.
+  It also refuses while the clone has a linked worktree, and that is the one
+  gate `--force` does not override: a worktree's objects and its unpushed
+  commits live in the main clone's `.git`, which the recoverability check
+  cannot see into.
 - `holt project new` names the next step when it creates a project with no
   repos, since such a project has no `code/` directory yet.
 
