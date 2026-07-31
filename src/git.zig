@@ -54,6 +54,10 @@ pub const Unpushed = enum { clean, ahead, no_upstream };
 /// a crashed clone leaves a stray temp (never a half-clone that reads as
 /// healthy), and if a concurrent process wins the race to `dest` first, this
 /// one keeps the winner's clone and discards its own.
+///
+/// `url` is a marker value, so it is separated from the options by `--`:
+/// without it a value starting with `-` is read by git as an option
+/// (`--upload-pack=<cmd>` names a command git runs) rather than a repository.
 pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, diag: ?*diagnostic.Diagnostic) !void {
     if (std.fs.path.dirname(dest)) |parent| try fsutil.ensureDir(parent);
 
@@ -65,7 +69,7 @@ pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, diag: 
     defer alloc.free(tmp);
     defer std.Io.Dir.cwd().deleteTree(fsutil.io(), tmp) catch {};
 
-    const status = spawnStreamed(alloc, &.{ "git", "clone", url, tmp }, null) catch |err| switch (err) {
+    const status = spawnStreamed(alloc, &.{ "git", "clone", "--", url, tmp }, null) catch |err| switch (err) {
         error.GitNotFound => {
             if (diag) |d| d.set(alloc, "git is not installed or not on your PATH", .{});
             return error.GitNotFound;
@@ -88,6 +92,10 @@ pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, diag: 
 /// `git -C repo worktree add <path> <branch>`, creating `path`'s parent dirs
 /// first. On a nonzero exit `diag` (if given) carries git's own stderr - the
 /// real cause (unknown branch, branch already checked out elsewhere).
+///
+/// `branch` is user input, so `--` separates it from the options: without it
+/// a branch starting with `-` is read by git as an option (`--detach` would
+/// silently make a detached worktree instead of failing on a bad ref).
 pub fn worktreeAdd(alloc: std.mem.Allocator, repo: []const u8, path: []const u8, branch: []const u8, diag: ?*diagnostic.Diagnostic) !void {
     if (std.fs.path.dirname(path)) |parent| try fsutil.ensureDir(parent);
     // git's worktree admin links are recorded and matched on '/' even on
@@ -99,7 +107,7 @@ pub fn worktreeAdd(alloc: std.mem.Allocator, repo: []const u8, path: []const u8,
     // `@worktrees` dir together (see common.moveClone) keeps them working with
     // no repair. Older git silently ignores the unknown config and records
     // absolute paths, which moveClone then repairs - so this degrades cleanly.
-    const res = try run(alloc, &.{ "git", "-C", repo, "-c", "worktree.useRelativePaths=true", "worktree", "add", git_path, branch }, null);
+    const res = try run(alloc, &.{ "git", "-C", repo, "-c", "worktree.useRelativePaths=true", "worktree", "add", "--", git_path, branch }, null);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) {
@@ -376,6 +384,55 @@ test "clone: on failure, sets the diagnostic to a message containing the url" {
     try testing.expectError(error.GitCloneFailed, clone(testing.allocator, url, dest, &cd));
     defer testing.allocator.free(cd.message);
     try testing.expect(std.mem.indexOf(u8, cd.message, url) != null);
+}
+
+test "clone: a url beginning with `-` is the repository git clones, not an option it parses" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+
+    // git resolves an `insteadOf` rewrite only for a url-shaped string, so the
+    // fake url carries a scheme separator behind its leading `-`. Read as an
+    // option instead, it is an unknown switch and the clone cannot happen.
+    const url = "-dashy://holt-test.invalid/acme/widget";
+    const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
+    const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{.{ .url = url, .bare = bare }});
+    defer override.restore();
+
+    const dest = try std.fs.path.join(arena, &.{ sb.root, "cloned" });
+    try clone(arena, url, dest, null);
+
+    const branch = try currentBranch(arena, dest);
+    try testing.expect(branch != null);
+    try testing.expectEqualStrings("main", branch.?);
+}
+
+test "worktreeAdd: a branch beginning with `-` is a ref git rejects, not an option it obeys" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    const wt_path = try std.fs.path.join(testing.allocator, &.{ sb.root, "wt" });
+    defer testing.allocator.free(wt_path);
+
+    // Read as an option, "--detach" would quietly produce a detached worktree.
+    var d: diagnostic.Diagnostic = .{};
+    try testing.expectError(
+        error.WorktreeAddFailed,
+        worktreeAdd(testing.allocator, work, wt_path, "--detach", &d),
+    );
+    defer testing.allocator.free(d.message);
+    try testing.expect(!fsutil.exists(wt_path));
 }
 
 test "inspectable: true for a real repo, false for a plain directory and a nonexistent path" {

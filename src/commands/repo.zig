@@ -167,7 +167,9 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
     }
 
     if (target.origin) |origin| {
-        const rr = try git.run(alloc, &.{ "git", "-C", clone_path, "remote", "add", "origin", origin }, null);
+        // `--` separates the url from the options: git parses an option
+        // anywhere in `remote add`'s argv, positionals included.
+        const rr = try git.run(alloc, &.{ "git", "-C", clone_path, "remote", "add", "--", "origin", origin }, null);
         if (rr.status != 0) {
             const cause = std.mem.trim(u8, rr.stderr, " \t\r\n");
             try ctx.err.print("holt: failed to set origin on {s}: {s}\n", .{ try app.tilde(ctx, clone_path), cause });

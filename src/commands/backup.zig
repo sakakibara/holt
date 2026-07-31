@@ -108,7 +108,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     // where the error path never runs) thus leaves at most a ".partial" that
     // never masquerades as a complete backup under the real name.
     const partial_path = try std.fmt.allocPrint(alloc, "{s}.partial", .{out_path});
-    const res = runTar(alloc, &.{ "tar", "-czf", partial_path, "-C", org_dir, p.name }) catch |err| switch (err) {
+    // `p.name` is a directory name read out of the synced tree, so `--`
+    // separates it from the options: a name starting with `-` would otherwise
+    // be read by tar as one (`--use-compress-program=<cmd>` names a command
+    // tar runs).
+    const res = runTar(alloc, &.{ "tar", "-czf", partial_path, "-C", org_dir, "--", p.name }) catch |err| switch (err) {
         error.FileNotFound => return error.TarNotFound,
         else => return err,
     };
@@ -182,6 +186,38 @@ test "run: creates a tar.gz under backups/ whose contents list the marker" {
     const tar_path = try std.fs.path.join(arena, &.{ backups_root, entry.name });
     const list_res = try runTar(arena, &.{ "tar", "-tzf", tar_path });
     try testing.expectEqual(@as(u8, 0), list_res.status);
+    try testing.expect(std.mem.indexOf(u8, list_res.stdout, marker.marker_basename) != null);
+}
+
+test "run: a project directory name beginning with `-` is archived, not read by tar as an option" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // A project directory is synced data, so its name reaches tar as an
+    // operand; read as an option instead, tar refuses the whole invocation.
+    const name = "--holt-not-an-option";
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", name, .{ .version = 1, .org = "acme", .name = name, .repos = .empty });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{try std.fmt.allocPrint(arena, "acme/{s}", .{name})});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const backups_root = try ws.backupsRoot(arena);
+    var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), backups_root, .{ .iterate = true });
+    defer dir.close(fsutil.io());
+    var it = dir.iterate();
+    const entry = (try it.next(fsutil.io())) orelse return error.TestUnexpectedResult;
+
+    const tar_path = try std.fs.path.join(arena, &.{ backups_root, entry.name });
+    const list_res = try runTar(arena, &.{ "tar", "-tzf", tar_path });
+    try testing.expectEqual(@as(u8, 0), list_res.status);
+    try testing.expect(std.mem.indexOf(u8, list_res.stdout, name) != null);
     try testing.expect(std.mem.indexOf(u8, list_res.stdout, marker.marker_basename) != null);
 }
 
