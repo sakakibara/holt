@@ -262,8 +262,6 @@ const sync_cmd = @import("commands/sync.zig");
 const restore_cmd = @import("commands/restore.zig");
 const doctor_cmd = @import("commands/doctor.zig");
 const promote_cmd = @import("commands/promote.zig");
-const archive_cmd = @import("commands/archive.zig");
-const rename_cmd = @import("commands/rename.zig");
 const org_cmd = @import("commands/org.zig");
 const backup_cmd = @import("commands/backup.zig");
 const info_cmd = @import("commands/info.zig");
@@ -301,9 +299,7 @@ pub const command_table = [_]Command{
     restore_cmd.command,
     doctor_cmd.command,
     promote_cmd.command,
-    rename_cmd.command,
     org_cmd.command,
-    archive_cmd.command,
     backup_cmd.command,
     edit_cmd.command,
     worktree_cmd.command,

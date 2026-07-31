@@ -3,7 +3,12 @@
 //! assets/, links/), its marker, and its hub - nothing else. A new project
 //! has no repo members; populating it is a separate operation (`holt repo
 //! get`). `remove <project>` permanently deletes the project's content dir
-//! and hub; clones under Code/ are always kept.
+//! and hub; clones under Code/ are always kept. `rename <old> <new>` moves a
+//! project's content dir to a new org/name, rewrites its marker, and rebuilds
+//! its hub at the new location; the clone under Code/ never moves. `archive
+//! <project>` moves a project's content dir out of projects/ into archive/
+//! and drops its hub, leaving its clones untouched (`holt restore` reverses
+//! the move).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -16,6 +21,10 @@ const common = @import("common.zig");
 const hub = @import("../hub.zig");
 const ui = @import("../ui.zig");
 const projectlock = @import("../projectlock.zig");
+const identity = @import("../identity.zig");
+const recover = @import("../recover.zig");
+const workspace = @import("../workspace.zig");
+const git = @import("../git.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
@@ -42,15 +51,15 @@ pub const new_command = app.command(Spec, .{
 pub const command: app.Command = .{
     .name = "project",
     .summary = "Create, remove, rename, and archive projects",
-    .usage = "holt project <new|remove|rename|archive|unarchive> ...",
+    .usage = "holt project <new|remove|rename|archive> ...",
     .group = .create,
-    .subcommands = &.{ new_command, remove_command },
+    .subcommands = &.{ new_command, remove_command, rename_command, archive_command },
     .needs_context = true,
     .run = runFallback,
 };
 
 fn runFallback(ctx: *app.Ctx) anyerror!u8 {
-    return app.usageError(ctx, "usage: holt project <new|remove|rename|archive|unarchive> ...", .{});
+    return app.usageError(ctx, "usage: holt project <new|remove|rename|archive> ...", .{});
 }
 
 fn runNew(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
@@ -219,6 +228,199 @@ fn removeContentMarkerLast(alloc: std.mem.Allocator, content_path: []const u8, f
 
     fsutil.rmdirIfEmpty(content_path);
 }
+
+const RenameSpec = struct {
+    old: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to rename" }),
+    new_name: cli.Pos([]const u8, .{ .help = "the new <org>/<name>" }),
+};
+
+pub const rename_command = app.command(RenameSpec, .{
+    .name = "rename",
+    .summary = "Rename a project, moving its content and rebuilding its hub",
+    .usage = "holt project rename <old> <new-org>/<new-name>",
+    .group = .create,
+    .needs_context = true,
+    .details =
+    \\Example:
+    \\  holt project rename acme/widget corp/gadget
+    ,
+}, runRename);
+
+fn runRename(ctx: *app.Ctx, a: cli.Args(RenameSpec)) anyerror!u8 {
+    const old_query = a.old;
+    const new_spec = a.new_name;
+
+    const ws = ctx.context.?.ws;
+    const alloc = ctx.alloc;
+
+    const p = (try common.resolveOne(ctx, old_query)) orelse return 1;
+
+    // Serialize the content move against concurrent per-project mutators.
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
+    defer lock.release();
+
+    const target = common.parseOrgName(new_spec) orelse {
+        return app.usageError(ctx, "{s}", .{try common.parseOrgNameMessage(alloc, new_spec)});
+    };
+
+    const projects_root = try ws.projectsRoot(alloc);
+    const dest_path = try std.fs.path.join(alloc, &.{ projects_root, target.org, target.name });
+
+    if (std.mem.eql(u8, p.content_path, dest_path)) {
+        try ctx.err.writeAll("holt: source and target are the same project\n");
+        return 1;
+    }
+    if (fsutil.exists(dest_path)) {
+        try ctx.err.print("holt: {s}/{s} already exists in projects\n", .{ target.org, target.name });
+        return 1;
+    }
+
+    const old_org_dir = std.fs.path.dirname(p.content_path).?;
+
+    common.moveProject(ctx, &ws, &p, target.org, target.name) catch return 1;
+    fsutil.rmdirIfEmpty(old_org_dir);
+
+    try ctx.out.print("renamed {s}/{s} -> {s}/{s}\n", .{ p.org, p.name, target.org, target.name });
+    return 0;
+}
+
+const ArchiveSpec = struct {
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to archive" }),
+    prune: cli.Flag(.{ .help = "also reclaim member clones that are safe to re-fetch" }),
+    yes: cli.Flag(.{ .short = 'y', .help = "skip the prune confirmation prompt" }),
+};
+
+pub const archive_command = app.command(ArchiveSpec, .{
+    .name = "archive",
+    .summary = "Move a project's content into archive/ and drop its hub",
+    .usage = "holt project archive <project> [--prune] [--yes]",
+    .group = .create,
+    .needs_context = true,
+    .details =
+    \\--prune additionally deletes clones no active project references.
+    \\
+    \\Example:
+    \\  holt project archive acme/widget --yes
+    ,
+}, runArchive);
+
+fn runArchive(ctx: *app.Ctx, a: cli.Args(ArchiveSpec)) anyerror!u8 {
+    const project_query = a.project;
+
+    const ws = ctx.context.?.ws;
+    const alloc = ctx.alloc;
+
+    const p = (try common.resolveOne(ctx, project_query)) orelse return 1;
+
+    // Serialize against concurrent per-project mutators (add/rm/...) so the
+    // content move never races an in-flight marker edit on the same project.
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
+    defer lock.release();
+
+    // Snapshot the non-local member clones before the marker moves, so a
+    // later --prune knows what this project referenced.
+    var members: std.ArrayList(Member) = .empty;
+    if (a.prune) {
+        for (p.marker.repos.keys()) |repo_name| {
+            const id = p.repoIdentity(alloc, repo_name) catch continue;
+            if (id.isLocal()) continue;
+            try members.append(alloc, .{ .repo = repo_name, .id = id, .clone_path = try id.clonePath(alloc, ws.cfg.code_root) });
+        }
+    }
+
+    const archive_root = try ws.archiveRoot(alloc);
+    const dest = try std.fs.path.join(alloc, &.{ archive_root, p.org, p.name });
+    if (fsutil.exists(dest)) {
+        try ctx.err.print("holt: {s}/{s} already exists in archive\n", .{ p.org, p.name });
+        return 1;
+    }
+
+    common.moveDir(ctx, p.content_path, dest) catch return 1;
+    hub.removeHub(&p) catch |err| {
+        try common.reportHubFailure(ctx, p.org, p.name, err);
+        return 1;
+    };
+
+    if (std.fs.path.dirname(p.content_path)) |old_org_dir| fsutil.rmdirIfEmpty(old_org_dir);
+
+    try ctx.out.print("archived {s}/{s}\n", .{ p.org, p.name });
+
+    if (a.prune) try pruneClones(ctx, &ws, members.items, a.yes);
+    return 0;
+}
+
+const Member = struct { repo: []const u8, id: identity.Identity, clone_path: []const u8 };
+
+/// After the project is archived, deletes each member clone that is safe to
+/// reclaim - present on disk, referenced by no remaining active project, and
+/// clean + in sync with its remote (so nothing is lost that isn't already
+/// pushed). Everything else is kept and reported with the reason. Never fails
+/// the command: the archive already succeeded.
+fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const Member, yes: bool) !void {
+    const alloc = ctx.alloc;
+
+    var eligible: std.ArrayList(Member) = .empty;
+    for (members) |m| {
+        if (!fsutil.exists(m.clone_path)) continue;
+        if ((try ws.projectsUsing(alloc, m.id)).len > 0) {
+            try ctx.out.print("kept {s}: still used by an active project\n", .{m.repo});
+            continue;
+        }
+        // A linked worktree may hold uncommitted work that recover.check on the
+        // main clone can't see; refuse rather than risk deleting it. If we
+        // can't tell (>1 defaults on error), keep it - deletion is never worth
+        // guessing wrong. worktreeCount includes the main tree, so >1 means
+        // extra worktrees exist.
+        if ((git.worktreeCount(alloc, m.clone_path) catch 2) > 1) {
+            try ctx.out.print("kept {s}: has worktrees\n", .{m.repo});
+            continue;
+        }
+        var verdict = recover.check(alloc, m.clone_path) catch {
+            try ctx.out.print("kept {s}: could not verify it is safe to reclaim\n", .{m.repo});
+            continue;
+        };
+        if (!verdict.safe()) {
+            try ctx.out.print("kept {s}: has local changes or unpushed commits\n", .{m.repo});
+            continue;
+        }
+        try eligible.append(alloc, m);
+    }
+
+    if (eligible.items.len == 0) return;
+
+    if (!yes) {
+        const msg = try std.fmt.allocPrint(alloc, "reclaim {d} clone(s) (delete the local checkout; re-clonable from its remote)?", .{eligible.items.len});
+        if (!try ui.confirm(ctx.out, msg)) {
+            try ctx.out.writeAll("prune cancelled (project stays archived)\n");
+            return;
+        }
+    }
+
+    for (eligible.items) |m| {
+        // Hold the clone-path lock across the final reference re-check and the
+        // delete. A concurrent add/new/adopt/promote that references this clone
+        // holds the same lock while writing its marker, so if one slipped in
+        // since the eligibility scan (or across the confirmation prompt) its
+        // reference is on disk and visible here - and we keep the clone.
+        var lock = try projectlock.acquire(alloc, app.envOf(ctx), m.clone_path);
+        defer lock.release();
+        if ((try ws.projectsUsing(alloc, m.id)).len > 0) {
+            try ctx.out.print("kept {s}: now used by an active project\n", .{m.repo});
+            continue;
+        }
+        std.Io.Dir.cwd().deleteTree(fsutil.io(), m.clone_path) catch |err| {
+            try ctx.err.print("holt: could not reclaim {s}: {s}\n", .{ try app.tilde(ctx, m.clone_path), @errorName(err) });
+            continue;
+        };
+        if (std.fs.path.dirname(m.clone_path)) |owner_dir| {
+            fsutil.rmdirIfEmpty(owner_dir);
+            if (std.fs.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
+        }
+        try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, try app.tilde(ctx, m.clone_path) });
+    }
+}
+
+const restore_cmd = @import("restore.zig");
 
 test "new: creates content dirs and marker, and names the next step on stderr" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -442,4 +644,516 @@ test "remove: a partial content-delete failure keeps the marker, so the project 
         try testing.expectEqual(@as(u8, 0), again.code);
         try testing.expect(!fsutil.exists(p.content_path));
     }
+}
+
+test "rename: moves content to the new org/name and rebuilds the hub" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/old", "acme/new" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const moved = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "new", marker.marker_basename });
+    try testing.expect(fsutil.exists(moved));
+}
+
+test "archive: moves content into archive/ and drops the hub" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/old", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const archived = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "old", marker.marker_basename });
+    try testing.expect(fsutil.exists(archived));
+}
+
+test "rename: moves content, rewrites the marker, and rebuilds the hub at the new name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", "docs" }));
+    const old_p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &old_p, false);
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "corp/gadget" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "renamed acme/widget -> corp/gadget") != null);
+
+    const old_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try testing.expect(!fsutil.exists(old_content));
+    const new_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "gadget" });
+    try testing.expect(fsutil.exists(new_content));
+
+    const marker_path = try std.fs.path.join(arena, &.{ new_content, marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqualStrings("corp", loaded.org);
+    try testing.expectEqualStrings("gadget", loaded.name);
+
+    try testing.expect(!fsutil.exists(old_p.hub_path));
+    const new_hub_docs = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "corp", "gadget", "docs" });
+    switch (try fsutil.linkState(arena, new_hub_docs)) {
+        .symlink => {},
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "rename: a hub rebuild failure after the content move points the user at holt sync, content already moved" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+
+    // A read-only hub_root makes creating the new hub dir fail, after the
+    // content has already moved to its new home. Mode bits don't gate
+    // access on Windows, so this whole simulation is POSIX-only.
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.setFilePermissions(testing.io, "hub", std.Io.File.Permissions.fromMode(0o555), .{});
+        defer tmp.dir.setFilePermissions(testing.io, "hub", std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+
+        const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "corp/gadget" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "holt sync") != null);
+
+        const new_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "gadget" });
+        try testing.expect(fsutil.exists(new_content));
+    }
+}
+
+test "rename: refuses when the target project already exists, leaving the source in place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "corp", "gadget", .{ .version = 1, .org = "corp", .name = "gadget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "corp/gadget" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "already exists") != null);
+
+    const old_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try testing.expect(fsutil.exists(old_content));
+}
+
+test "rename: source and target are the same project reports the clearer message" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "acme/widget" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expectStringEndsWith(got.err, "holt: source and target are the same project\n");
+
+    const content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try testing.expect(fsutil.exists(content));
+}
+
+test "rename: renaming the last project out of an org prunes the emptied org's content and hub dirs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    const old_p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &old_p, false);
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "corp/gadget" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const old_org_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    try testing.expect(!fsutil.exists(old_org_content));
+    const old_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
+    try testing.expect(!fsutil.exists(old_org_hub));
+}
+
+test "rename: renaming one of two projects out of an org leaves the org's content and hub dirs in place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .{ .version = 1, .org = "acme", .name = "gizmo", .repos = .empty });
+    const widget_p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &widget_p, false);
+    const gizmo_p = switch (try ws.find(arena, "acme/gizmo")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &gizmo_p, false);
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "corp/gadget" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const old_org_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    try testing.expect(fsutil.exists(old_org_content));
+    const old_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
+    try testing.expect(fsutil.exists(old_org_hub));
+    const remaining_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "gizmo" });
+    try testing.expect(fsutil.exists(remaining_content));
+}
+
+test "rename: a malformed <new-org>/<new-name> spec is a usage error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "no-slash" });
+    try testing.expectEqual(@as(u8, 2), got.code);
+}
+
+test "rename: a target that traverses out of the roots is rejected, leaving the source in place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "acme/../x" });
+    try testing.expectEqual(@as(u8, 2), got.code);
+
+    const source = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try testing.expect(fsutil.exists(source));
+    const escape = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "..", "x" });
+    try testing.expect(!fsutil.exists(escape));
+}
+
+test "rename: no matching project exits 1 and reports on stderr" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "nope", "corp/gadget" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+}
+
+test "archive: moves content into archive/, drops the hub, and restore round-trips it back" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", "docs" }));
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "archived acme/widget") != null);
+
+    const projects_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try testing.expect(!fsutil.exists(projects_content));
+    const archived_content = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget" });
+    try testing.expect(fsutil.exists(archived_content));
+    try testing.expect(!fsutil.exists(p.hub_path));
+
+    const restore_got = try testutil.runCmd(arena, restore_cmd.command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), restore_got.code);
+
+    try testing.expect(fsutil.exists(projects_content));
+    try testing.expect(!fsutil.exists(archived_content));
+
+    const docs_link = try std.fs.path.join(arena, &.{ p.hub_path, "docs" });
+    switch (try fsutil.linkState(arena, docs_link)) {
+        .symlink => {},
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "archive: archiving the last project in an org prunes the emptied org's content and hub dirs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const old_org_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    try testing.expect(!fsutil.exists(old_org_content));
+    const old_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
+    try testing.expect(!fsutil.exists(old_org_hub));
+}
+
+test "archive: archiving one of two projects in an org leaves the org's content and hub dirs in place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .{ .version = 1, .org = "acme", .name = "gizmo", .repos = .empty });
+    const p = switch (try ws.find(arena, "acme/widget")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &p, false);
+    const gizmo_p = switch (try ws.find(arena, "acme/gizmo")) {
+        .one => |proj| proj,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub.reconcile(arena, &ws, &gizmo_p, false);
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const old_org_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    try testing.expect(fsutil.exists(old_org_content));
+    const old_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
+    try testing.expect(fsutil.exists(old_org_hub));
+    const remaining_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "gizmo" });
+    try testing.expect(fsutil.exists(remaining_content));
+}
+
+test "archive: refuses when the archive destination already exists, leaving content in place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "already exists") != null);
+
+    const projects_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    try testing.expect(fsutil.exists(projects_content));
+}
+
+fn writeProjectWithClone(sb: *testutil.Sandbox, arena: std.mem.Allocator, ws: workspace.Workspace, org: []const u8, name: []const u8, repo: []const u8, url: []const u8) ![]const u8 {
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, repo, url);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), org, name, .{ .version = 1, .org = org, .name = name, .repos = repos });
+    const bare = try testutil.makeBareRepo(sb, try std.fmt.allocPrint(arena, "{s}-{s}.git", .{ org, name }));
+    defer testing.allocator.free(bare);
+    const id = try identity.fromUrl(arena, url);
+    const clone_path = try id.clonePath(arena, ws.cfg.code_root);
+    try git.clone(arena, bare, clone_path, null);
+    return clone_path;
+}
+
+test "archive: --prune reclaims a clean, synced, unreferenced member clone" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
+    try testing.expect(fsutil.exists(clone_path));
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "archived acme/proj") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "reclaimed widget") != null);
+    try testing.expect(!fsutil.exists(clone_path));
+}
+
+test "archive: --prune keeps a clone still referenced by another active project" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const url = "https://holt-test.invalid/acme/widget";
+    const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", url);
+    // A second active project references the same clone.
+    var repos2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos2.put(arena, "widget", url);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "other", .{ .version = 1, .org = "acme", .name = "other", .repos = repos2 });
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "kept widget: still used by an active project") != null);
+    try testing.expect(fsutil.exists(clone_path));
+}
+
+test "archive: --prune keeps a clone with uncommitted local changes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
+    // Dirty the clone so it is no longer safe to reclaim.
+    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), clone_path, .{});
+    defer d.close(fsutil.io());
+    try d.writeFile(fsutil.io(), .{ .sub_path = "uncommitted.txt", .data = "work in progress\n" });
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "kept widget: has local changes or unpushed commits") != null);
+    try testing.expect(fsutil.exists(clone_path));
+}
+
+test "archive: --prune keeps a clone that has worktrees" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
+
+    // An extra worktree (which may hold uncommitted work) must block reclaim.
+    const wt = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature-x" });
+    try fsutil.ensureDir(std.fs.path.dirname(wt).?);
+    try testutil.runGit(&sb, clone_path, &.{ "branch", "feature-x" });
+    try testutil.runGit(&sb, clone_path, &.{ "worktree", "add", wt, "feature-x" });
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "kept widget: has worktrees") != null);
+    try testing.expect(fsutil.exists(clone_path));
+}
+
+test "archive: no matching project exits 1 and reports on stderr" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{"nope"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
 }

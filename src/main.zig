@@ -86,8 +86,6 @@ test {
     _ = @import("commands/restore.zig");
     _ = @import("commands/doctor.zig");
     _ = @import("commands/promote.zig");
-    _ = @import("commands/archive.zig");
-    _ = @import("commands/rename.zig");
     _ = @import("commands/org.zig");
     _ = @import("commands/backup.zig");
     _ = @import("commands/info.zig");
@@ -144,7 +142,7 @@ test "coverage: every command positional and value-flag completes or is allowlis
     // complete against - honest gaps, not oversights.
     const allow = [_]CoverageAllow{
         .{ .cmd = "alias", .field = "name" }, // a new alias is invented
-        .{ .cmd = "rename", .field = "new_name" }, // a new name is invented
+        .{ .cmd = "project rename", .field = "new_name" }, // a new name is invented
         .{ .cmd = "upgrade", .field = "version" }, // free-form version string
         .{ .cmd = "status", .field = "jobs" }, // numeric concurrency count
         .{ .cmd = "recent", .field = "count" }, // numeric result count
