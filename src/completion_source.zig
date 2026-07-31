@@ -28,12 +28,14 @@ const Result = cli.complete.Result;
 pub fn resolveCompletion(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, cur: []const u8, ctx: anytype) anyerror!Result {
     const ws: ?*const workspace.Workspace = if (ctx.context) |*c| &c.ws else null;
 
-    // A path-shaped word on the `.project` slot (`adopt`'s first positional,
-    // a project OR a standalone clone path) completes filesystem paths
-    // instead of filtering project names. No `.project_repo` selector ever
-    // takes a bare path, so it must stay out of this guard - otherwise a
-    // `<project>/<repo>@<branch>` selector with 2+ slashes gets routed here
-    // before the '@'-branch handler below ever sees it.
+    // A path-shaped word on any `.project`-category slot (every positional
+    // and `-p` flag using it, across the whole command table) completes
+    // filesystem paths instead of filtering project names: no project query
+    // is ever path-shaped, so treating one as a path is always the more
+    // useful reading. No `.project_repo` selector ever takes a bare path, so
+    // it must stay out of this guard - otherwise a `<project>/<repo>@<branch>`
+    // selector with 2+ slashes gets routed here before the '@'-branch
+    // handler below ever sees it.
     if (std.mem.eql(u8, key, "project") and isPathShaped(cur)) {
         return .{ .directive = .files, .candidates = &.{} };
     }
@@ -195,17 +197,27 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             return plain(alloc, try out.toOwnedSlice(alloc));
         },
         .repo => {
-            const project_query = prev orelse return &.{};
-            const found = try w.find(alloc, project_query);
-            const p = switch (found) {
-                .one => |one| one,
-                else => return &.{},
-            };
-            var out: std.ArrayList(Candidate) = .empty;
-            for (p.marker.repos.keys()) |name| {
-                try out.append(alloc, .{ .value = name, .description = repoState(alloc, p, name, w.cfg.code_root) });
+            // With a project named ahead of the cursor, offer only its members.
+            // Without one - `repo remove <repo> -p <project>` puts the project
+            // after the cursor - offer every member name in the workspace, so
+            // the slot still completes.
+            if (prev) |project_query| {
+                if (try oneProject(alloc, w, project_query)) |p| {
+                    var out: std.ArrayList(Candidate) = .empty;
+                    for (p.marker.repos.keys()) |name| {
+                        try out.append(alloc, .{ .value = name, .description = repoState(alloc, p, name, w.cfg.code_root) });
+                    }
+                    return out.toOwnedSlice(alloc);
+                }
             }
-            return out.toOwnedSlice(alloc);
+            const all = try w.list(alloc);
+            var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+            for (all) |p| {
+                for (p.marker.repos.keys()) |name| try seen.put(alloc, name, {});
+            }
+            var out: std.ArrayList([]const u8) = .empty;
+            for (seen.keys()) |name| try out.append(alloc, name);
+            return plain(alloc, try out.toOwnedSlice(alloc));
         },
         .local_repo => {
             const all = try w.list(alloc);
@@ -239,6 +251,14 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
         },
         .backend_seed => unreachable, // handled above, before a workspace is required
     }
+}
+
+/// The single project `query` names, or null when it matches none or many.
+fn oneProject(alloc: std.mem.Allocator, w: *const workspace.Workspace, query: []const u8) !?project.Project {
+    return switch (try w.find(alloc, query)) {
+        .one => |p| p,
+        else => null,
+    };
 }
 
 /// A repo's clone state, for the `.repo` category's description: `"local"`
@@ -542,6 +562,29 @@ test "resolveCompletion: worktree_branch returns bare branch names for the prece
     const got = try resolveCompletion(arena, "worktree_branch", "proj/backend", "", &ctx);
     try testing.expectEqual(@as(usize, 1), got.candidates.len);
     try testing.expectEqualStrings("feature/x", got.candidates[0].value);
+}
+
+test "candidatesFor: .repo offers every project's members when no project precedes it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const got = try candidatesFor(arena, "repo", null, &ws);
+    var saw = false;
+    for (got) |c| {
+        if (std.mem.eql(u8, c.value, "widget")) saw = true;
+    }
+    try testing.expect(saw);
 }
 
 test "resolveCompletion: an unresolvable context yields no candidates rather than failing" {
