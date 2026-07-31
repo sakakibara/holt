@@ -81,9 +81,8 @@ pub fn envOf(ctx: *Ctx) Env {
 
 /// A path for a line the user reads, with `$HOME` contracted to `~`. Output a
 /// caller parses keeps its absolute path: the bare-path stdout payload, `list
-/// --paths`, and `config`'s `key = value` lines (holt's own `hir` shell
-/// function greps `code_root` out of them and joins it inside quotes, where a
-/// `~` would never expand).
+/// --paths`, and `config`'s `key = value` lines, whose values a script joins
+/// onto a relative key inside quotes, where a `~` would never expand.
 pub fn tilde(ctx: *Ctx, path: []const u8) ![]u8 {
     return fsutil.contractTilde(ctx.alloc, envOf(ctx), path);
 }

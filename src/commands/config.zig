@@ -70,8 +70,10 @@ fn runShow(ctx: *app.Ctx) anyerror!u8 {
         return 1;
     };
 
-    // Absolute, not tilde-contracted: `hir` (shell.zig) greps code_root out of
-    // these lines and joins it inside quotes, where a `~` would never expand.
+    // Absolute, not tilde-contracted: a script joins these values onto a
+    // relative key inside quotes, where a `~` would never expand. `holt path
+    // --root` is the accessor built for that; these lines stay parseable for
+    // anything still reading them.
     try ctx.out.print("synced_root = {s}\n", .{cfg.synced_root});
     try ctx.out.print("code_root = {s}\n", .{cfg.code_root});
     try ctx.out.print("hub_root = {s}\n", .{cfg.hub_root});
