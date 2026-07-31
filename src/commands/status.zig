@@ -177,7 +177,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     }
 
     if (targets.len == 0) {
-        try ctx.err.writeAll("no projects yet - create one with \"holt new <org>/<name>\"\n");
+        try ctx.err.writeAll("no projects yet - create one with \"holt project new <org>/<name>\"\n");
         return 0;
     }
 

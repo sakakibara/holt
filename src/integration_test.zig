@@ -63,7 +63,7 @@ fn expectSymlink(arena: std.mem.Allocator, path: []const u8) !void {
     }
 }
 
-test "integration: new -> add -> rm -> archive -> restore -> delete through the real command table and dispatch" {
+test "integration: project new -> add -> rm -> archive -> restore -> delete through the real command table and dispatch" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -104,9 +104,15 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
     const proj_content = try std.fs.path.join(arena, &.{ synced_root, "projects", "acme", "proj" });
     const proj_archived = try std.fs.path.join(arena, &.{ synced_root, "archive", "acme", "proj" });
 
-    // new acme/proj <urlA>: creates the project, clones alpha, builds the hub.
+    // project new acme/proj: creates the project and builds the hub.
     {
-        const got = try dispatch(arena, &.{ "new", "acme/proj", url_a });
+        const got = try dispatch(arena, &.{ "project", "new", "acme/proj" });
+        try testing.expectEqual(@as(u8, 0), got.code);
+    }
+
+    // add acme/proj <urlA>: first repo, clones alpha, hub link.
+    {
+        const got = try dispatch(arena, &.{ "add", "acme/proj", url_a });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     {
@@ -133,9 +139,9 @@ test "integration: new -> add -> rm -> archive -> restore -> delete through the 
     try testing.expect(fsutil.exists(clone_beta));
     try expectSymlink(arena, hub_proj_code_beta);
 
-    // new acme/other (no url): a second project to later share alpha with.
+    // project new acme/other: a second project to later share alpha with.
     {
-        const got = try dispatch(arena, &.{ "new", "acme/other" });
+        const got = try dispatch(arena, &.{ "project", "new", "acme/other" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
 

@@ -76,7 +76,7 @@ test {
     _ = @import("commands/setup.zig");
     _ = @import("commands/path.zig");
     _ = @import("commands/list.zig");
-    _ = @import("commands/new.zig");
+    _ = @import("commands/project.zig");
     _ = @import("commands/add.zig");
     _ = @import("commands/get.zig");
     _ = @import("commands/create.zig");
