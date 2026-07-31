@@ -91,7 +91,6 @@ test {
     _ = @import("commands/backends.zig");
     _ = @import("commands/backend.zig");
     _ = @import("commands/recent.zig");
-    _ = @import("commands/adopt.zig");
     _ = @import("commands/keep.zig");
     _ = @import("commands/edit.zig");
     _ = @import("commands/config.zig");
@@ -322,7 +321,7 @@ test "integration: a broken (null) workspace still replies with the directive li
     try testing.expectEqualStrings("default\n", out.written());
 }
 
-test "integration: adopt disambiguation, subsequence matching, and flag de-dup on the real table" {
+test "integration: the project completion category, subsequence matching, and flag de-dup on the real table" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -338,12 +337,12 @@ test "integration: adopt disambiguation, subsequence matching, and flag de-dup o
     var err_w: std.Io.Writer.Allocating = .init(arena);
     var ctx = completionCtx(arena, &out.writer, &err_w.writer, &ws);
 
-    // `adopt`'s first positional (real spec: a project OR a clone path): a
+    // `repo adopt -p`'s value completes off the `.project` category: a
     // path-shaped word defers to file completion, a bare word completes
     // projects.
-    const adopt_path = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "adopt", "./checkouts/wi" }, app.HoltCli.completion_resolve, &ctx);
+    const adopt_path = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "repo", "adopt", "stray", "-p", "./checkouts/wi" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expectEqual(cli.complete.Directive.files, adopt_path.directive);
-    const adopt_proj = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "adopt", "wid" }, app.HoltCli.completion_resolve, &ctx);
+    const adopt_proj = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "repo", "adopt", "stray", "-p", "wid" }, app.HoltCli.completion_resolve, &ctx);
     try testing.expectEqual(cli.complete.Directive.default, adopt_proj.directive);
     try testing.expect(containsCandidate(adopt_proj.candidates, "widget"));
 

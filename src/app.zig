@@ -267,7 +267,6 @@ const status_cmd = @import("commands/status.zig");
 const backends_cmd = @import("commands/backends.zig");
 const backend_cmd = @import("commands/backend.zig");
 const recent_cmd = @import("commands/recent.zig");
-const adopt_cmd = @import("commands/adopt.zig");
 const keep_cmd = @import("commands/keep.zig");
 const edit_cmd = @import("commands/edit.zig");
 const config_cmd = @import("commands/config.zig");
@@ -285,7 +284,6 @@ pub const command_table = [_]Command{
     repo_cmd.command,
     rm_cmd.command,
     alias_cmd.command,
-    adopt_cmd.command,
     keep_cmd.command,
     info_cmd.command,
     status_cmd.command,
