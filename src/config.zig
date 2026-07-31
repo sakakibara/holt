@@ -4,6 +4,7 @@
 //! Every returned field is arena-owned; callers never free them individually.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const env_zig = @import("env");
 const Env = env_zig.Env;
 const toml = @import("toml");
@@ -287,7 +288,13 @@ fn loadFromPath(alloc: std.mem.Allocator, env: Env, path: []const u8, diag: ?*di
 
 /// Tests hand the code an environment instead of editing the one the test
 /// runner is living in.
-const test_home = "/home/tester";
+///
+/// Absolute on the HOST, not just on POSIX: a Windows home must name a drive,
+/// and env-zig refuses a driveless one (it resolves against whatever drive is
+/// current, so it names no stable location) in favour of `USERPROFILE` --
+/// which these synthetic environments do not set, so a POSIX-form home would
+/// fail every lookup here with `NoHomeDir` rather than testing what it means to.
+const test_home = if (builtin.os.tag == .windows) "C:\\home\\tester" else "/home/tester";
 
 fn testEnv(a: std.mem.Allocator, pairs: []const [2][]const u8) !Env {
     const map = try a.create(std.process.Environ.Map);
