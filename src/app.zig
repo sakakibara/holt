@@ -254,11 +254,9 @@ const path_cmd = @import("commands/path.zig");
 const list_cmd = @import("commands/list.zig");
 const project_cmd = @import("commands/project.zig");
 const repo_cmd = @import("commands/repo.zig");
-const alias_cmd = @import("commands/alias.zig");
 const sync_cmd = @import("commands/sync.zig");
 const restore_cmd = @import("commands/restore.zig");
 const doctor_cmd = @import("commands/doctor.zig");
-const promote_cmd = @import("commands/promote.zig");
 const org_cmd = @import("commands/org.zig");
 const backup_cmd = @import("commands/backup.zig");
 const info_cmd = @import("commands/info.zig");
@@ -281,7 +279,6 @@ pub const command_table = [_]Command{
     setup_cmd.command,
     project_cmd.command,
     repo_cmd.command,
-    alias_cmd.command,
     keep_cmd.command,
     info_cmd.command,
     status_cmd.command,
@@ -290,7 +287,6 @@ pub const command_table = [_]Command{
     sync_cmd.command,
     restore_cmd.command,
     doctor_cmd.command,
-    promote_cmd.command,
     org_cmd.command,
     backup_cmd.command,
     edit_cmd.command,

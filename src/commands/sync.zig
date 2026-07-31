@@ -1,6 +1,6 @@
 //! `holt sync [--dry-run]`: reconciles every project's hub with its marker
 //! and reports what changed, then hints at any local repo that has grown a
-//! remote and is ready for `holt promote`. Sync only detects promotable
+//! remote and is ready for `holt repo promote`. Sync only detects promotable
 //! repos - the destructive move itself is left to the explicit command.
 
 const std = @import("std");
@@ -201,8 +201,8 @@ fn hubHasRealFile(alloc: std.mem.Allocator, path: []const u8) !bool {
 }
 
 /// Hints at every distinct `local:<name>` repo whose clone has grown an
-/// origin - a candidate for `holt promote`. A name shared by more than one
-/// project is only ever hinted once.
+/// origin - a candidate for `holt repo promote`. A name shared by more than
+/// one project is only ever hinted once.
 fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, all: []const project_mod.Project) !void {
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
     for (all) |p| {
@@ -219,7 +219,7 @@ fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem
             const origin = try git.remoteUrl(alloc, local_clone_path) orelse continue;
             const new_id = identity.fromUrl(alloc, origin) catch continue;
             const rel = try new_id.relPath(alloc);
-            try ctx.out.print("promotable: {s} -> {s} (run: holt promote {s})\n", .{ name, rel, name });
+            try ctx.out.print("promotable: {s} -> {s} (run: holt repo promote {s})\n", .{ name, rel, name });
         }
     }
 }
@@ -363,7 +363,7 @@ test "run: hints a local repo that has grown an origin, without moving anything"
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "promotable: scratch -> holt-test.invalid/acme/scratch (run: holt promote scratch)") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "promotable: scratch -> holt-test.invalid/acme/scratch (run: holt repo promote scratch)") != null);
 
     try testing.expect(fsutil.exists(local_clone_path));
     const new_id = try identity.fromUrl(arena, fake_origin);

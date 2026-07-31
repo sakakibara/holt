@@ -78,11 +78,9 @@ test {
     _ = @import("commands/list.zig");
     _ = @import("commands/project.zig");
     _ = @import("commands/repo.zig");
-    _ = @import("commands/alias.zig");
     _ = @import("commands/sync.zig");
     _ = @import("commands/restore.zig");
     _ = @import("commands/doctor.zig");
-    _ = @import("commands/promote.zig");
     _ = @import("commands/org.zig");
     _ = @import("commands/backup.zig");
     _ = @import("commands/info.zig");
@@ -137,7 +135,7 @@ test "coverage: every command positional and value-flag completes or is allowlis
     // Intentionally free-form or numeric slots with no candidate set to
     // complete against - honest gaps, not oversights.
     const allow = [_]CoverageAllow{
-        .{ .cmd = "alias", .field = "name" }, // a new alias is invented
+        .{ .cmd = "repo alias", .field = "name" }, // a new alias is invented
         .{ .cmd = "project rename", .field = "new_name" }, // a new name is invented
         .{ .cmd = "upgrade", .field = "version" }, // free-form version string
         .{ .cmd = "status", .field = "jobs" }, // numeric concurrency count
@@ -266,14 +264,6 @@ test "integration: project/repo/backend_seed categories carry real descriptions"
     try app.HoltCli.completionReply(arena, &app.command_table, &.{ "info", "wid" }, app.HoltCli.completion_resolve, &ctx, &out.writer);
     try testing.expect(std.mem.indexOf(u8, out.written(), "widget\tacme") != null);
 
-    // `alias`'s second positional (repo) resolves off the first (project) and
-    // carries each repo's clone-state description - no git involved.
-    const repo_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "alias", "acme/proj", "" }, app.HoltCli.completion_resolve, &ctx);
-    const backend_cand = findCandidate(repo_got.candidates, "backend") orelse return error.TestUnexpectedResult;
-    try testing.expectEqualStrings("missing", backend_cand.description.?);
-    const tool_cand = findCandidate(repo_got.candidates, "tool") orelse return error.TestUnexpectedResult;
-    try testing.expectEqualStrings("local", tool_cand.description.?);
-
     // `setup --backend` lists the builtin seeds even with a null workspace
     // (the fresh-install path, before config.toml exists).
     var ctx_no_ws = completionCtx(arena, &out.writer, &err_w.writer, null);
@@ -281,9 +271,17 @@ test "integration: project/repo/backend_seed categories carry real descriptions"
     const dropbox_cand = findCandidate(seed_got.candidates, "dropbox") orelse return error.TestUnexpectedResult;
     try testing.expect(dropbox_cand.description != null);
 
-    // `run --repo` completes off the preceding project positional.
+    // `run --repo` completes off the preceding project positional and
+    // carries each repo's clone-state description - no git involved. This is
+    // now `.repo`'s only reachable "resolves off the preceding project
+    // positional" caller: every `repo` subcommand takes its project via -p
+    // (a flag value, never a preceding positional).
     const run_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "run", "acme/proj", "--repo", "back" }, app.HoltCli.completion_resolve, &ctx);
-    try testing.expect(containsCandidate(run_got.candidates, "backend"));
+    const backend_cand = findCandidate(run_got.candidates, "backend") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("missing", backend_cand.description.?);
+    const full_repo_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "run", "acme/proj", "--repo", "" }, app.HoltCli.completion_resolve, &ctx);
+    const tool_cand = findCandidate(full_repo_got.candidates, "tool") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("local", tool_cand.description.?);
 
     // A glued `--org=<partial>` on `list` completes the flag's value.
     const list_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "list", "--org=ac" }, app.HoltCli.completion_resolve, &ctx);
