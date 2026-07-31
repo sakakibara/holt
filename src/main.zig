@@ -87,7 +87,6 @@ test {
     _ = @import("commands/doctor.zig");
     _ = @import("commands/promote.zig");
     _ = @import("commands/archive.zig");
-    _ = @import("commands/delete.zig");
     _ = @import("commands/rename.zig");
     _ = @import("commands/org.zig");
     _ = @import("commands/backup.zig");

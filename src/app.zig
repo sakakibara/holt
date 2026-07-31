@@ -263,7 +263,6 @@ const restore_cmd = @import("commands/restore.zig");
 const doctor_cmd = @import("commands/doctor.zig");
 const promote_cmd = @import("commands/promote.zig");
 const archive_cmd = @import("commands/archive.zig");
-const delete_cmd = @import("commands/delete.zig");
 const rename_cmd = @import("commands/rename.zig");
 const org_cmd = @import("commands/org.zig");
 const backup_cmd = @import("commands/backup.zig");
@@ -313,7 +312,6 @@ pub const command_table = [_]Command{
     run_cmd.command,
     version_cmd.command,
     upgrade_cmd.command,
-    delete_cmd.command,
 };
 
 const SmokeSpec = struct {};

@@ -63,7 +63,7 @@ fn expectSymlink(arena: std.mem.Allocator, path: []const u8) !void {
     }
 }
 
-test "integration: project new -> add -> rm -> archive -> restore -> delete through the real command table and dispatch" {
+test "integration: project new -> add -> rm -> archive -> restore -> project remove through the real command table and dispatch" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -209,10 +209,10 @@ test "integration: project new -> add -> rm -> archive -> restore -> delete thro
     try expectSymlink(arena, hub_proj_docs);
     try expectSymlink(arena, hub_proj_code_alpha);
 
-    // delete acme/proj --yes: content + hub gone, clones untouched (alpha still
-    // used by acme/other; beta is never deleted regardless of references).
+    // project remove acme/proj --yes: content + hub gone, clones untouched (alpha
+    // still used by acme/other; beta is never deleted regardless of references).
     {
-        const got = try dispatch(arena, &.{ "delete", "acme/proj", "--yes" });
+        const got = try dispatch(arena, &.{ "project", "remove", "acme/proj", "--yes" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     try testing.expect(!fsutil.exists(proj_content));

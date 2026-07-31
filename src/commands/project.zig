@@ -2,9 +2,11 @@
 //! act on. `new <org>/<name>` creates a project's content dirs (docs/,
 //! assets/, links/), its marker, and its hub - nothing else. A new project
 //! has no repo members; populating it is a separate operation (`holt repo
-//! get`).
+//! get`). `remove <project>` permanently deletes the project's content dir
+//! and hub; clones under Code/ are always kept.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli");
 const app = @import("../app.zig");
 const marker = @import("../marker.zig");
@@ -12,6 +14,7 @@ const fsutil = @import("../fsutil.zig");
 const project_mod = @import("../project.zig");
 const common = @import("common.zig");
 const hub = @import("../hub.zig");
+const ui = @import("../ui.zig");
 const projectlock = @import("../projectlock.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
@@ -41,7 +44,7 @@ pub const command: app.Command = .{
     .summary = "Create, remove, rename, and archive projects",
     .usage = "holt project <new|remove|rename|archive|unarchive> ...",
     .group = .create,
-    .subcommands = &.{new_command},
+    .subcommands = &.{ new_command, remove_command },
     .needs_context = true,
     .run = runFallback,
 };
@@ -102,6 +105,121 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     return 0;
 }
 
+const RemoveSpec = struct {
+    project: cli.Pos([]const u8, .{ .complete = app.cat(.project), .help = "the project to remove" }),
+    yes: cli.Flag(.{ .short = 'y', .help = "skip the confirmation prompt" }),
+};
+
+pub const remove_command = app.command(RemoveSpec, .{
+    .name = "remove",
+    .summary = "Remove a project's content and hub (clones are kept)",
+    .usage = "holt project remove <project> [--yes]",
+    .group = .create,
+    .needs_context = true,
+    .details =
+    \\Danger: permanently deletes the project's content dir and hub. Clones
+    \\under Code/ are always kept; a clone left referenced by no project is
+    \\reported so it can be removed with `holt repo remove <repo> --clone`.
+    \\Requires typed confirmation unless --yes.
+    \\
+    \\Example:
+    \\  holt project remove acme/widget --yes
+    ,
+}, runRemove);
+
+fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
+    const project_query = a.project;
+    const yes = a.yes;
+
+    const ws = ctx.context.?.ws;
+    const alloc = ctx.alloc;
+
+    const p = (try common.resolveOne(ctx, project_query)) orelse return 1;
+    const qualified = try p.qualified(alloc);
+
+    if (!yes) {
+        const prompt = try std.fmt.allocPrint(alloc, "delete {s} (content + hub; clones are kept). Type {s} to confirm:", .{ qualified, qualified });
+        if (!try ui.confirmTyped(ctx.out, prompt, qualified)) {
+            try ctx.out.print("aborted: {s} not deleted\n", .{qualified});
+            return 0;
+        }
+    }
+
+    // Take the lock only now (not across the confirmation prompt), then
+    // serialize the destructive removal against concurrent per-project edits.
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
+    defer lock.release();
+
+    // Remove the hub first, then the content with the marker deleted LAST: a
+    // content-delete failure then leaves the marker in place, so the project
+    // stays listable and this command stays re-runnable rather than stranding
+    // an invisible half-deleted project.
+    try hub.removeHub(&p);
+
+    var failed_path: []const u8 = p.content_path;
+    removeContentMarkerLast(alloc, p.content_path, &failed_path) catch |err| {
+        try ctx.err.print("holt: failed to delete {s}: {s} (run \"holt delete {s}\" again)\n", .{ try app.tilde(ctx, failed_path), @errorName(err), qualified });
+        return 1;
+    };
+
+    if (std.fs.path.dirname(p.content_path)) |old_org_dir| fsutil.rmdirIfEmpty(old_org_dir);
+    try ctx.out.print("deleted {s}\n", .{qualified});
+
+    for (p.marker.repos.keys()) |repo_name| {
+        const id = p.repoIdentity(alloc, repo_name) catch continue;
+        const others = try ws.projectsUsing(alloc, id);
+        if (others.len == 0) {
+            const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
+            try ctx.out.print("clone at {s} is now unreferenced; remove it with `holt repo remove {s} --clone`\n", .{ try app.tilde(ctx, clone_path), repo_name });
+        }
+    }
+
+    return 0;
+}
+
+/// Deletes everything under `content_path`, removing the marker file LAST so a
+/// partial failure leaves the marker present (project still listable, remove
+/// still re-runnable). `failed` names the entry that could not be removed when
+/// an error is returned.
+fn removeContentMarkerLast(alloc: std.mem.Allocator, content_path: []const u8, failed: *[]const u8) !void {
+    const cwd = std.Io.Dir.cwd();
+    const dio = fsutil.io();
+    failed.* = content_path;
+
+    var names: std.ArrayList([]const u8) = .empty;
+    {
+        var dir = cwd.openDir(dio, content_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return,
+            else => return err,
+        };
+        defer dir.close(dio);
+        var it = dir.iterate();
+        while (try it.next(dio)) |entry| {
+            if (std.mem.eql(u8, entry.name, marker.marker_basename)) continue;
+            try names.append(alloc, try alloc.dupe(u8, entry.name));
+        }
+    }
+
+    for (names.items) |name| {
+        const entry_path = try std.fs.path.join(alloc, &.{ content_path, name });
+        cwd.deleteTree(dio, entry_path) catch |err| {
+            failed.* = entry_path;
+            return err;
+        };
+    }
+
+    const marker_path = try std.fs.path.join(alloc, &.{ content_path, marker.marker_basename });
+    cwd.deleteFile(dio, marker_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => {
+            failed.* = marker_path;
+            return err;
+        },
+    };
+
+    fsutil.rmdirIfEmpty(content_path);
+}
+
 test "new: creates content dirs and marker, and names the next step on stderr" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -142,4 +260,26 @@ test "new: a url argument is rejected - populating a project is repo get's job" 
 
     const got = try testutil.runCmd(arena, new_command.run, ws, &.{ "acme/widget", "https://example.invalid/a/b" });
     try testing.expectEqual(@as(u8, 2), got.code);
+}
+
+test "remove: deletes content and hub, keeps the clone, and reports it unreferenced" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/proj", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    try testing.expect(!fsutil.exists(marker_path));
+    try testing.expect(std.mem.indexOf(u8, got.out, "deleted acme/proj") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "unreferenced") != null);
 }
