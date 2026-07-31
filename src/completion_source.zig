@@ -10,6 +10,7 @@ const workspace = @import("workspace.zig");
 const config = @import("config.zig");
 const project = @import("project.zig");
 const marker = @import("marker.zig");
+const identity = @import("identity.zig");
 const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
@@ -225,7 +226,11 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             for (all) |p| {
                 for (p.marker.repos.keys()) |name| {
                     const url = p.marker.repos.get(name).?;
-                    if (std.mem.startsWith(u8, url, "local:")) try seen.put(alloc, url["local:".len..], {});
+                    if (!std.mem.startsWith(u8, url, "local:")) continue;
+                    // Never offer a name `repo promote` would refuse.
+                    const local_name = url["local:".len..];
+                    if (!identity.isSafeLocalName(local_name)) continue;
+                    try seen.put(alloc, local_name, {});
                 }
             }
             var out: std.ArrayList([]const u8) = .empty;
@@ -585,6 +590,27 @@ test "candidatesFor: .repo offers every project's members when no project preced
         if (std.mem.eql(u8, c.value, "widget")) saw = true;
     }
     try testing.expect(saw);
+}
+
+test "candidatesFor: .local_repo offers a usable local name and skips a traversing one" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try repos.put(arena, "widget", "local:../../outside/victim");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const got = try candidatesFor(arena, "local_repo", null, &ws);
+    try testing.expectEqual(@as(usize, 1), got.len);
+    try testing.expectEqualStrings("scratch", got[0].value);
 }
 
 test "resolveCompletion: an unresolvable context yields no candidates rather than failing" {

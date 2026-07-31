@@ -202,7 +202,8 @@ fn hubHasRealFile(alloc: std.mem.Allocator, path: []const u8) !bool {
 
 /// Hints at every distinct `local:<name>` repo whose clone has grown an
 /// origin - a candidate for `holt repo promote`. A name shared by more than
-/// one project is only ever hinted once.
+/// one project is only ever hinted once, and a name `repo promote` would
+/// refuse is never hinted at all.
 fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, all: []const project_mod.Project) !void {
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
     for (all) |p| {
@@ -211,6 +212,7 @@ fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem
             if (!std.mem.startsWith(u8, url, "local:")) continue;
 
             const name = url["local:".len..];
+            if (!identity.isSafeLocalName(name)) continue;
             if (seen.contains(name)) continue;
             try seen.put(alloc, name, {});
 

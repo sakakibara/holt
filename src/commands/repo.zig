@@ -415,6 +415,14 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
         };
         marker_value = o;
     } else {
+        // With no origin the directory's own name becomes the local identity,
+        // so it is held to the same single-safe-segment rule every reader of a
+        // "local:<name>" marker value applies. Refusing here - before the
+        // move - keeps adopt from minting a value nothing can read back.
+        if (!identity.isSafeLocalName(basename)) {
+            try ctx.err.print("holt: directory name \"{s}\" is not a usable repo name; rename the directory or give it an origin\n", .{basename});
+            return 1;
+        }
         id = identity.local(basename);
         marker_value = try std.fmt.allocPrint(alloc, "local:{s}", .{basename});
     }
@@ -892,6 +900,14 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
 
     const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
+
+    // `findReferencing` matches marker values by raw string compare, so the
+    // name never passes through `repoIdentity`; check it here, before it
+    // becomes the clone path this command moves and prunes around.
+    if (!identity.isSafeLocalName(name)) {
+        try ctx.err.print("holt: \"{s}\" is not a usable local repo name\n", .{name});
+        return 1;
+    }
 
     const referencing = try findReferencing(alloc, &ws, name);
     if (referencing.len == 0) {
@@ -1700,6 +1716,43 @@ test "adopt: adopts a no-remote dir into local/<basename> with a local: marker v
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
     try testing.expectEqualStrings("local:myrepo", loaded.repos.get("myrepo").?);
+}
+
+test "adopt: a no-remote dir whose name is unusable as a local name is refused before the move" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+
+    // The basename is the whole local identity here, and every reader of a
+    // "local:<name>" marker value rejects these - so adopt must never mint one.
+    for ([_][]const u8{ ".dotfiles", "~cache" }) |bad_name| {
+        const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray", bad_name });
+        try fsutil.ensureDir(stray_path);
+        try testutil.runGit(&sb, stray_path, &.{ "init", "-b", "main" });
+
+        for ([_][]const []const u8{
+            &.{ stray_path, "-p", "proj" },
+            &.{stray_path}, // standalone, no marker involved
+        }) |argv| {
+            const got = try testutil.runCmd(arena, adopt_command.run, ws, argv);
+            try testing.expectEqual(@as(u8, 1), got.code);
+            try testing.expect(std.mem.indexOf(u8, got.err, bad_name) != null);
+
+            // Refused BEFORE the move: the clone is still where it was.
+            try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ stray_path, ".git" })));
+            try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", bad_name })));
+        }
+    }
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
 }
 
 test "adopt: a dirty out-of-place clone refuses without --force, then proceeds with --force" {
@@ -2804,6 +2857,52 @@ test "promote: no project referencing the local repo is a hard error" {
     const got = try testutil.runCmd(arena, promote_command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+}
+
+test "promote: a traversing local name is refused, leaving the outside checkout in place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // A clean, fully-pushed checkout outside code_root. `findReferencing`
+    // matches marker values verbatim, so the marker alone makes this name
+    // reachable; every later gate (remote, recover.check, destination) would
+    // pass it, so only refusing the name itself keeps the checkout put.
+    const name = "../../outside/victim";
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", try std.fmt.allocPrint(arena, "local:{s}", .{name}));
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const outside = try std.fs.path.join(arena, &.{ sb.root, "outside", "victim" });
+    try cloneWithOrigin(&sb, bare, outside, "https://holt-test.invalid/acme/victim");
+
+    // code_root/local must exist for the traversal to resolve at all.
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local" }));
+    const derived = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", name });
+    try testing.expectEqualStrings(outside, try std.fs.path.resolve(arena, &.{derived}));
+
+    for ([_][]const []const u8{
+        &.{ name, "--yes" },
+        &.{ name, "--dry-run" },
+        &.{ name, "--force" },
+    }) |argv| {
+        const got = try testutil.runCmd(arena, promote_command.run, ws, argv);
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "not a usable local repo name") != null);
+        try testing.expect(fsutil.exists(outside));
+        try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ outside, ".git" })));
+        try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ sb.root, "outside" })));
+    }
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqualStrings("local:../../outside/victim", loaded.repos.get("widget").?);
 }
 
 test "promote: no remote configured on the local clone is a hard error" {
