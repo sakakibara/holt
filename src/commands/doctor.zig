@@ -252,7 +252,7 @@ test "run: a clean workspace passes every check and exits 0" {
 
     // doctor treats an unbuilt hub as drift (correctly), so the hub has to
     // be built first for this workspace to actually be clean.
-    // No docs/assets/links content dirs: `holt new` leaves them empty and
+    // No docs/assets/links content dirs: `holt project new` leaves them empty and
     // cloud backends drop empty directories, so a healthy synced workspace
     // routinely has dangling content links. That must still pass doctor.
     const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });

@@ -303,7 +303,12 @@ pub const archive_command = app.command(ArchiveSpec, .{
     .group = .create,
     .needs_context = true,
     .details =
-    \\--prune additionally deletes clones no active project references.
+    \\With --prune, after archiving, each member clone that is clean, in sync
+    \\with its remote, and no longer used by any active project is deleted to
+    \\reclaim disk (it can be re-cloned from its remote by `holt restore`). A
+    \\clone with local changes, unpushed commits, no upstream, or a linked
+    \\worktree is kept and reported, and a clone still shared with an active
+    \\project is never touched.
     \\
     \\Example:
     \\  holt project archive acme/widget --yes

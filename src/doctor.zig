@@ -267,7 +267,7 @@ fn findOrphans(alloc: std.mem.Allocator, ws: *const Workspace) ![]Orphan {
 /// Every symlink under a project hub's `code/` subtree whose target does not
 /// exist: a clone deleted out from under a valid marker, or a `local:` member
 /// never cloned. The `docs`/`assets`/`links` CONTENT links are deliberately
-/// out of scope - `holt new` leaves those content dirs empty and cloud
+/// out of scope - `holt project new` leaves those content dirs empty and cloud
 /// backends drop empty directories, so a healthy synced workspace routinely
 /// has dangling content links that are not a fault.
 /// The marker-correct link still points where reconcile wants it, so hub

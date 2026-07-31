@@ -4,6 +4,34 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking.** The verbs that create, remove, or rename a thing are grouped
+  under the noun they act on: `holt project new|remove|rename|archive|unarchive`
+  and `holt repo new|get|adopt|remove|promote|alias`. `new`, `add`, `get`,
+  `create`, `rm`, `adopt`, `promote`, `alias`, `rename`, `archive`, and
+  `delete` are gone at the top level, with no aliases. Query, navigation, and
+  maintenance commands -- `path`, `list`, `status`, `info`, `recent`, `doctor`,
+  `sync`, `backup`, `edit`, `run`, `keep`, `worktree`, `config`, `setup`,
+  `backend`, `backends`, `version`, `upgrade`, `init` -- are unchanged.
+- **Breaking.** `holt repo get` covers what `get` and `add` both did: one verb
+  for cloning a remote repo, with `-p <project>` deciding membership. All three
+  intake verbs now take the project the same way.
+- **Breaking.** `restore` no longer unarchives. It dispatched on `--all`
+  between cloning every missing repo and moving one directory inside the synced
+  tree. Unarchiving is `holt project unarchive`; `restore` takes an optional
+  project to scope the re-clone, which was not previously possible.
+
+### Added
+
+- `holt repo remove <repo> --clone` deletes a checkout, refusing while any
+  project still references it and refusing on dirty, stashed, or unpushed state
+  unless `--force`. Nothing removed a clone before except `archive --prune`.
+- `holt project new` names the next step when it creates a project with no
+  repos, since such a project has no `code/` directory yet.
+
 ## [0.8.1] - 2026-07-31
 
 ### Changed

@@ -629,7 +629,7 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
     // the main checkout, never this.
     const worktree_count = git.worktreeCount(alloc, clone_path) catch 2;
     if (worktree_count > 1) {
-        try ctx.err.print("holt: {s} has {d} other worktree(s); remove them first (holt worktree ... --remove):\n", .{ try app.tilde(ctx, clone_path), worktree_count - 1 });
+        try ctx.err.print("holt: {s} has {d} other worktree(s); remove them first (git -C {s} worktree remove <path>):\n", .{ try app.tilde(ctx, clone_path), worktree_count - 1, try app.tilde(ctx, clone_path) });
         if (git.worktreeList(alloc, clone_path) catch null) |listing| try ctx.err.writeAll(listing);
         return 1;
     }

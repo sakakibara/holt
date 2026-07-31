@@ -111,10 +111,10 @@ user `PATH`. Pin a version or change the location by setting `$env:HOLT_VERSION`
 ## Quick start
 
 ```sh
-holt setup                                 # choose where your cloud syncs
-holt new personal/notes                    # create a project
-holt add notes github.com/you/notes.git    # attach a repo (clones it)
-holt status notes                          # see its git state
+holt setup                                       # choose where your cloud syncs
+holt project new personal/notes                  # create a project
+holt repo get github.com/you/notes.git -p notes  # attach a repo (clones it)
+holt status notes                                # see its git state
 ```
 
 Add the [shell integration](#shell-integration) for `h`/`hi` navigation and tab
@@ -215,11 +215,11 @@ Matching is smartcase (case-insensitive unless the selector has an uppercase
 letter). An ambiguous selector resolves to nothing and prints the candidates so
 you can pick one. Two exceptions:
 
-- `new` and `rename` need the full `<org>/<name>` - they create a project, so
-  there is nothing to abbreviate yet.
-- A `<repo>` argument (in `rm`, `alias`, `run --repo`, and `<project>/<repo>`
-  paths) is a member-repo short name within the resolved project, not a project
-  selector.
+- `project new` and `project rename` need the full `<org>/<name>` - they
+  create a project, so there is nothing to abbreviate yet.
+- A `<repo>` argument (in `repo remove`, `repo alias`, `run --repo`, and
+  `<project>/<repo>` paths) is a member-repo short name within the resolved
+  project, not a project selector.
 
 ## Commands
 
@@ -242,12 +242,13 @@ list, or `holt <command> --help` for one command's usage.
 
 | Command | Description |
 | --- | --- |
-| `holt new <org>/<name> [url]` | Create a project, optionally cloning its first repo (`url` accepts `owner/repo` shorthand) |
-| `holt rename <old> <new-org>/<new-name>` | Rename a project, moving its content and rebuilding its hub |
+| `holt project new <org>/<name>` | Create a project (it has no repos yet; attach one with `holt repo get`) |
+| `holt project rename <old> <new-org>/<new-name>` | Rename a project, moving its content and rebuilding its hub |
 | `holt org rename <old-org> <new-org> [--yes]` | Rename an org, moving every project in it |
-| `holt archive <project> [--prune] [--yes]` | Move a project's content to `archive/` and drop its hub; `--prune` also reclaims member clones that are clean, synced, and unused by any active project |
-| `holt restore --all [-j N] \| <project>` | Clone every missing repo (in parallel, deduped by clone) and rebuild all hubs, or unarchive one project |
-| `holt delete <project> [--yes]` | Delete a project's content and hub (clones kept); type `org/name` to confirm unless `--yes` |
+| `holt project archive <project> [--prune] [--yes]` | Move a project's content to `archive/` and drop its hub; `--prune` also reclaims member clones that are clean, synced, and unused by any active project |
+| `holt project unarchive <project>` | Move an archived project back into `projects/` and rebuild its hub |
+| `holt restore [<project>] [-j N]` | Clone every missing repo (in parallel, deduped by clone) and rebuild hubs, for one project or the whole workspace |
+| `holt project remove <project> [--yes]` | Remove a project's content and hub (clones kept); type `org/name` to confirm unless `--yes` |
 | `holt backup <project>` | Tar a project's content dir into synced `backups/` |
 | `holt info <project> [--json]` | Show a project's paths and member repos |
 
@@ -255,11 +256,12 @@ list, or `holt <command> --help` for one command's usage.
 
 | Command | Description |
 | --- | --- |
-| `holt add <project> <url>` | Add a repo to a project, cloning it if absent (`url` accepts `owner/repo` or `host/owner/repo` shorthand) |
-| `holt get <url> [--update]` | Clone a repo standalone into the code tree (no project attached; accepts shorthand) |
-| `holt rm <project> <repo>` | Remove a repo from a project (the shared clone stays on disk) |
-| `holt adopt [<project>] <path> [--force]` | Register an existing clone, moving it to its identity path - into a project, or standalone with no project when no `<project>` is given |
-| `holt promote <repo> [--dry-run] [--yes] [--force]` | Move a local repo to its real remote identity once it has an origin (previews and confirms unless `--yes`/`--force`) |
+| `holt repo new <spec> [-p <project>]` | Create a git repo from scratch, standalone or as a project member |
+| `holt repo get <url> [-p <project>] [--update]` | Clone a repo into the code tree, standalone or as a project member (`url` accepts `owner/repo` or `host/owner/repo` shorthand) |
+| `holt repo adopt <path> [-p <project>] [--force]` | Register an existing clone, moving it to its identity path, standalone or as a project member |
+| `holt repo remove <repo> [-p <project>] [--clone] [--force]` | Unlink a repo from a project, or delete its checkout with `--clone` (refuses while another project still references it or a worktree exists; `--force` only overrides dirty, stashed, or unpushed state) |
+| `holt repo promote <repo> [--dry-run] [--yes] [--force]` | Move a local repo to its real remote identity once it has an origin (previews and confirms unless `--yes`/`--force`) |
+| `holt repo alias <repo> [<name>] -p <project>` | Name the hub link a repo browses under |
 
 **Navigate & inspect**
 

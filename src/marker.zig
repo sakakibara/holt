@@ -38,7 +38,7 @@ pub const Marker = struct {
     name: []const u8,
     repos: std.StringArrayHashMapUnmanaged([]const u8),
     /// Optional per-repo hub link name override, keyed by repo short name.
-    /// Absent from the on-disk marker until a user runs `holt alias`.
+    /// Absent from the on-disk marker until a user runs `holt repo alias`.
     aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 };
 
