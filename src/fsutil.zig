@@ -481,10 +481,18 @@ test "tempDir honors the platform temp env var" {
     try testing.expectEqualStrings("/some/tmp/dir", try tempDir(arena, env));
 }
 
+/// A home that is absolute on the HOST. A POSIX-form path names no drive on
+/// Windows, so it is no usable home there -- env-zig rejects it in favour of
+/// `USERPROFILE`, and since `testEnv` copies the real environment, a fixture
+/// spelled `/home/me` would silently be measured against the runner's own
+/// home rather than the one it declares.
+const test_home = if (builtin.os.tag == .windows) "C:\\home\\me" else "/home/me";
+const sep = std.fs.path.sep_str;
+
 test "expandTilde: ~ and ~/x expand via $HOME, other paths pass through" {
     var arena_home = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_home.deinit();
-    const env = try testEnv(arena_home.allocator(), &.{.{ "HOME", "/home/me" }});
+    const env = try testEnv(arena_home.allocator(), &.{.{ "HOME", test_home }});
     const home = try env_zig.dirs.home(testing.allocator, env);
     defer testing.allocator.free(home);
 
@@ -519,15 +527,16 @@ test "contractTilde: $HOME prefix becomes ~, boundary and outside paths are unto
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const env = try testEnv(arena, &.{.{ "HOME", "/home/me" }});
+    const env = try testEnv(arena, &.{.{ "HOME", test_home }});
 
+    const outside = if (builtin.os.tag == .windows) "C:\\etc\\passwd" else "/etc/passwd";
     const cases = [_]struct { in: []const u8, want: []const u8 }{
-        .{ .in = "/home/me", .want = "~" },
-        .{ .in = "/home/me/Code/x", .want = "~/Code/x" },
+        .{ .in = test_home, .want = "~" },
+        .{ .in = test_home ++ sep ++ "Code" ++ sep ++ "x", .want = "~" ++ sep ++ "Code" ++ sep ++ "x" },
         // Boundary: a sibling that merely shares the prefix is not under $HOME.
-        .{ .in = "/home/mext/x", .want = "/home/mext/x" },
+        .{ .in = test_home ++ "xt" ++ sep ++ "x", .want = test_home ++ "xt" ++ sep ++ "x" },
         // Outside $HOME entirely.
-        .{ .in = "/etc/passwd", .want = "/etc/passwd" },
+        .{ .in = outside, .want = outside },
     };
     for (cases) |c| {
         try testing.expectEqualStrings(c.want, try contractTilde(arena, env, c.in));
@@ -539,9 +548,12 @@ test "contractTilde: a trailing separator on $HOME does not defeat the match" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const env = try testEnv(arena, &.{.{ "HOME", "/home/me/" }});
+    const env = try testEnv(arena, &.{.{ "HOME", test_home ++ sep }});
 
-    try testing.expectEqualStrings("~/Code", try contractTilde(arena, env, "/home/me/Code"));
+    try testing.expectEqualStrings(
+        "~" ++ sep ++ "Code",
+        try contractTilde(arena, env, test_home ++ sep ++ "Code"),
+    );
 }
 
 test "toAbsolute: absolute input passes through, relative input joins the cwd" {
