@@ -532,6 +532,97 @@ test "new: a url argument is rejected - populating a project is repo get's job" 
     try testing.expectEqual(@as(u8, 2), got.code);
 }
 
+test "new: an already-existing project is a hard error, not overwritten" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const first = try testutil.runCmd(arena, new_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 0), first.code);
+
+    const second = try testutil.runCmd(arena, new_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 1), second.code);
+    try testing.expect(std.mem.indexOf(u8, second.err, "already exists") != null);
+}
+
+test "new: a project already in the archive is refused and nothing is created" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"acme/widget"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "already exists in archive") != null);
+    // The one verb that brings it back, named in the refusal.
+    try testing.expect(std.mem.indexOf(u8, got.err, "holt project unarchive acme/widget") != null);
+
+    const marker_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", marker.marker_basename });
+    try testing.expect(!fsutil.exists(marker_path));
+}
+
+test "new: a malformed spec (no slash) is a usage error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const got = try testutil.runCmd(arena, new_command.run, null, &.{"widget"});
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "widget") != null);
+}
+
+test "new: an org that traverses out of the roots is rejected and nothing is written outside them" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"../escape"});
+    try testing.expectEqual(@as(u8, 2), got.code);
+
+    const projects_root = try ws.projectsRoot(arena);
+    const content_escape = try std.fs.path.join(arena, &.{ projects_root, "..", "escape" });
+    try testing.expect(!fsutil.exists(content_escape));
+    const hub_escape = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "..", "escape" });
+    try testing.expect(!fsutil.exists(hub_escape));
+}
+
+test "new: a control-char name is rejected before anything is created" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"acme/wi\x01dget"});
+    try testing.expectEqual(@as(u8, 2), got.code);
+
+    const org_dir = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    try testing.expect(!fsutil.exists(org_dir));
+}
+
 // This test always passes --yes: ui.confirm blocks on real stdin, and a test
 // run has no interactive stdin to feed it.
 test "remove: deletes content and hub, keeps the clone, and reports it unreferenced" {
