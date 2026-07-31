@@ -5,16 +5,16 @@
     .fingerprint = 0x27d1d63bb90f450,
     .dependencies = .{
         .json = .{
-            .url = "https://github.com/sakakibara/json-zig/archive/refs/tags/v0.2.0.tar.gz",
-            .hash = "json-0.2.0-YtF7Jd3FBgB8HsKlP1vHrSaBwxAV5ExU0Rzl59iC3-Vy",
+            .url = "https://github.com/sakakibara/json-zig/archive/refs/tags/v0.3.0.tar.gz",
+            .hash = "json-0.3.0-YtF7JetzBwAFwsuTXCOdDJweONb0496nU39LEU8EC1rk",
         },
         .toml = .{
-            .url = "https://github.com/sakakibara/toml-zig/archive/refs/tags/v0.4.0.tar.gz",
-            .hash = "toml-0.4.0-L7MJe5qrCgCF-2BmK9hpRu9Kb1qPPHllZo7xY67iJVQg",
+            .url = "https://github.com/sakakibara/toml-zig/archive/refs/tags/v0.6.0.tar.gz",
+            .hash = "toml-0.6.0-L7MJe3OzCwA3XOqr_osjlm3RKU-wMgeeap3oKpgdfuYw",
         },
         .env = .{
-            .url = "https://github.com/sakakibara/env-zig/archive/refs/tags/v0.1.1.tar.gz",
-            .hash = "env-0.1.1-sTEXsnNyAADkVRj6KAJjvfbgZQZVq56Rg2I4CoTy63sG",
+            .url = "https://github.com/sakakibara/env-zig/archive/refs/tags/v0.2.1.tar.gz",
+            .hash = "env-0.2.1-sTEXssiOAACFP4MSdU4PdaA1p4FT7zdliMFEMZEJVG2x",
         },
         .cli = .{
             .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.3.0.tar.gz",
