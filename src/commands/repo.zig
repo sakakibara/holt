@@ -47,7 +47,7 @@ pub const new_command = app.command(NewSpec, .{
 
 pub const command: app.Command = .{
     .name = "repo",
-    .summary = "Create a git repo from scratch",
+    .summary = "Create, fetch, and manage repo clones",
     .usage = "holt repo <new> ...",
     .group = .create,
     .subcommands = &.{new_command},
