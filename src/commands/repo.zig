@@ -22,11 +22,13 @@
 //! `remove <repo> [-p <project>] [--clone] [--force]` unlinks a repo from a
 //! project's marker (-p) and, only when asked, deletes its checkout under
 //! code_root (--clone). At least one of -p and --clone is required. --clone
-//! refuses while any project still references the repo, naming them, and
-//! refuses on dirty, stashed, or unpushed local state unless --force - the
-//! same `recover.check` gate `adopt` and `promote` apply. Without -p, <repo>
-//! is a code-tree key (as `holt list --repos` prints it); with -p it is the
-//! member's short name in that project's marker.
+//! refuses while any active project still references the repo, naming them;
+//! refuses while a linked worktree exists (its objects live in the clone's
+//! .git, so --force does not override this); and refuses on dirty, stashed,
+//! or unpushed local state unless --force - the same `recover.check` gate
+//! `adopt` and `promote` apply. Without -p, <repo> is a code-tree key (as
+//! `holt list --repos` prints it); with -p it is the member's short name in
+//! that project's marker.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -494,9 +496,10 @@ pub const remove_command = app.command(RemoveSpec, .{
     .needs_context = true,
     .details =
     \\-p unlinks the repo from that project; the shared checkout stays. --clone
-    \\additionally deletes the checkout, refusing while any project still
-    \\references it and refusing on dirty, stashed, or unpushed state unless
-    \\--force. At least one of -p and --clone is required.
+    \\additionally deletes the checkout, refusing while any active project
+    \\still references it, while a linked worktree exists (--force does not
+    \\override this), or on dirty, stashed, or unpushed state unless --force.
+    \\At least one of -p and --clone is required.
     \\
     \\Example:
     \\  holt repo remove widget -p acme/proj
@@ -533,7 +536,18 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
             try ctx.err.print("holt: \"{s}\" is not a member of {s}/{s}\n", .{ a.repo, p.org, p.name });
             return 1;
         }
-        id = p.repoIdentity(alloc, a.repo) catch null;
+
+        // Resolved before any mutation, and never swallowed into a fallback:
+        // an unparseable marker value must not silently reinterpret <repo>
+        // (a short member name) as a code-tree key further down - that would
+        // resolve to, and delete, an unrelated clone.
+        id = p.repoIdentity(alloc, a.repo) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                try ctx.err.print("holt: {s}/{s}'s marker entry for \"{s}\" is not a valid url: {s}\n", .{ p.org, p.name, a.repo, @errorName(err) });
+                return 1;
+            },
+        };
 
         _ = p.marker.repos.orderedRemove(a.repo);
         _ = p.marker.aliases.orderedRemove(a.repo);
@@ -558,7 +572,9 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
     }
 
     // --clone: only reached when a.clone is true (the usage check above
-    // rejects neither -p nor --clone being given).
+    // rejects neither -p nor --clone being given). `id` is set whenever -p
+    // was given (a resolution failure above already returned), so this only
+    // falls back to reading a.repo as a code-tree key for a bare --clone.
     const target = id orelse (identityFromKey(alloc, a.repo) catch |err| switch (err) {
         error.UnrecognizedUrl => {
             try ctx.err.print("holt: \"{s}\" is not a known repo or code-tree key\n", .{a.repo});
@@ -577,7 +593,7 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
 
     const users = try ws.projectsUsing(alloc, target);
     if (users.len > 0) {
-        try ctx.err.print("holt: clone is still referenced by:", .{});
+        try ctx.err.print("holt: clone is still referenced by active project(s):", .{});
         for (users) |u| try ctx.err.print(" {s}", .{try u.qualified(alloc)});
         try ctx.err.writeAll("\n");
         return 1;
@@ -585,6 +601,20 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
 
     if (!fsutil.exists(clone_path)) {
         try ctx.err.print("holt: no clone at {s}\n", .{try app.tilde(ctx, clone_path)});
+        return 1;
+    }
+
+    // A worktree's objects and any unpushed commits live in the main clone's
+    // .git - recover.check below only inspects the main checkout and cannot
+    // see into a linked worktree, so deleting the clone out from under one
+    // destroys whatever it holds. Fails closed on an unreadable repo (counts
+    // as "has worktrees"). Matches pruneClones' refusal (project.zig), which
+    // also accepts no override: --force bypasses recover.check's verdict on
+    // the main checkout, never this.
+    const worktree_count = git.worktreeCount(alloc, clone_path) catch 2;
+    if (worktree_count > 1) {
+        try ctx.err.print("holt: {s} has {d} other worktree(s); remove them first (holt worktree ... --remove):\n", .{ try app.tilde(ctx, clone_path), worktree_count - 1 });
+        if (git.worktreeList(alloc, clone_path) catch null) |listing| try ctx.err.writeAll(listing);
         return 1;
     }
 
@@ -1684,6 +1714,70 @@ test "remove: --clone deletes an unreferenced checkout" {
     try testing.expect(!fsutil.exists(clone_path));
 }
 
+test "remove: --clone refuses to delete a clone that has a linked worktree, even with --force" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+
+    // A linked worktree's objects and any unpushed commits live in the main
+    // clone's .git; recover.check only inspects the main checkout, so this
+    // must block regardless of the recoverability verdict there.
+    const wt = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature-x" });
+    try fsutil.ensureDir(std.fs.path.dirname(wt).?);
+    try testutil.runGit(&sb, clone_path, &.{ "branch", "feature-x" });
+    try testutil.runGit(&sb, clone_path, &.{ "worktree", "add", wt, "feature-x" });
+
+    const refused = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone" });
+    try testing.expectEqual(@as(u8, 1), refused.code);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "worktree") != null);
+    try testing.expect(fsutil.exists(clone_path));
+
+    // --force overrides recover.check's verdict, never the worktree guard.
+    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force" });
+    try testing.expectEqual(@as(u8, 1), forced.code);
+    try testing.expect(std.mem.indexOf(u8, forced.err, "worktree") != null);
+    try testing.expect(fsutil.exists(clone_path));
+}
+
+test "remove: --clone refuses a dirty clone without --force, then proceeds with --force" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+
+    {
+        var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), clone_path, .{});
+        defer dir.close(fsutil.io());
+        try dir.writeFile(fsutil.io(), .{ .sub_path = "untracked.txt", .data = "hi\n" });
+    }
+
+    const refused = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone" });
+    try testing.expectEqual(@as(u8, 1), refused.code);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "unrecoverable local state") != null);
+    try testing.expect(fsutil.exists(clone_path));
+
+    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force" });
+    try testing.expectEqual(@as(u8, 0), forced.code);
+    try testing.expect(!fsutil.exists(clone_path));
+}
+
 test "remove: --clone refuses while a project still references the repo, naming it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1845,4 +1939,94 @@ test "remove: -p to no matching project exits 1 and reports on stderr" {
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "nope" });
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+}
+
+test "remove: -p and --clone together unlink and delete when nothing else references the repo" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", .{ .version = 1, .org = "acme", .name = "only", .repos = repos });
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(!fsutil.exists(clone_path));
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "only", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+}
+
+test "remove: -p and --clone together unlink but keep the clone when a second project still references it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos });
+
+    var repos2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos2.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos2 });
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "first", "--clone" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "acme/second") != null);
+    try testing.expect(fsutil.exists(clone_path));
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "first", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+}
+
+test "remove: -p with an unparseable marker url refuses without falling back to a code-tree key" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // The member's short name ("acme/widget") happens to also look like a
+    // valid owner/repo shorthand - if repoIdentity's failure silently fell
+    // back to identityFromKey, this would resolve to and threaten to delete
+    // github.com/acme/widget, an entirely unrelated clone.
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "acme/widget", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const decoy_clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "widget" });
+    try fsutil.ensureDir(decoy_clone);
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/widget", "-p", "proj", "--clone" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "acme/widget") != null);
+    try testing.expect(fsutil.exists(decoy_clone));
+
+    // Refused before mutating the marker: the bad entry is still there to fix.
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqual(@as(usize, 1), loaded.repos.count());
 }
