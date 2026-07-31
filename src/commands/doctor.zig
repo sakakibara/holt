@@ -118,7 +118,7 @@ fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
     }
 
     try passFail(w, color_enabled, "no archive/active shadow", report.shadows.len == 0);
-    for (report.shadows) |s| try w.print("  {s}/{s} (hint: delete or restore one)\n", .{ s.org, s.name });
+    for (report.shadows) |s| try w.print("  {s}/{s} (hint: holt project remove {s}/{s} for the active one, or delete its archive dir)\n", .{ s.org, s.name, s.org, s.name });
 
     try passFail(w, color_enabled, "no orphaned content", report.orphaned_content.len == 0);
     for (report.orphaned_content) |o| try w.print("  {s} (hint: leftover content with no marker; remove it manually or restore its marker)\n", .{try app.tilde(ctx, o.path)});
@@ -394,7 +394,7 @@ test "run: an org/name present in both projects and archive is a shadow" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "no archive/active shadow: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/dup (hint: delete or restore one)") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "acme/dup (hint: holt project remove acme/dup for the active one, or delete its archive dir)") != null);
 }
 
 test "run: a marker-less dir under an org is orphaned content" {

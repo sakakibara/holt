@@ -63,7 +63,7 @@ fn expectSymlink(arena: std.mem.Allocator, path: []const u8) !void {
     }
 }
 
-test "integration: project new -> add -> repo remove -> project archive -> project unarchive -> project remove through the real command table and dispatch" {
+test "integration: project new -> repo get -> repo remove -> project archive -> project unarchive -> project remove through the real command table and dispatch" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

@@ -7,9 +7,10 @@
 //! project's content dir to a new org/name, rewrites its marker, and rebuilds
 //! its hub at the new location; the clone under Code/ never moves. `archive
 //! <project>` moves a project's content dir out of projects/ into archive/
-//! and drops its hub, leaving its clones untouched. `unarchive <project>`
-//! reverses that: moves the content dir back into projects/ and rebuilds the
-//! hub.
+//! and drops its hub; its clones stay unless --prune, which additionally
+//! deletes each member clone that is safe to re-fetch. `unarchive <project>`
+//! reverses the move: the content dir goes back into projects/ and the hub is
+//! rebuilt (a pruned clone comes back with `holt restore`).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -83,7 +84,7 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const archive_root = try ws.archiveRoot(alloc);
     const archive_marker = try std.fs.path.join(alloc, &.{ archive_root, on.org, on.name, marker.marker_basename });
     if (fsutil.exists(archive_marker)) {
-        try ctx.err.print("holt: {s}/{s} already exists in archive (restore or delete it first)\n", .{ on.org, on.name });
+        try ctx.err.print("holt: {s}/{s} already exists in archive (bring it back with `holt project unarchive {s}/{s}`)\n", .{ on.org, on.name, on.org, on.name });
         return 1;
     }
 
@@ -311,7 +312,7 @@ pub const archive_command = app.command(ArchiveSpec, .{
     \\project is never touched.
     \\
     \\Example:
-    \\  holt project archive acme/widget --yes
+    \\  holt project archive acme/widget --prune --yes
     ,
 }, runArchive);
 
@@ -485,7 +486,7 @@ fn runUnarchive(ctx: *app.Ctx, a: cli.Args(UnarchiveSpec)) anyerror!u8 {
 
     if (std.fs.path.dirname(archive_path)) |old_archive_org_dir| fsutil.rmdirIfEmpty(old_archive_org_dir);
 
-    try ctx.out.print("restored {s}/{s}\n", .{ on.org, on.name });
+    try ctx.out.print("unarchived {s}/{s}\n", .{ on.org, on.name });
     return 0;
 }
 
@@ -1241,7 +1242,7 @@ test "unarchive: moves an archived project back into projects/ and rebuilds its 
 
     const got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "restored acme/widget") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "unarchived acme/widget") != null);
 
     const archive_dir = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget" });
     try testing.expect(!fsutil.exists(archive_dir));
