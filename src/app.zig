@@ -253,8 +253,6 @@ const setup_cmd = @import("commands/setup.zig");
 const path_cmd = @import("commands/path.zig");
 const list_cmd = @import("commands/list.zig");
 const project_cmd = @import("commands/project.zig");
-const add_cmd = @import("commands/add.zig");
-const get_cmd = @import("commands/get.zig");
 const repo_cmd = @import("commands/repo.zig");
 const rm_cmd = @import("commands/rm.zig");
 const alias_cmd = @import("commands/alias.zig");
@@ -284,8 +282,6 @@ pub const command_table = [_]Command{
     init_cmd.command,
     setup_cmd.command,
     project_cmd.command,
-    add_cmd.command,
-    get_cmd.command,
     repo_cmd.command,
     rm_cmd.command,
     alias_cmd.command,

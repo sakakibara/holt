@@ -110,9 +110,9 @@ test "integration: project new -> add -> rm -> project archive -> project unarch
         try testing.expectEqual(@as(u8, 0), got.code);
     }
 
-    // add acme/proj <urlA>: first repo, clones alpha, hub link.
+    // repo get <urlA> -p acme/proj: first repo, clones alpha, hub link.
     {
-        const got = try dispatch(arena, &.{ "add", "acme/proj", url_a });
+        const got = try dispatch(arena, &.{ "repo", "get", url_a, "-p", "acme/proj" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     {
@@ -127,9 +127,9 @@ test "integration: project new -> add -> rm -> project archive -> project unarch
         else => return error.TestUnexpectedResult,
     }
 
-    // add acme/proj <urlB>: second repo, second clone + hub link.
+    // repo get <urlB> -p acme/proj: second repo, second clone + hub link.
     {
-        const got = try dispatch(arena, &.{ "add", "acme/proj", url_b });
+        const got = try dispatch(arena, &.{ "repo", "get", url_b, "-p", "acme/proj" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     {
@@ -145,12 +145,12 @@ test "integration: project new -> add -> rm -> project archive -> project unarch
         try testing.expectEqual(@as(u8, 0), got.code);
     }
 
-    // add acme/other <urlA>: shares proj's existing clone, no re-clone.
+    // repo get <urlA> -p acme/other: shares proj's existing clone, no re-clone.
     const stat_before = try std.Io.Dir.cwd().statFile(fsutil.io(), clone_alpha, .{});
     {
-        const got = try dispatch(arena, &.{ "add", "acme/other", url_a });
+        const got = try dispatch(arena, &.{ "repo", "get", url_a, "-p", "acme/other" });
         try testing.expectEqual(@as(u8, 0), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.out, "using existing clone") != null);
+        try testing.expect(std.mem.indexOf(u8, got.err, "already present") != null);
     }
     const stat_after = try std.Io.Dir.cwd().statFile(fsutil.io(), clone_alpha, .{});
     try testing.expectEqual(stat_before.inode, stat_after.inode);
