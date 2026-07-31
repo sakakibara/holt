@@ -614,15 +614,23 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
     // A worktree's objects and any unpushed commits live in the main clone's
     // .git - recover.check below only inspects the main checkout and cannot
     // see into a linked worktree, so deleting the clone out from under one
-    // destroys whatever it holds. Fails closed on an unreadable repo (counts
-    // as "has worktrees"). Matches pruneClones' refusal (project.zig), which
-    // also accepts no override: --force bypasses recover.check's verdict on
-    // the main checkout, never this.
-    const worktree_count = git.worktreeCount(alloc, clone_path) catch 2;
-    if (worktree_count > 1) {
-        try ctx.err.print("holt: {s} has {d} other worktree(s); remove them first (git -C {s} worktree remove <path>):\n", .{ try app.tilde(ctx, clone_path), worktree_count - 1, try app.tilde(ctx, clone_path) });
-        if (git.worktreeList(alloc, clone_path) catch null) |listing| try ctx.err.writeAll(listing);
-        return 1;
+    // destroys whatever it holds. Matches pruneClones' refusal (project.zig),
+    // which also accepts no override: --force bypasses recover.check's verdict
+    // on the main checkout, never this.
+    //
+    // Only a repo git can read is asked. A directory with no usable .git fails
+    // the listing for want of a repository, not for a worktree, and reporting
+    // that as a worktree would both misname the state and put it behind the
+    // one gate --force cannot lift; it is recover.check's `.unreadable`
+    // blocker, which --force does override. A readable repo whose listing
+    // still fails is unexplained, so that case keeps failing closed.
+    if (try git.inspectable(alloc, clone_path)) {
+        const worktree_count = git.worktreeCount(alloc, clone_path) catch 2;
+        if (worktree_count > 1) {
+            try ctx.err.print("holt: {s} has {d} other worktree(s); remove them first (git -C {s} worktree remove <path>):\n", .{ try app.tilde(ctx, clone_path), worktree_count - 1, try app.tilde(ctx, clone_path) });
+            if (git.worktreeList(alloc, clone_path) catch null) |listing| try ctx.err.writeAll(listing);
+            return 1;
+        }
     }
 
     if (!a.force) {
@@ -2162,6 +2170,31 @@ test "remove: --clone refuses to delete a clone that has a linked worktree, even
     try testing.expectEqual(@as(u8, 1), forced.code);
     try testing.expect(std.mem.indexOf(u8, forced.err, "worktree") != null);
     try testing.expect(fsutil.exists(clone_path));
+}
+
+test "remove: --clone reports an unreadable directory as unreadable, and --force clears it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    // A directory at an identity path that git cannot read as a repository:
+    // `git worktree list` fails here for want of a repo, not for a worktree.
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try fsutil.ensureDir(clone_path);
+
+    const refused = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone" });
+    try testing.expectEqual(@as(u8, 1), refused.code);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "repository is unreadable") != null);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "other worktree(s)") == null);
+    try testing.expect(fsutil.exists(clone_path));
+
+    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force" });
+    try testing.expectEqual(@as(u8, 0), forced.code);
+    try testing.expect(!fsutil.exists(clone_path));
 }
 
 test "remove: --clone refuses a dirty clone without --force, then proceeds with --force" {
