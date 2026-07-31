@@ -78,7 +78,6 @@ test {
     _ = @import("commands/list.zig");
     _ = @import("commands/project.zig");
     _ = @import("commands/repo.zig");
-    _ = @import("commands/rm.zig");
     _ = @import("commands/alias.zig");
     _ = @import("commands/sync.zig");
     _ = @import("commands/restore.zig");
@@ -267,9 +266,9 @@ test "integration: project/repo/backend_seed categories carry real descriptions"
     try app.HoltCli.completionReply(arena, &app.command_table, &.{ "info", "wid" }, app.HoltCli.completion_resolve, &ctx, &out.writer);
     try testing.expect(std.mem.indexOf(u8, out.written(), "widget\tacme") != null);
 
-    // `rm`'s second positional (repo) resolves off the first (project) and
+    // `alias`'s second positional (repo) resolves off the first (project) and
     // carries each repo's clone-state description - no git involved.
-    const repo_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "rm", "acme/proj", "" }, app.HoltCli.completion_resolve, &ctx);
+    const repo_got = try app.HoltCli.completionCompute(arena, &app.command_table, &.{ "alias", "acme/proj", "" }, app.HoltCli.completion_resolve, &ctx);
     const backend_cand = findCandidate(repo_got.candidates, "backend") orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("missing", backend_cand.description.?);
     const tool_cand = findCandidate(repo_got.candidates, "tool") orelse return error.TestUnexpectedResult;

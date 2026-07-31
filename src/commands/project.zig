@@ -180,7 +180,12 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
         const others = try ws.projectsUsing(alloc, id);
         if (others.len == 0) {
             const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-            try ctx.out.print("clone at {s} is now unreferenced; remove it with `holt repo remove {s} --clone`\n", .{ try app.tilde(ctx, clone_path), repo_name });
+            // The project (and its -p handle on this member) is already gone,
+            // so the hint must name the clone by its code-tree key, not the
+            // member's short name, for `holt repo remove <key> --clone` to
+            // resolve it.
+            const key = try id.relPath(alloc);
+            try ctx.out.print("clone at {s} is now unreferenced; remove it with `holt repo remove {s} --clone`\n", .{ try app.tilde(ctx, clone_path), key });
         }
     }
 

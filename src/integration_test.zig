@@ -63,7 +63,7 @@ fn expectSymlink(arena: std.mem.Allocator, path: []const u8) !void {
     }
 }
 
-test "integration: project new -> add -> rm -> project archive -> project unarchive -> project remove through the real command table and dispatch" {
+test "integration: project new -> add -> repo remove -> project archive -> project unarchive -> project remove through the real command table and dispatch" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -177,9 +177,9 @@ test "integration: project new -> add -> rm -> project archive -> project unarch
         try testing.expect(std.mem.indexOf(u8, got.out, "beta:") != null);
     }
 
-    // rm acme/proj beta: back to 1 repo, hub link swept, clone kept on disk.
+    // repo remove beta -p acme/proj: back to 1 repo, hub link swept, clone kept on disk.
     {
-        const got = try dispatch(arena, &.{ "rm", "acme/proj", "beta" });
+        const got = try dispatch(arena, &.{ "repo", "remove", "beta", "-p", "acme/proj" });
         try testing.expectEqual(@as(u8, 0), got.code);
     }
     {
