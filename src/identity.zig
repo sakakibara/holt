@@ -65,6 +65,16 @@ pub fn isSafeLocalName(name: []const u8) bool {
     return true;
 }
 
+/// A remote url reaches `git` as a positional argument, where a leading `-`
+/// is read as an option instead (`--upload-pack=<cmd>` names a command git
+/// runs). No accepted form - scheme, scp-like, or shorthand - begins with
+/// one: a DNS label and a shorthand's first segment both start alphanumeric.
+/// Both entry points below refuse it, so a marker's synced url is stopped
+/// where it becomes an identity as well as where it reaches an argv.
+fn optionShaped(url: []const u8) bool {
+    return url.len > 0 and url[0] == '-';
+}
+
 const Parsed = struct {
     host: []const u8,
     path: []const u8,
@@ -132,11 +142,12 @@ fn stripDotGit(s: []const u8) []const u8 {
 }
 
 /// Normalizes a git remote URL (scp-like, ssh://, https://, http://, git://)
-/// into an Identity. Rejects fewer than two path segments, empty segments,
-/// a `.`/`..`/backslash in the host or any path segment, and a host of
-/// "local" (reserved for `local()`). `host`, `owner`, and `repo` on the
-/// result are each allocator-owned; free them individually.
+/// into an Identity. Rejects a leading `-`, fewer than two path segments,
+/// empty segments, a `.`/`..`/backslash in the host or any path segment, and
+/// a host of "local" (reserved for `local()`). `host`, `owner`, and `repo` on
+/// the result are each allocator-owned; free them individually.
 pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl, OutOfMemory }!Identity {
+    if (optionShaped(url)) return error.UnrecognizedUrl;
     const parsed = try parseUrl(url);
 
     const host = try alloc.alloc(u8, parsed.host.len);
@@ -176,8 +187,10 @@ pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl
 /// scp-like) is returned unchanged, while a "owner/repo" or "host/owner/repo"
 /// shorthand becomes a canonical "https://host/owner/repo" so a plain
 /// `git clone` of it - and re-clone from the stored marker later - works.
-/// Errors `UnrecognizedUrl` on input that is neither a URL nor a shorthand.
+/// Errors `UnrecognizedUrl` on a leading `-` and on input that is neither a
+/// URL nor a shorthand.
 pub fn expand(alloc: std.mem.Allocator, input: []const u8) error{ UnrecognizedUrl, OutOfMemory }![]u8 {
+    if (optionShaped(input)) return error.UnrecognizedUrl;
     if (stripScheme(input) != null) return alloc.dupe(u8, input);
     const colon = std.mem.indexOfScalar(u8, input, ':');
     const slash = std.mem.indexOfScalar(u8, input, '/');
@@ -303,6 +316,22 @@ test "fromUrl: rejects traversal and backslash segments, accepts dotted names" {
     // dotted names and subgroups are fine (whole-segment check, not substring).
     _ = try fromUrl(a, "https://github.com/acme/my.repo");
     _ = try fromUrl(a, "https://gitlab.com/group/subgroup/repo");
+}
+
+test "fromUrl and expand: a url beginning with `-` is refused, whatever else it looks like" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    for ([_][]const u8{
+        "--upload-pack=touch /tmp/pwned",
+        "-dashy://github.com/acme/widget",
+        "-u:acme/widget",
+        "-acme/widget",
+        "-",
+    }) |bad| {
+        try testing.expectError(error.UnrecognizedUrl, fromUrl(a, bad));
+        try testing.expectError(error.UnrecognizedUrl, expand(a, bad));
+    }
 }
 
 test "fromUrl: different accepted forms of the same repo compare eql" {

@@ -406,6 +406,38 @@ test "run: with no project argument, reports a repo whose marker url cannot reso
     try testing.expect(std.mem.indexOf(u8, got.err, "malformed marker url") != null);
 }
 
+test "run: a marker url that git would read as an option is refused, and nothing is spawned or created for it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    // `--upload-pack=<cmd>` names a command git runs. The marker is synced
+    // data, so the value must not reach git's option parser at all.
+    const artifact = try std.fs.path.join(arena, &.{ root, "pwned" });
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", try std.fmt.allocPrint(arena, "--upload-pack=touch {s}", .{artifact}));
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/proj"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "malformed marker url") != null);
+    try testing.expect(!fsutil.exists(artifact));
+
+    // The value never became a clone path either, so code_root stays untouched.
+    if (fsutil.exists(ws.cfg.code_root)) {
+        var code_dir = try std.Io.Dir.cwd().openDir(fsutil.io(), ws.cfg.code_root, .{ .iterate = true });
+        defer code_dir.close(fsutil.io());
+        var it = code_dir.iterate();
+        try testing.expect((try it.next(fsutil.io())) == null);
+    }
+}
+
 test "run: a project argument matching no project exits 1 and reports on stderr" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

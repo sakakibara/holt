@@ -105,6 +105,27 @@ test "repoIdentity: a local: value that escapes the local bucket is refused" {
     try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "dotdot"));
 }
 
+test "repoIdentity: a url that git would read as an option is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "--upload-pack=touch /tmp/pwned");
+    try repos.put(arena, "gadget", "-dashy://github.com/acme/gadget");
+
+    const p: Project = .{
+        .org = "acme",
+        .name = "proj",
+        .content_path = try arena.dupe(u8, "/synced/projects/acme/proj"),
+        .hub_path = try arena.dupe(u8, "/hub/acme/proj"),
+        .marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos },
+    };
+
+    try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "widget"));
+    try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "gadget"));
+}
+
 test "repoIdentity: unknown repo name errors" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

@@ -66,6 +66,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one already there -- while `holt sync` reported success. Such an alias is now
   ignored: the repo links under its own name, `holt sync` names the alias under
   its project, and the run exits nonzero.
+- A marker `repos` url beginning with `-` is refused, and every subprocess that
+  takes a marker value, a project name, or a typed argument as a positional now
+  separates it with `--`. `holt restore` used to hand such a url straight to
+  `git clone` as its first word, where git read it as an option instead of a
+  repository -- `--upload-pack=<cmd>` names a command git runs. `holt backup`
+  passed a project's directory name to `tar` the same way, where a leading `-`
+  became an option. The separator covers `git clone`, `git worktree add`, and
+  `git remote add` as well, so a branch or url starting with `-` is a bad ref
+  or a bad url rather than a flag.
 
 ## [0.8.1] - 2026-07-31
 
