@@ -1,9 +1,10 @@
-//! `holt create <spec> [-p <project>]`: make a git repo from scratch.
-//! A bare <spec> ("foo") is a LOCAL repo at <code_root>/local/foo with no
-//! origin; a URL/shorthand ("owner/repo", a full git url) is a remote-destined
-//! repo at its identity path with `origin` set (nothing pushed). Without -p the
-//! repo is standalone (no marker, no hub); with -p it is attached as a project
-//! member. The repo is left commitless (plain `git init`); its path is printed.
+//! `holt repo`: groups repo lifecycle commands under the noun they act on.
+//! `new <spec> [-p <project>]` runs `git init` (no initial commit) for a
+//! from-scratch repo: a bare <spec> makes a local repo at
+//! <code_root>/local/<name> with no origin; a url or owner/repo shorthand
+//! makes one at its identity path with origin set (nothing pushed). Without
+//! -p the repo is standalone (no marker, no hub); with -p it is attached as
+//! a project member.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -19,30 +20,44 @@ const fsutil = @import("../fsutil.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
-const Spec = struct {
+const NewSpec = struct {
     spec: cli.Pos([]const u8, .{ .help = "a name for a local repo, or a git url / owner/repo shorthand for a remote-destined one" }),
     project: cli.Opt([]const u8, .{ .short = 'p', .value_name = "project", .complete = app.cat(.project), .help = "attach the new repo as a member of this project" }),
 };
 
-pub const command = app.command(Spec, .{
-    .name = "create",
+pub const new_command = app.command(NewSpec, .{
+    .name = "new",
     .summary = "Create a git repo from scratch",
-    .usage = "holt create <spec> [-p <project>]",
+    .usage = "holt repo new <spec> [-p <project>]",
     .group = .create,
+    .needs_context = true,
     .details =
     \\Runs `git init` (no initial commit). A bare <spec> makes a local repo at
     \\<code_root>/local/<name>; a url or owner/repo shorthand makes one at its
     \\identity path with origin set (nothing is pushed). Without -p the repo is
     \\standalone; with -p it is added as a member of <project>. The created
-    \\path is the sole line on stdout, so `cd $(holt create foo)` works.
+    \\path is the sole line on stdout, so `cd $(holt repo new foo)` works.
     \\
     \\Example:
-    \\  holt create scratch
-    \\  holt create acme/widget
-    \\  holt create tool -p myproject
+    \\  holt repo new scratch
+    \\  holt repo new acme/widget
+    \\  holt repo new tool -p myproject
     ,
+}, runNew);
+
+pub const command: app.Command = .{
+    .name = "repo",
+    .summary = "Create a git repo from scratch",
+    .usage = "holt repo <new> ...",
+    .group = .create,
+    .subcommands = &.{new_command},
     .needs_context = true,
-}, run);
+    .run = runFallback,
+};
+
+fn runFallback(ctx: *app.Ctx) anyerror!u8 {
+    return app.usageError(ctx, "usage: holt repo <new> ...", .{});
+}
 
 /// Classifies <spec>: a recognized url/shorthand yields its identity and the
 /// expanded origin url; a bare word yields a local identity and null url.
@@ -65,7 +80,7 @@ fn isSafeLocalName(name: []const u8) bool {
     return true;
 }
 
-fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
+fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
     const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
@@ -86,7 +101,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     }
 
     if (fsutil.exists(clone_path)) {
-        try ctx.err.print("holt: {s} already exists; use `holt adopt` to register an existing clone\n", .{try app.tilde(ctx, clone_path)});
+        try ctx.err.print("holt: {s} already exists; use `holt repo adopt` to register an existing clone\n", .{try app.tilde(ctx, clone_path)});
         return 1;
     }
 
@@ -133,7 +148,28 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     return 0;
 }
 
-test "run: a bare name creates a local repo at code_root/local/<name>, prints the path, no marker or hub" {
+test "new: a bare name creates a local repo and attaches it when -p is given" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{ "scratch", "-p", "acme/proj" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const expected = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
+    try testing.expectEqualStrings(expected, std.mem.trim(u8, got.out, " \t\r\n"));
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqualStrings("local:scratch", loaded.repos.get("scratch").?);
+}
+
+test "new: a bare name creates a local repo at code_root/local/<name>, prints the path, no marker or hub" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -142,7 +178,7 @@ test "run: a bare name creates a local repo at code_root/local/<name>, prints th
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"scratch"});
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"scratch"});
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const expected_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
@@ -158,7 +194,7 @@ test "run: a bare name creates a local repo at code_root/local/<name>, prints th
     try testing.expect(!fsutil.exists(marker_path));
 }
 
-test "run: an unsafe local name is rejected" {
+test "new: an unsafe local name is rejected" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -167,12 +203,12 @@ test "run: an unsafe local name is rejected" {
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     for ([_][]const u8{ "..", ".hidden", "~x" }) |bad| {
-        const got = try testutil.runCmd(arena, command.run, ws, &.{bad});
+        const got = try testutil.runCmd(arena, new_command.run, ws, &.{bad});
         try testing.expectEqual(@as(u8, 1), got.code);
     }
 }
 
-test "run: refuses when the target path already exists, pointing at adopt" {
+test "new: refuses when the target path already exists, pointing at adopt" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -184,12 +220,12 @@ test "run: refuses when the target path already exists, pointing at adopt" {
     const target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "taken" });
     try fsutil.ensureDir(target);
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"taken"});
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"taken"});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "adopt") != null);
 }
 
-test "run: a traversal spec that looks remote is refused (does not init outside code_root)" {
+test "new: a traversal spec that looks remote is refused (does not init outside code_root)" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -198,12 +234,12 @@ test "run: a traversal spec that looks remote is refused (does not init outside 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     for ([_][]const u8{ "../foo", "../../etc/passwd" }) |bad| {
-        const got = try testutil.runCmd(arena, command.run, ws, &.{bad});
+        const got = try testutil.runCmd(arena, new_command.run, ws, &.{bad});
         try testing.expectEqual(@as(u8, 1), got.code);
     }
 }
 
-test "run: a backslash-traversal spec (Windows escape) is refused" {
+test "new: a backslash-traversal spec (Windows escape) is refused" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -213,11 +249,11 @@ test "run: a backslash-traversal spec (Windows escape) is refused" {
 
     // A segment carrying a literal backslash-dotdot would escape code_root on
     // Windows (clonePath joins with the platform separator); refuse it.
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"a/..\\..\\..\\evil"});
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"a/..\\..\\..\\evil"});
     try testing.expectEqual(@as(u8, 1), got.code);
 }
 
-test "run: a scheme'd url with a traversal segment is refused via fromUrl" {
+test "new: a scheme'd url with a traversal segment is refused via fromUrl" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -226,15 +262,15 @@ test "run: a scheme'd url with a traversal segment is refused via fromUrl" {
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     // A full URL bypasses expand's shorthand path and reaches fromUrl, which
-    // rejects the ".." segment - proving create's classify/run error routing
+    // rejects the ".." segment - proving new's classify/run error routing
     // (not isSafeLocalName, which only guards the bare-name local branch).
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"https://github.com/acme/../evil"});
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"https://github.com/acme/../evil"});
     try testing.expectEqual(@as(u8, 1), got.code);
     // Nothing created on refusal.
     try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme" })));
 }
 
-test "run: a normal owner/repo shorthand still creates at the identity path with origin set" {
+test "new: a normal owner/repo shorthand still creates at the identity path with origin set" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -242,7 +278,7 @@ test "run: a normal owner/repo shorthand still creates at the identity path with
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const expected_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "widget" });
@@ -256,7 +292,7 @@ test "run: a normal owner/repo shorthand still creates at the identity path with
     try testing.expectEqualStrings(url, std.mem.trim(u8, remote.stdout, " \t\r\n"));
 }
 
-test "run: -p attaches a local member (marker local:<name> + hub) and doctor does not flag it broken" {
+test "new: -p attaches a local member (marker local:<name> + hub) and doctor does not flag it broken" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -265,7 +301,7 @@ test "run: -p attaches a local member (marker local:<name> + hub) and doctor doe
     const ws = try testutil.testWorkspace(arena, sb.root);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{ "tool", "-p", "acme/widget" });
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{ "tool", "-p", "acme/widget" });
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", marker.marker_basename });
@@ -280,7 +316,7 @@ test "run: -p attaches a local member (marker local:<name> + hub) and doctor doe
     try testing.expectEqual(@as(usize, 0), report.broken_clones.len);
 }
 
-test "run: -p to a nonexistent project fails without creating the repo" {
+test "new: -p to a nonexistent project fails without creating the repo" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -288,7 +324,7 @@ test "run: -p to a nonexistent project fails without creating the repo" {
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{ "tool", "-p", "no/such" });
+    const got = try testutil.runCmd(arena, new_command.run, ws, &.{ "tool", "-p", "no/such" });
     try testing.expectEqual(@as(u8, 1), got.code);
     // No orphaned repo left behind.
     const clone_path = try identity.local("tool").clonePath(arena, ws.cfg.code_root);

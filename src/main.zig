@@ -79,7 +79,7 @@ test {
     _ = @import("commands/project.zig");
     _ = @import("commands/add.zig");
     _ = @import("commands/get.zig");
-    _ = @import("commands/create.zig");
+    _ = @import("commands/repo.zig");
     _ = @import("commands/rm.zig");
     _ = @import("commands/alias.zig");
     _ = @import("commands/sync.zig");
@@ -150,7 +150,7 @@ test "coverage: every command positional and value-flag completes or is allowlis
         .{ .cmd = "restore", .field = "jobs" }, // numeric concurrency count
         .{ .cmd = "doctor", .field = "jobs" }, // numeric concurrency count
         .{ .cmd = "run", .field = "jobs" }, // numeric concurrency count
-        .{ .cmd = "create", .field = "spec" }, // a new repo name / url the user types
+        .{ .cmd = "repo new", .field = "spec" }, // a new repo name / url the user types
     };
 
     var gaps: std.ArrayList([]const u8) = .empty;
