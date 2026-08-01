@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-08-02
+
+### Fixed
+
+- `--help` on a command with subcommands (`repo`, `project`, `org`,
+  `config`) lists them in a `Commands:` table with their one-line
+  summaries, like the top-level help. Before, a group's help showed only
+  its usage line and summary, saying nothing about what each verb does.
+  Leaf commands' help output is unchanged.
+
 ## [0.9.1] - 2026-08-02
 
 ### Fixed
@@ -412,6 +422,7 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
+[0.9.2]: https://github.com/sakakibara/holt/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/sakakibara/holt/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/sakakibara/holt/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/sakakibara/holt/compare/v0.8.0...v0.8.1
