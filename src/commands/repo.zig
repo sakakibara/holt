@@ -271,7 +271,7 @@ fn runGet(ctx: *app.Ctx, a: cli.Args(GetSpec)) anyerror!u8 {
     };
 
     if (project) |*p| {
-        if (p.marker.repos.contains(id.repo)) {
+        if (p.marker.findRepo(id.repo) != null) {
             try ctx.err.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });
             return 1;
         }
@@ -428,7 +428,7 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
         marker_value = try std.fmt.allocPrint(alloc, "local:{s}", .{basename});
     }
 
-    if (project_query != null and p.marker.repos.contains(id.repo)) {
+    if (project_query != null and p.marker.findRepo(id.repo) != null) {
         try ctx.err.print("holt: \"{s}\" is already a member of {s}/{s}\n", .{ id.repo, p.org, p.name });
         return 1;
     }
@@ -565,22 +565,29 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
         content_lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
         p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 
-        if (!p.marker.repos.contains(a.repo)) {
+        const entry = p.marker.findEntry(a.repo) orelse {
             try ctx.err.print("holt: \"{s}\" is not a member of {s}/{s}\n", .{ a.repo, p.org, p.name });
             return 1;
-        }
+        };
 
         // Resolved before any mutation, and never swallowed into a fallback:
-        // an unparseable marker value must not silently reinterpret <repo>
+        // an unusable marker value must not silently reinterpret <repo>
         // (a short member name) as a code-tree key further down - that would
-        // resolve to, and delete, an unrelated clone.
-        id = p.repoIdentity(alloc, a.repo) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => {
-                try ctx.err.print("holt: {s}/{s}'s marker entry for \"{s}\" is not a valid url: {s}\n", .{ p.org, p.name, a.repo, @errorName(err) });
-                return 1;
-            },
-        };
+        // resolve to, and delete, an unrelated clone. The entry itself stays
+        // removable either way; only --clone needs a resolvable checkout.
+        if (entry.source) |src| {
+            id = switch (src) {
+                .remote => |r| r.id,
+                .local => |seg| identity.local(seg),
+            };
+        } else if (a.clone) {
+            if (entry.raw_source != null) {
+                try ctx.err.print("holt: {s}/{s}'s marker entry for \"{s}\" is not a usable url; --clone cannot resolve its checkout\n", .{ p.org, p.name, a.repo });
+            } else {
+                try ctx.err.print("holt: \"{s}\" is only an alias in {s}/{s}; there is no clone to remove\n", .{ a.repo, p.org, p.name });
+            }
+            return 1;
+        }
 
         _ = p.marker.remove(a.repo);
         try marker.save(&p.marker, try p.markerPath(alloc));
@@ -735,17 +742,17 @@ const Referencing = struct {
     repo_key: []const u8,
 };
 
-/// Every (project, repo key) pair whose marker value is the pseudo-URL
-/// `local:<name>`.
+/// Every (project, repo key) pair whose member resolves to the local repo
+/// `name`.
 fn findReferencing(alloc: std.mem.Allocator, ws: *const workspace.Workspace, name: []const u8) ![]Referencing {
     const all = try ws.list(alloc);
-    const pseudo = try std.fmt.allocPrint(alloc, "local:{s}", .{name});
 
     var out: std.ArrayList(Referencing) = .empty;
     for (all) |p| {
-        for (p.marker.repos.keys()) |key| {
-            const val = p.marker.repos.get(key).?;
-            if (std.mem.eql(u8, val, pseudo)) try out.append(alloc, .{ .project = p, .repo_key = key });
+        for (p.marker.entries) |*e| {
+            const src = e.source orelse continue;
+            if (src != .local) continue;
+            if (std.mem.eql(u8, src.local.bytes, name)) try out.append(alloc, .{ .project = p, .repo_key = e.name });
         }
     }
     return out.toOwnedSlice(alloc);
@@ -789,15 +796,18 @@ fn alreadyMovedOrigin(alloc: std.mem.Allocator, ws: *const workspace.Workspace, 
     const all = try ws.list(alloc);
     for (referencing) |ref| {
         for (all) |p| {
-            const val = p.marker.repos.get(ref.repo_key) orelse continue;
-            if (std.mem.startsWith(u8, val, "local:")) continue;
+            const e = p.marker.findRepo(ref.repo_key) orelse continue;
+            const src = e.source orelse continue;
+            if (src != .remote) continue;
 
-            const id = identity.fromUrl(alloc, val) catch continue;
-            const path = try id.clonePath(alloc, ws.cfg.code_root);
+            // The url is another project's marker bytes, returned verbatim:
+            // `rewriteMemberOrigin` writes it back into every referencing
+            // marker, so normalizing it here would rewrite their remotes.
+            const path = try src.remote.id.clonePath(alloc, ws.cfg.code_root);
             if (!fsutil.exists(path)) continue;
             if (try git.remoteUrl(alloc, path) == null) continue;
 
-            return .{ .origin = val, .id = id, .path = path };
+            return .{ .origin = src.remote.url, .id = src.remote.id, .path = path };
         }
     }
     return null;
@@ -1067,7 +1077,7 @@ fn runAlias(ctx: *app.Ctx, a: cli.Args(AliasSpec)) anyerror!u8 {
     defer lock.release();
     p.marker = try marker.load(alloc, try p.markerPath(alloc), null);
 
-    if (!p.marker.repos.contains(repo_name)) {
+    if (p.marker.findRepo(repo_name) == null) {
         try ctx.err.print("holt: \"{s}\" is not a member of {s}/{s}\n", .{ repo_name, p.org, p.name });
         return 1;
     }
@@ -2661,6 +2671,49 @@ test "remove: -p with an unparseable marker url refuses without falling back to 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
     try testing.expectEqual(@as(usize, 1), loaded.repos.count());
+}
+
+test "remove: -p without --clone removes a member whose value never parsed" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "broken", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "broken", "-p", "proj" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expect(loaded.findEntry("broken") == null);
+}
+
+test "remove: -p deletes an orphan alias" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    try testutil.writeRawMarker(arena, try ws.projectsRoot(arena), "acme", "proj",
+        \\{"version":1,"org":"acme","name":"proj","repos":{},"aliases":{"ghost":"x"}}
+    );
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "ghost", "-p", "proj" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqual(@as(usize, 0), loaded.entries.len);
+    try testing.expect(std.mem.indexOf(u8, try std.Io.Dir.cwd().readFileAlloc(testing.io, marker_path, arena, .limited(1 << 20)), "ghost") == null);
 }
 
 test "remove: --clone with a traversing local/ key is refused, leaving the outside target intact" {
