@@ -95,7 +95,7 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         try fsutil.ensureDir(try std.fs.path.join(alloc, &.{ content_path, sub }));
     }
 
-    var m: marker.Marker = .{ .version = marker.marker_version, .org = on.org, .name = on.name, .repos = .empty };
+    var m: marker.Marker = .init(on.org, on.name);
     try marker.save(&m, marker_path);
 
     const hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, on.org, on.name });

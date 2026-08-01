@@ -184,7 +184,7 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
         else
             try std.fmt.allocPrint(alloc, "local:{s}", .{target.id.repo});
 
-        try p.marker.repos.put(alloc, target.id.repo, member_value);
+        try p.marker.upsert(alloc, target.id.repo, member_value);
         try marker.save(&p.marker, try p.markerPath(alloc));
         _ = try hub.reconcile(alloc, &ws, p, false);
     }
@@ -302,7 +302,7 @@ fn runGet(ctx: *app.Ctx, a: cli.Args(GetSpec)) anyerror!u8 {
     }
 
     if (project) |*p| {
-        try p.marker.repos.put(alloc, id.repo, url);
+        try p.marker.upsert(alloc, id.repo, url);
         try marker.save(&p.marker, try p.markerPath(alloc));
         _ = try hub.reconcile(alloc, &ws, p, false);
     }
@@ -476,7 +476,7 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
     }
 
     // Project mode: record + reconcile, then report.
-    try p.marker.repos.put(alloc, id.repo, marker_value);
+    try p.marker.upsert(alloc, id.repo, marker_value);
     const marker_path = try p.markerPath(alloc);
     // Once the clone has been relocated, a marker or hub failure leaves the
     // move done but the project not yet updated. Name where the clone landed
@@ -582,8 +582,7 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
             },
         };
 
-        _ = p.marker.repos.orderedRemove(a.repo);
-        _ = p.marker.aliases.orderedRemove(a.repo);
+        _ = p.marker.remove(a.repo);
         try marker.save(&p.marker, try p.markerPath(alloc));
         _ = try hub.reconcile(alloc, &ws, &p, false);
         try ctx.out.print("removed {s} from {s}/{s}\n", .{ a.repo, p.org, p.name });
@@ -776,7 +775,7 @@ fn rewriteMemberOrigin(alloc: std.mem.Allocator, env: Env, ref: Referencing, ori
     var p = ref.project;
     const marker_path = try p.markerPath(alloc);
     p.marker = try marker.load(alloc, marker_path, null);
-    try p.marker.repos.put(alloc, ref.repo_key, origin);
+    try p.marker.upsert(alloc, ref.repo_key, origin);
     try marker.save(&p.marker, marker_path);
 }
 
@@ -1083,7 +1082,7 @@ fn runAlias(ctx: *app.Ctx, a: cli.Args(AliasSpec)) anyerror!u8 {
             return 1;
         }
 
-        try p.marker.aliases.put(alloc, repo_name, name);
+        _ = try p.marker.setAlias(alloc, repo_name, name);
         const links = (try hub.desiredLinks(alloc, &ws, &p)).links;
         if (hasDuplicateRel(links)) {
             try ctx.err.print("holt: alias \"{s}\" collides with another hub link in {s}/{s}\n", .{ name, p.org, p.name });
@@ -1098,7 +1097,7 @@ fn runAlias(ctx: *app.Ctx, a: cli.Args(AliasSpec)) anyerror!u8 {
         return 0;
     }
 
-    if (p.marker.aliases.orderedRemove(repo_name)) {
+    if (try p.marker.setAlias(alloc, repo_name, null)) {
         const marker_path = try p.markerPath(alloc);
         try marker.save(&p.marker, marker_path);
         _ = try hub.reconcile(alloc, &ws, &p, false);

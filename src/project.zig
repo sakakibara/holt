@@ -54,7 +54,7 @@ test "qualified: joins org and name" {
         .name = "widget",
         .content_path = try arena.dupe(u8, "/synced/projects/acme/widget"),
         .hub_path = try arena.dupe(u8, "/hub/acme/widget"),
-        .marker = .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty },
+        .marker = .init("acme", "widget"),
     };
     try testing.expectEqualStrings("acme/widget", try p.qualified(arena));
 }
@@ -64,16 +64,16 @@ test "repoIdentity: resolves a remote URL and a local: pseudo-URL" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "widget", "https://github.com/acme/widget");
-    try repos.put(arena, "scratch", "local:scratch");
+    var m: marker.Marker = .init("acme", "proj");
+    try m.upsert(arena, "widget", "https://github.com/acme/widget");
+    try m.upsert(arena, "scratch", "local:scratch");
 
     const p: Project = .{
         .org = "acme",
         .name = "proj",
         .content_path = try arena.dupe(u8, "/synced/projects/acme/proj"),
         .hub_path = try arena.dupe(u8, "/hub/acme/proj"),
-        .marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos },
+        .marker = m,
     };
 
     const remote_id = try p.repoIdentity(arena, "widget");
@@ -150,7 +150,7 @@ test "repoIdentity: unknown repo name errors" {
         .name = "proj",
         .content_path = try arena.dupe(u8, "/synced/projects/acme/proj"),
         .hub_path = try arena.dupe(u8, "/hub/acme/proj"),
-        .marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty },
+        .marker = .init("acme", "proj"),
     };
     try testing.expectError(error.UnknownRepo, p.repoIdentity(arena, "nope"));
 }

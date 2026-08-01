@@ -77,10 +77,10 @@ pub const Marker = struct {
     /// Absent from the on-disk marker until a user runs `holt repo alias`.
     aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
     /// One entry per `repos` or `aliases` key, in file order: members first,
-    /// then alias-only names.
-    entries: []Entry = &.{},
+    /// then alias-only names. What `save` writes; the maps are a read view.
+    entries: []Entry,
     /// Unknown top-level keys, verbatim, re-emitted by `save`.
-    extra: json.ObjectMap = .empty,
+    extra: json.ObjectMap,
 
     /// Every entry, faulted or not - addressing and removal.
     pub fn findEntry(m: *const Marker, name: []const u8) ?*Entry {
@@ -97,6 +97,101 @@ pub const Marker = struct {
     fn findIn(entries: []Entry, name: []const u8) ?*Entry {
         for (entries) |*e| if (std.mem.eql(u8, e.name, name)) return e;
         return null;
+    }
+
+    /// A marker with no members yet; grow it through the mutation API.
+    pub fn init(org: []const u8, name: []const u8) Marker {
+        return .{
+            .version = marker_version,
+            .org = org,
+            .name = name,
+            .repos = .empty,
+            .aliases = .empty,
+            .entries = &.{},
+            .extra = .empty,
+        };
+    }
+
+    /// Inserts or replaces the member `name` with `raw_value`, classified
+    /// exactly as `load` classifies it. A value that fails its predicate is
+    /// stored faulted rather than rejected - the caller chose to write it,
+    /// and `save` must not lose it.
+    pub fn upsert(m: *Marker, alloc: std.mem.Allocator, name: []const u8, raw_value: []const u8) !void {
+        const parsed = try sourceEntry(alloc, name, .{ .string = raw_value });
+        if (m.findEntry(name)) |e| {
+            e.raw_source = parsed.raw_source;
+            e.source = parsed.source;
+            e.source_fault = parsed.source_fault;
+        } else {
+            try m.appendEntry(alloc, parsed);
+        }
+        try m.repos.put(alloc, name, raw_value);
+    }
+
+    /// Sets (`alias_value != null`) or clears (`null`) the alias on `name`.
+    /// Returns whether `name` carried an alias value before the call - the
+    /// clear path's callers branch on it. Clearing the alias of an entry
+    /// that exists only for its alias removes the entry.
+    pub fn setAlias(m: *Marker, alloc: std.mem.Allocator, name: []const u8, alias_value: ?[]const u8) !bool {
+        const existing = m.findEntry(name);
+        const had = if (existing) |e| e.raw_alias != null else false;
+        if (alias_value) |v| {
+            const e = existing orelse blk: {
+                try m.appendEntry(alloc, .{
+                    .name = name,
+                    .raw_source = null,
+                    .source = null,
+                    .source_fault = null,
+                    .raw_alias = null,
+                    .alias = null,
+                    .alias_fault = null,
+                });
+                break :blk &m.entries[m.entries.len - 1];
+            };
+            e.raw_alias = .{ .string = v };
+            if (fsutil.SafeSegment.parse(v)) |seg| {
+                e.alias = seg;
+                e.alias_fault = null;
+            } else {
+                e.alias = null;
+                e.alias_fault = .unsafe_segment;
+            }
+            try m.aliases.put(alloc, name, v);
+        } else {
+            if (existing) |e| {
+                e.raw_alias = null;
+                e.alias = null;
+                e.alias_fault = null;
+                if (e.raw_source == null) _ = m.remove(name);
+            }
+            _ = m.aliases.orderedRemove(name);
+        }
+        return had;
+    }
+
+    /// Removes the whole entry `name` - member, alias, or both, faulted or
+    /// not. Returns whether an entry existed, so an unusable or alias-only
+    /// name stays deletable.
+    pub fn remove(m: *Marker, name: []const u8) bool {
+        for (m.entries, 0..) |*e, i| {
+            if (std.mem.eql(u8, e.name, name)) {
+                std.mem.copyForwards(Entry, m.entries[i .. m.entries.len - 1], m.entries[i + 1 ..]);
+                m.entries = m.entries[0 .. m.entries.len - 1];
+                _ = m.repos.orderedRemove(name);
+                _ = m.aliases.orderedRemove(name);
+                return true;
+            }
+        }
+        _ = m.repos.orderedRemove(name);
+        _ = m.aliases.orderedRemove(name);
+        return false;
+    }
+
+    fn appendEntry(m: *Marker, alloc: std.mem.Allocator, e: Entry) !void {
+        const grown = try alloc.alloc(Entry, m.entries.len + 1);
+        @memcpy(grown[0..m.entries.len], m.entries);
+        grown[m.entries.len] = e;
+        m.entries = grown;
     }
 };
 
@@ -177,14 +272,15 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
 
     // Known keys are lifted out by hand rather than through the decoder, so
     // the top level stays a `json.Value` object; the decoder's diagnostics
-    // for the required fields are reproduced below.
+    // for the required fields are reproduced below. Anything else is a
+    // future holt's data: carried in `extra` and re-emitted by `save`.
+    var extra: json.ObjectMap = .empty;
     var kit = obj.iterator();
     outer: while (kit.next()) |kv| {
         inline for ([_][]const u8{ "version", "org", "name", "repos", "aliases" }) |known| {
             if (std.mem.eql(u8, kv.key_ptr.*, known)) continue :outer;
         }
-        if (diag) |d| d.set(alloc, "unknown field `{s}`", .{kv.key_ptr.*});
-        return error.UnknownField;
+        try extra.put(alloc, kv.key_ptr.*, kv.value_ptr.*);
     }
 
     const version_val = obj.get("version") orelse {
@@ -221,11 +317,11 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
     var entries: std.ArrayList(Entry) = .empty;
     var it = raw_repos.object.iterator();
     while (it.next()) |entry| {
-        if (entry.value_ptr.* != .string) {
-            if (diag) |d| d.set(alloc, "repos.{s} must be a string", .{entry.key_ptr.*});
-            return error.MalformedMarker;
+        // A non-string value faults the entry rather than the marker; only
+        // the string map view omits it.
+        if (entry.value_ptr.* == .string) {
+            try repos.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
         }
-        try repos.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
         try entries.append(alloc, try sourceEntry(alloc, entry.key_ptr.*, entry.value_ptr.*));
     }
 
@@ -237,11 +333,9 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
         }
         var ait = av.object.iterator();
         while (ait.next()) |entry| {
-            if (entry.value_ptr.* != .string) {
-                if (diag) |d| d.set(alloc, "aliases.{s} must be a string", .{entry.key_ptr.*});
-                return error.MalformedMarker;
+            if (entry.value_ptr.* == .string) {
+                try aliases.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
             }
-            try aliases.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
 
             const target = Marker.findIn(entries.items, entry.key_ptr.*) orelse blk: {
                 try entries.append(alloc, .{
@@ -273,20 +367,25 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
         .repos = repos,
         .aliases = aliases,
         .entries = try entries.toOwnedSlice(alloc),
-        .extra = .empty,
+        .extra = extra,
     };
 }
 
 /// Writes `m` to `path` as sorted-key, 2-space pretty JSON with a trailing
 /// newline. Atomic via `fsutil.writeFileAtomic`, so a crash never leaves a
 /// half-written marker and two concurrent savers never collide on the temp.
+/// Emission reads `entries` and `extra`: every raw value - faulted members
+/// and aliases included - and every unknown top-level key goes back out
+/// verbatim, so a save never destroys what load could not parse.
 pub fn save(m: *const Marker, path: []const u8) !void {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     var repos_obj: json.ObjectMap = .empty;
-    for (m.repos.keys()) |k| try repos_obj.put(arena, k, .{ .string = m.repos.get(k).? });
+    for (m.entries) |e| {
+        if (e.raw_source) |rv| try repos_obj.put(arena, e.name, rv);
+    }
 
     var root: json.ObjectMap = .empty;
     try root.put(arena, "name", .{ .string = m.name });
@@ -296,11 +395,14 @@ pub fn save(m: *const Marker, path: []const u8) !void {
 
     // Omit the key entirely when empty so markers without aliases stay
     // byte-identical to their pre-alias form.
-    if (m.aliases.count() > 0) {
-        var aliases_obj: json.ObjectMap = .empty;
-        for (m.aliases.keys()) |k| try aliases_obj.put(arena, k, .{ .string = m.aliases.get(k).? });
-        try root.put(arena, "aliases", .{ .object = aliases_obj });
+    var aliases_obj: json.ObjectMap = .empty;
+    for (m.entries) |e| {
+        if (e.raw_alias) |rv| try aliases_obj.put(arena, e.name, rv);
     }
+    if (aliases_obj.count() > 0) try root.put(arena, "aliases", .{ .object = aliases_obj });
+
+    var xit = m.extra.iterator();
+    while (xit.next()) |kv| try root.put(arena, kv.key_ptr.*, kv.value_ptr.*);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     defer aw.deinit();
@@ -326,11 +428,9 @@ test "save writes a sorted-key, 2-space pretty golden document" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "b", "local:b");
-    try repos.put(arena, "a", "https://github.com/acme/a");
-
-    const m: Marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos };
+    var m: Marker = .init("acme", "proj");
+    try m.upsert(arena, "b", "local:b");
+    try m.upsert(arena, "a", "https://github.com/acme/a");
     try save(&m, path);
 
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
@@ -353,7 +453,7 @@ test "save is atomic: no leftover .tmp file after a successful write" {
     const path = try markerPath(&tmp);
     defer testing.allocator.free(path);
 
-    const m: Marker = .{ .version = 1, .org = "o", .name = "n", .repos = .empty };
+    const m: Marker = .init("o", "n");
     try save(&m, path);
 
     const tmp_path = try std.fmt.allocPrint(testing.allocator, "{s}.tmp", .{path});
@@ -372,11 +472,9 @@ test "round-trip: load(save(m)) equals m" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "widget", "https://github.com/acme/widget");
-    try repos.put(arena, "scratch", "local:scratch");
-
-    const original: Marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos };
+    var original: Marker = .init("acme", "proj");
+    try original.upsert(arena, "widget", "https://github.com/acme/widget");
+    try original.upsert(arena, "scratch", "local:scratch");
     try save(&original, path);
 
     const loaded = try load(arena, path, null);
@@ -398,12 +496,9 @@ test "save: an aliases object appears only when non-empty, sorted after the othe
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "widget", "https://github.com/acme/widget");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try aliases.put(arena, "widget", "gadget");
-
-    const m: Marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases };
+    var m: Marker = .init("acme", "proj");
+    try m.upsert(arena, "widget", "https://github.com/acme/widget");
+    _ = try m.setAlias(arena, "widget", "gadget");
     try save(&m, path);
 
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
@@ -432,10 +527,8 @@ test "save: a marker without aliases is byte-identical to the pre-alias form" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "widget", "https://github.com/acme/widget");
-
-    const m: Marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos };
+    var m: Marker = .init("acme", "proj");
+    try m.upsert(arena, "widget", "https://github.com/acme/widget");
     try save(&m, path);
 
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
@@ -452,12 +545,9 @@ test "round-trip: load(save(m)) preserves aliases" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "widget", "https://github.com/acme/widget");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try aliases.put(arena, "widget", "gadget");
-
-    const original: Marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases };
+    var original: Marker = .init("acme", "proj");
+    try original.upsert(arena, "widget", "https://github.com/acme/widget");
+    _ = try original.setAlias(arena, "widget", "gadget");
     try save(&original, path);
 
     const loaded = try load(arena, path, null);
@@ -483,7 +573,7 @@ test "load: a marker without an aliases key loads with an empty aliases map" {
     try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
 }
 
-test "load: rejects a non-string aliases entry" {
+test "load: a non-string aliases entry is kept faulted, not fatal" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{
@@ -497,9 +587,16 @@ test "load: rejects a non-string aliases entry" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var d: diagnostic.Diagnostic = .{};
-    try testing.expectError(error.MalformedMarker, load(arena, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "aliases") != null);
+    const m = try load(arena, path, null);
+    const e = m.findEntry("a").?;
+    try testing.expectEqual(Fault.not_a_string, e.alias_fault.?);
+    try testing.expectEqual(@as(i128, 7), e.raw_alias.?.integer);
+    try testing.expect(m.aliases.get("a") == null);
+
+    // save re-emits the value it could not parse.
+    try save(&m, path);
+    const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
+    try testing.expect(std.mem.indexOf(u8, got, "\"a\": 7") != null);
 }
 
 test "load: rejects an unsupported marker version" {
@@ -540,12 +637,12 @@ test "load: rejects a missing required field" {
     try testing.expect(std.mem.indexOf(u8, d.message, "name") != null);
 }
 
-test "load: rejects an unknown top-level field" {
+test "load: an unknown top-level field is carried and re-emitted by save" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{
         .sub_path = marker_basename,
-        .data = "{\"version\":1,\"org\":\"acme\",\"name\":\"proj\",\"repos\":{},\"extra\":true}\n",
+        .data = "{\"version\":1,\"org\":\"acme\",\"name\":\"proj\",\"repos\":{},\"future\":true}\n",
     });
     const path = try markerPath(&tmp);
     defer testing.allocator.free(path);
@@ -554,9 +651,12 @@ test "load: rejects an unknown top-level field" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var d: diagnostic.Diagnostic = .{};
-    try testing.expectError(error.UnknownField, load(arena, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "extra") != null);
+    const m = try load(arena, path, null);
+    try testing.expect(m.extra.get("future").?.bool);
+
+    try save(&m, path);
+    const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
+    try testing.expect(std.mem.indexOf(u8, got, "\"future\": true") != null);
 }
 
 test "load: rejects a non-object repos value" {
@@ -658,7 +758,7 @@ test "load: aliases attach to their member, fault on unsafe values, and orphan i
     try testing.expect(m.findRepo("widget") != null);
 }
 
-test "load: rejects a non-string repos entry" {
+test "load: a non-string repos entry is kept faulted, not fatal" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{
@@ -672,7 +772,123 @@ test "load: rejects a non-string repos entry" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
+    const m = try load(arena, path, null);
+    const e = m.findRepo("a").?;
+    try testing.expectEqual(Fault.not_a_string, e.source_fault.?);
+    try testing.expectEqual(@as(i128, 42), e.raw_source.?.integer);
+    try testing.expect(m.repos.get("a") == null);
+
+    // The member stays removable even though its value never parsed.
+    var mm = m;
+    try testing.expect(mm.remove("a"));
+    try testing.expect(mm.findEntry("a") == null);
+}
+
+fn encodedValue(arena: std.mem.Allocator, v: json.Value) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try json.encode(&aw.writer, v, .{});
+    return aw.written();
+}
+
+fn expectSameRaw(arena: std.mem.Allocator, a: ?json.Value, b: ?json.Value) !void {
+    if (a == null or b == null) {
+        try testing.expect(a == null and b == null);
+        return;
+    }
+    try testing.expectEqualStrings(try encodedValue(arena, a.?), try encodedValue(arena, b.?));
+}
+
+test "round-trip: entry preservation and idempotence across the marker corpus" {
+    const corpus = [_][]const u8{
+        // scp-form remote
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"w\":\"git@github.com:acme/widget.git\"}}",
+        // ssh:// remote
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"w\":\"ssh://git@github.com/acme/widget.git\"}}",
+        // local: member
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"s\":\"local:scratch\"}}",
+        // aliases present
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"w\":\"https://github.com/acme/w\"},\"aliases\":{\"w\":\"x\"}}",
+        // aliases absent
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"w\":\"https://github.com/acme/w\"}}",
+        // aliases empty: save omits the key, so entry preservation and byte
+        // preservation visibly diverge on this input
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"w\":\"https://github.com/acme/w\"},\"aliases\":{}}",
+        // unusable source
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"e\":\"local:../../evil\"}}",
+        // unusable alias on a valid member
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"w\":\"https://github.com/acme/w\"},\"aliases\":{\"w\":\"../evil\"}}",
+        // orphan alias
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{},\"aliases\":{\"ghost\":\"x\"}}",
+        // non-string member value
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"b\":{\"url\":\"future\"}}}",
+        // non-string alias value
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"w\":\"https://github.com/acme/w\"},\"aliases\":{\"w\":[1,2]}}",
+        // unknown top-level key
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{},\"future\":{\"deep\":[1,null]}}",
+        // unsorted input keys
+        "{\"repos\":{\"b\":\"local:b\",\"a\":\"local:a\"},\"name\":\"n\",\"org\":\"o\",\"version\":1}",
+        // \uXXXX-escaped value
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{\"u\":\"local:\\u0065scaped\"}}",
+        // zero members
+        "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{}}",
+    };
+
+    for (corpus) |input| {
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = marker_basename, .data = input });
+        const path = try markerPath(&tmp);
+        defer testing.allocator.free(path);
+
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const m1 = try load(arena, path, null);
+        try save(&m1, path);
+        const first = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
+
+        // Entry preservation: same names, raw values, and unknown keys.
+        // Compared by name, not index - save sorts keys.
+        const m2 = try load(arena, path, null);
+        try testing.expectEqual(m1.entries.len, m2.entries.len);
+        for (m1.entries) |*e1| {
+            const e2 = m2.findEntry(e1.name) orelse return error.TestUnexpectedResult;
+            try expectSameRaw(arena, e1.raw_source, e2.raw_source);
+            try expectSameRaw(arena, e1.raw_alias, e2.raw_alias);
+            try testing.expectEqual(e1.source_fault, e2.source_fault);
+            try testing.expectEqual(e1.alias_fault, e2.alias_fault);
+            try testing.expectEqual(e1.source == null, e2.source == null);
+        }
+        try testing.expectEqual(m1.extra.count(), m2.extra.count());
+        var xit = m1.extra.iterator();
+        while (xit.next()) |kv| {
+            const other = m2.extra.get(kv.key_ptr.*) orelse return error.TestUnexpectedResult;
+            try expectSameRaw(arena, kv.value_ptr.*, other);
+        }
+
+        // Idempotence: the second save emits the first save's bytes.
+        try save(&m2, path);
+        const second = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
+        try testing.expectEqualStrings(first, second);
+    }
+}
+
+test "load: a non-object aliases container stays fatal" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = marker_basename,
+        .data = "{\"version\":1,\"org\":\"o\",\"name\":\"n\",\"repos\":{},\"aliases\":7}\n",
+    });
+    const path = try markerPath(&tmp);
+    defer testing.allocator.free(path);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.MalformedMarker, load(arena, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "a") != null);
+    try testing.expect(std.mem.indexOf(u8, d.message, "aliases") != null);
 }

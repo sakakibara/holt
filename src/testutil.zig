@@ -161,7 +161,11 @@ pub fn writeMarkerAs(alloc: std.mem.Allocator, parent_dir: []const u8, dir_org: 
     const dir_path = try std.fs.path.join(alloc, &.{ parent_dir, dir_org, dir_name });
     try fsutil.ensureDir(dir_path);
     const marker_path = try std.fs.path.join(alloc, &.{ dir_path, marker.marker_basename });
-    const m: marker.Marker = .{ .version = marker.marker_version, .org = marker_org, .name = marker_name, .repos = repos, .aliases = aliases };
+    var m: marker.Marker = .init(marker_org, marker_name);
+    var rit = repos.iterator();
+    while (rit.next()) |kv| try m.upsert(alloc, kv.key_ptr.*, kv.value_ptr.*);
+    var ait = aliases.iterator();
+    while (ait.next()) |kv| _ = try m.setAlias(alloc, kv.key_ptr.*, kv.value_ptr.*);
     try marker.save(&m, marker_path);
 }
 

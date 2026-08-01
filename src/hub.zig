@@ -428,12 +428,17 @@ pub fn removeHub(p: *const Project) !void {
 fn testProject(alloc: std.mem.Allocator, ws: *const Workspace, org: []const u8, name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8), aliases: std.StringArrayHashMapUnmanaged([]const u8)) !Project {
     const content_path = try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "projects", org, name });
     const hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, org, name });
+    var m: marker.Marker = .init(org, name);
+    var rit = repos.iterator();
+    while (rit.next()) |kv| try m.upsert(alloc, kv.key_ptr.*, kv.value_ptr.*);
+    var ait = aliases.iterator();
+    while (ait.next()) |kv| _ = try m.setAlias(alloc, kv.key_ptr.*, kv.value_ptr.*);
     return .{
         .org = org,
         .name = name,
         .content_path = content_path,
         .hub_path = hub_path,
-        .marker = .{ .version = 1, .org = org, .name = name, .repos = repos, .aliases = aliases },
+        .marker = m,
     };
 }
 
