@@ -150,7 +150,12 @@ pub fn resolveRepoId(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []co
         return null;
     };
 
-    return try p.repoIdentity(alloc, repo_name);
+    const src = p.marker.findRepo(repo_name).?.source orelse {
+        const qualified = try p.qualified(alloc);
+        try ctx.err.print("holt: {s}'s marker entry for \"{s}\" is not a usable url\n", .{ qualified, repo_name });
+        return null;
+    };
+    return src.id();
 }
 
 /// Resolves a `<project>/<repo>` pair to the repo's real clone path under
@@ -161,15 +166,18 @@ pub fn resolveRepoPath(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []
 }
 
 /// Exact repo short name, else the unique case-insensitive subsequence
-/// match among the project's member names; null if none or ambiguous.
+/// match among the project's member names (alias-only names never match,
+/// so a stray alias key cannot make a repo query ambiguous); null if none
+/// or ambiguous.
 fn findRepo(p: project_mod.Project, query: []const u8) ?[]const u8 {
-    if (p.marker.repos.contains(query)) return query;
+    if (p.marker.findRepo(query) != null) return query;
 
     var found: ?[]const u8 = null;
-    for (p.marker.repos.keys()) |name| {
-        if (!workspace.isSubsequenceIgnoreCase(query, name)) continue;
+    for (p.marker.entries) |*e| {
+        if (e.raw_source == null) continue;
+        if (!workspace.isSubsequenceIgnoreCase(query, e.name)) continue;
         if (found != null) return null;
-        found = name;
+        found = e.name;
     }
     return found;
 }
@@ -395,4 +403,47 @@ test "run: ambiguous project exits 1 and lists every candidate" {
     const got = result.err;
     try testing.expect(std.mem.indexOf(u8, got, "acme/widget") != null);
     try testing.expect(std.mem.indexOf(u8, got, "other/widget") != null);
+}
+
+test "run: a repo whose marker value never parsed reports and prints nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "broken", "not a url");
+
+    const ws = testWorkspace(arena, root, "/code");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/broken"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expectEqual(@as(usize, 0), got.out.len);
+    try testing.expect(std.mem.indexOf(u8, got.err, "not a usable url") != null);
+}
+
+test "run: an orphan alias never matches a repo query" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws = testWorkspace(arena, root, "/code");
+    try testutil.writeRawMarker(arena, try ws.projectsRoot(arena), "acme", "widget",
+        \\{"version":1,"org":"acme","name":"widget","repos":{"gadget":"https://github.com/acme/gadget"},"aliases":{"ghost":"x"}}
+    );
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/g"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "gadget" });
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), got.out);
 }

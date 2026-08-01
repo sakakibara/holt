@@ -44,7 +44,18 @@ pub const Remote = struct {
     id: identity.Identity,
 };
 
-pub const Source = union(enum) { remote: Remote, local: fsutil.SafeSegment };
+pub const Source = union(enum) {
+    remote: Remote,
+    local: fsutil.SafeSegment,
+
+    /// The identity a member resolves to, whichever form it took.
+    pub fn id(s: Source) identity.Identity {
+        return switch (s) {
+            .remote => |r| r.id,
+            .local => |seg| identity.local(seg),
+        };
+    }
+};
 
 pub const Entry = struct {
     /// Marker key, verbatim. Never joined into a path; a lookup handle and a

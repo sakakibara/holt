@@ -101,22 +101,26 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     // timestamps back into its max. `bounds[i]` is the exclusive end into
     // `results` for project `i` (project-then-repo order, deterministic).
     var total: usize = 0;
-    for (all) |p| total += p.marker.repos.keys().len;
+    for (all) |p| total += p.marker.entries.len;
 
     const paths = try alloc.alloc([]const u8, total);
     const bounds = try alloc.alloc(usize, all.len);
     var i: usize = 0;
     for (all, bounds) |p, *b| {
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = try p.repoIdentity(alloc, repo_name);
-            paths[i] = try id.clonePath(alloc, ws.cfg.code_root);
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) continue;
+            const src = e.source orelse {
+                try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ try p.qualified(alloc), e.name });
+                continue;
+            };
+            paths[i] = try src.id().clonePath(alloc, ws.cfg.code_root);
             i += 1;
         }
         b.* = i;
     }
 
-    const results = try alloc.alloc(CloneTs, total);
-    var arenas = try parallel.map(void, []const u8, CloneTs, cloneTimestamp, alloc, jobs, {}, paths, results);
+    const results = try alloc.alloc(CloneTs, i);
+    var arenas = try parallel.map(void, []const u8, CloneTs, cloneTimestamp, alloc, jobs, {}, paths[0..i], results);
     defer arenas.deinit();
 
     const entries = try alloc.alloc(Entry, all.len);
@@ -516,4 +520,24 @@ test "cloneTimestamp: null for a missing path" {
 
     const missing = try std.fs.path.join(arena, &.{ sb.root, "does-not-exist" });
     try testing.expect(try cloneTimestamp({}, arena, missing) == null);
+}
+
+test "run: an unusable member is reported and the listing still emits" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
+    try repos.put(arena, "broken", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
 }

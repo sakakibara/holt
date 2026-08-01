@@ -50,11 +50,18 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     try ctx.out.print("content: {s}\n", .{try app.tilde(ctx, p.content_path)});
     try ctx.out.print("hub: {s}\n", .{try app.tilde(ctx, p.hub_path)});
 
-    for (p.marker.repos.keys()) |repo_name| {
-        const id = try p.repoIdentity(alloc, repo_name);
+    for (p.marker.entries) |*e| {
+        if (e.raw_source == null) continue;
+        const src = e.source orelse {
+            try ctx.out.print("  {s}: [", .{e.name});
+            try ui.color(ctx.context.?.color, ctx.out, color_red, "unusable marker value");
+            try ctx.out.writeAll("]\n");
+            continue;
+        };
+        const id = src.id();
         const rel = try id.relPath(alloc);
         const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-        try ctx.out.print("  {s}: {s} ({s}) [", .{ repo_name, rel, try app.tilde(ctx, clone_path) });
+        try ctx.out.print("  {s}: {s} ({s}) [", .{ e.name, rel, try app.tilde(ctx, clone_path) });
         if (!fsutil.exists(clone_path)) {
             try ui.color(ctx.context.?.color, ctx.out, color_red, "missing");
         } else if (!try git.inspectable(alloc, clone_path)) {
@@ -75,8 +82,16 @@ fn runJson(ctx: *app.Ctx, ws: *const workspace.Workspace, p: *const project_mod.
     const alloc = ctx.alloc;
 
     var repo_items: std.ArrayList(json.Value) = .empty;
-    for (p.marker.repos.keys()) |repo_name| {
-        const id = try p.repoIdentity(alloc, repo_name);
+    for (p.marker.entries) |*e| {
+        if (e.raw_source == null) continue;
+        var ro: json.ObjectMap = .empty;
+        try ro.put(alloc, "name", .{ .string = e.name });
+        const src = e.source orelse {
+            try ro.put(alloc, "state", .{ .string = "unusable" });
+            try repo_items.append(alloc, .{ .object = ro });
+            continue;
+        };
+        const id = src.id();
         const rel = try id.relPath(alloc);
         const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
         const state: []const u8 = if (!fsutil.exists(clone_path))
@@ -86,8 +101,6 @@ fn runJson(ctx: *app.Ctx, ws: *const workspace.Workspace, p: *const project_mod.
         else
             "cloned";
 
-        var ro: json.ObjectMap = .empty;
-        try ro.put(alloc, "name", .{ .string = repo_name });
         try ro.put(alloc, "identity", .{ .string = rel });
         try ro.put(alloc, "clone_path", .{ .string = clone_path });
         try ro.put(alloc, "state", .{ .string = state });
@@ -248,4 +261,44 @@ test "run: a corrupt marker reports a malformed-marker hint, not \"no project ma
     try testing.expect(std.mem.indexOf(u8, got.err, "has a malformed marker") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "holt doctor") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "no project matches") == null);
+}
+
+test "run: an unusable member prints its own state and the others still render" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
+    try repos.put(arena, "broken", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "unusable marker value") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "good:") != null);
+}
+
+test "run: --json marks an unusable member and keeps the rest" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
+    try repos.put(arena, "broken", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--json" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "unusable") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "good") != null);
 }

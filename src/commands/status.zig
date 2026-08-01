@@ -97,6 +97,8 @@ fn probe(_: void, arena: std.mem.Allocator, clone_path: []const u8) anyerror!Rep
 
 const Probe = anyerror!RepoState;
 
+const Skipped = struct { project: []const u8, repo: []const u8 };
+
 const Probed = struct {
     /// Flattened member repos across `targets`, in project-then-repo order.
     repo_names: [][]const u8,
@@ -104,6 +106,9 @@ const Probed = struct {
     /// `targets[i]`; `bounds[i-1]` (or 0) is its start.
     bounds: []usize,
     results: []Probe,
+    /// Members whose marker value did not resolve - reported, not probed,
+    /// so one unusable value costs its own row and nothing else.
+    skipped: []Skipped,
     arenas: parallel.Arenas,
 
     fn deinit(self: *Probed) void {
@@ -111,31 +116,48 @@ const Probed = struct {
     }
 };
 
+fn reportSkipped(ctx: *app.Ctx, skipped: []const Skipped) !void {
+    for (skipped) |s| {
+        try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ s.project, s.repo });
+    }
+}
+
 /// Probes every member repo of every project in `targets` through the bounded
 /// pool, preserving project-then-repo order so rendering is deterministic
 /// regardless of the worker count.
 fn probeTargets(alloc: std.mem.Allocator, ws: *const workspace.Workspace, targets: []const project_mod.Project, jobs: ?usize) !Probed {
     var total: usize = 0;
-    for (targets) |p| total += p.marker.repos.keys().len;
+    for (targets) |p| total += p.marker.entries.len;
 
     const paths = try alloc.alloc([]const u8, total);
     const repo_names = try alloc.alloc([]const u8, total);
     const bounds = try alloc.alloc(usize, targets.len);
+    var skipped: std.ArrayList(Skipped) = .empty;
 
     var i: usize = 0;
     for (targets, bounds) |p, *b| {
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = try p.repoIdentity(alloc, repo_name);
-            paths[i] = try id.clonePath(alloc, ws.cfg.code_root);
-            repo_names[i] = repo_name;
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) continue;
+            const src = e.source orelse {
+                try skipped.append(alloc, .{ .project = try p.qualified(alloc), .repo = e.name });
+                continue;
+            };
+            paths[i] = try src.id().clonePath(alloc, ws.cfg.code_root);
+            repo_names[i] = e.name;
             i += 1;
         }
         b.* = i;
     }
 
-    const results = try alloc.alloc(Probe, total);
-    const arenas = try parallel.map(void, []const u8, Probe, probe, alloc, jobs, {}, paths, results);
-    return .{ .repo_names = repo_names, .bounds = bounds, .results = results, .arenas = arenas };
+    const results = try alloc.alloc(Probe, i);
+    const arenas = try parallel.map(void, []const u8, Probe, probe, alloc, jobs, {}, paths[0..i], results);
+    return .{
+        .repo_names = repo_names[0..i],
+        .bounds = bounds,
+        .results = results,
+        .skipped = try skipped.toOwnedSlice(alloc),
+        .arenas = arenas,
+    };
 }
 
 fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
@@ -157,7 +179,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     if (project_query) |q| {
         const p = (try common.resolveOne(ctx, q)) orelse return 1;
-        if (p.marker.repos.keys().len == 0 and (try localOnlyEntries(alloc, p)).len == 0) {
+        var member_count: usize = 0;
+        for (p.marker.entries) |*e| {
+            if (e.raw_source != null) member_count += 1;
+        }
+        if (member_count == 0 and (try localOnlyEntries(alloc, p)).len == 0) {
             const qualified = try p.qualified(alloc);
             try ctx.err.print("{s} has no member repos\n", .{qualified});
             return 0;
@@ -212,6 +238,7 @@ fn runJson(ctx: *app.Ctx, ws: *const workspace.Workspace, org_filter: ?[]const u
 
     var probed = try probeTargets(alloc, ws, targets, jobs);
     defer probed.deinit();
+    try reportSkipped(ctx, probed.skipped);
 
     var items: std.ArrayList(json.Value) = .empty;
     var start: usize = 0;
@@ -316,6 +343,7 @@ fn report(ctx: *app.Ctx, ws: *const workspace.Workspace, targets: []const projec
 
     var probed = try probeTargets(alloc, ws, targets, jobs);
     defer probed.deinit();
+    try reportSkipped(ctx, probed.skipped);
 
     var start: usize = 0;
     for (targets, probed.bounds) |p, end| {
@@ -882,4 +910,26 @@ test "jobsOption: -j 0 and a non-integer are usage errors" {
         const got = try testutil.runCmd(arena, command.run, ws, &.{ "--jobs", "abc" });
         try testing.expectEqual(@as(u8, 2), got.code);
     }
+}
+
+test "run: a member whose marker value never parsed is reported and the rest still probe" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
+    try repos.put(arena, "broken", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "good") != null);
 }

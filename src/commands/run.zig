@@ -117,29 +117,43 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 fn runSingleProject(ctx: *app.Ctx, ws: workspace.Workspace, alloc: std.mem.Allocator, query: []const u8, repo_filter: ?[]const u8, cmd: []const []const u8, jobs: ?usize) anyerror!u8 {
     const p = (try common.resolveOne(ctx, query)) orelse return 1;
 
-    if (p.marker.repos.keys().len == 0) {
+    var member_count: usize = 0;
+    for (p.marker.entries) |*e| {
+        if (e.raw_source != null) member_count += 1;
+    }
+    if (member_count == 0) {
         const qualified = try p.qualified(alloc);
         try ctx.err.print("{s} has no member repos\n", .{qualified});
         return 0;
     }
 
-    var repo_names: []const []const u8 = p.marker.repos.keys();
+    var targets: std.ArrayList(Target) = .empty;
     if (repo_filter) |name| {
-        if (!p.marker.repos.contains(name)) {
+        // An explicitly named repo has no next iteration to continue to:
+        // resolve it or fail the command.
+        const e = p.marker.findRepo(name) orelse {
             const qualified = try p.qualified(alloc);
             try ctx.err.print("holt: {s} has no member repo named \"{s}\"\n", .{ qualified, name });
             return 1;
+        };
+        const src = e.source orelse {
+            const qualified = try p.qualified(alloc);
+            try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ qualified, name });
+            return 1;
+        };
+        const clone_path = try src.id().clonePath(alloc, ws.cfg.code_root);
+        try targets.append(alloc, .{ .header = name, .clone_path = clone_path });
+    } else {
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) continue;
+            const src = e.source orelse {
+                const qualified = try p.qualified(alloc);
+                try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ qualified, e.name });
+                continue;
+            };
+            const clone_path = try src.id().clonePath(alloc, ws.cfg.code_root);
+            try targets.append(alloc, .{ .header = e.name, .clone_path = clone_path });
         }
-        const one = try alloc.alloc([]const u8, 1);
-        one[0] = name;
-        repo_names = one;
-    }
-
-    var targets: std.ArrayList(Target) = .empty;
-    for (repo_names) |repo_name| {
-        const id = try p.repoIdentity(alloc, repo_name);
-        const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
-        try targets.append(alloc, .{ .header = repo_name, .clone_path = clone_path });
     }
 
     return runTargets(ctx, alloc, cmd, targets.items, jobs);
@@ -153,8 +167,13 @@ fn runAcrossProjects(ctx: *app.Ctx, ws: workspace.Workspace, alloc: std.mem.Allo
     var targets: std.ArrayList(Target) = .empty;
 
     for (projects) |p| {
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = try p.repoIdentity(alloc, repo_name);
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) continue;
+            const src = e.source orelse {
+                try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ try p.qualified(alloc), e.name });
+                continue;
+            };
+            const id = src.id();
             const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
             if (seen.contains(clone_path)) continue;
             try seen.put(alloc, clone_path, {});
@@ -791,4 +810,54 @@ test "run: -j 4 with a captured child's stdout appears under its repo header" {
     const header_at = std.mem.indexOf(u8, got.out, "==> repo-a") orelse return error.TestExpectedEqual;
     const child_at = std.mem.indexOf(u8, got.out, "hello-from-child") orelse return error.TestExpectedEqual;
     try testing.expect(child_at > header_at);
+}
+
+test "run: a member whose marker value never parsed is reported and skipped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
+    try repos.put(arena, "broken", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const override = try installCapture(arena);
+    defer override.restore();
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--", "echo", "hi" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "==> good") != null);
+}
+
+test "run: across projects, an unusable member is reported and the sweep continues" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
+    try repos.put(arena, "broken", "not a url");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const override = try installCapture(arena);
+    defer override.restore();
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{ "--all", "--", "echo", "hi" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "good") != null);
 }
