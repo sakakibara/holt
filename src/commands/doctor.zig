@@ -123,8 +123,9 @@ fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
     try passFail(w, color_enabled, "no orphaned content", report.orphaned_content.len == 0);
     for (report.orphaned_content) |o| try w.print("  {s} (hint: leftover content with no marker; remove it manually or restore its marker)\n", .{try app.tilde(ctx, o.path)});
 
-    try passFail(w, color_enabled, "aliases valid", report.stale_aliases.len == 0);
+    try passFail(w, color_enabled, "aliases valid", report.stale_aliases.len == 0 and report.bad_aliases.len == 0);
     for (report.stale_aliases) |a| try w.print("  {s}: alias \"{s}\" has no such member\n", .{ a.project, a.alias });
+    for (report.bad_aliases) |a| try w.print("  {s}: unusable alias value for \"{s}\"\n", .{ a.project, a.repo });
 
     try passFail(w, color_enabled, "no conflict copies", report.conflict_copies.len == 0);
     for (report.conflict_copies) |c| try w.print("  {s} (hint: a cloud-sync conflict copy; merge what you need, then delete it)\n", .{try app.tilde(ctx, c.path)});
@@ -472,6 +473,29 @@ test "run: a stale alias with no matching member is reported" {
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "aliases valid: FAIL") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj: alias \"ghost\" has no such member") != null);
+}
+
+test "run: a member whose alias value is unusable is reported, not silently skipped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "holt", "../evil");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "aliases valid: FAIL") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj: unusable alias value for \"holt\"") != null);
 }
 
 test "run: --fix never repairs the report-only checks" {

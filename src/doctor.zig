@@ -9,8 +9,9 @@
 //! changes), and hub entries whose project has no marker (orphans).
 //! Report-only besides: hub symlinks pointing at a target that no longer
 //! exists (dangling), an `<org>/<name>` present in both projects and archive
-//! (shadow), a markerless directory under an org (orphaned content), and a
-//! marker alias keyed to a repo that is not a member (stale alias).
+//! (shadow), a markerless directory under an org (orphaned content), a
+//! marker alias keyed to a repo that is not a member (stale alias), and a
+//! member whose alias value does not parse (bad alias).
 //!
 //! `fix` applies only the hub-drift repair (`hub.reconcile` for real): it
 //! never touches CONTENT, never deletes a clone, never removes a D1 symlink
@@ -42,6 +43,7 @@ pub const DanglingLink = struct { project: []const u8, link_path: []const u8, ta
 pub const Shadow = struct { org: []const u8, name: []const u8 };
 pub const OrphanedContent = struct { path: []const u8 };
 pub const StaleAlias = struct { project: []const u8, alias: []const u8 };
+pub const BadAlias = struct { project: []const u8, repo: []const u8 };
 pub const ConflictCopy = struct { path: []const u8 };
 pub const Unsurfaced = struct { project: []const u8, rel: []const u8 };
 /// A `*.holt-tmp` clone-staging dir under code_root, left by a clone that was
@@ -82,6 +84,7 @@ pub const Report = struct {
     shadows: []Shadow = &.{},
     orphaned_content: []OrphanedContent = &.{},
     stale_aliases: []StaleAlias = &.{},
+    bad_aliases: []BadAlias = &.{},
     conflict_copies: []ConflictCopy = &.{},
     clone_temps: []CloneTemp = &.{},
     unsurfaced_files: []Unsurfaced = &.{},
@@ -99,6 +102,7 @@ pub const Report = struct {
         if (self.shadows.len != 0) return false;
         if (self.orphaned_content.len != 0) return false;
         if (self.stale_aliases.len != 0) return false;
+        if (self.bad_aliases.len != 0) return false;
         if (self.conflict_copies.len != 0) return false;
         for (self.clone_temps) |t| if (!t.removed) return false;
         for (self.drift) |d| if (d.unresolved()) return false;
@@ -456,6 +460,20 @@ fn findStaleAliases(alloc: std.mem.Allocator, projects: []const Project) ![]Stal
     return out.toOwnedSlice(alloc);
 }
 
+/// A member whose alias value did not parse (non-string, or a segment the
+/// path rules refuse): the alias silently does nothing, so name it.
+fn findBadAliases(alloc: std.mem.Allocator, projects: []const Project) ![]BadAlias {
+    var out: std.ArrayList(BadAlias) = .empty;
+    for (projects) |p| {
+        for (p.marker.entries) |*e| {
+            if (e.alias_fault != null) {
+                try out.append(alloc, .{ .project = try p.qualified(alloc), .repo = e.name });
+            }
+        }
+    }
+    return out.toOwnedSlice(alloc);
+}
+
 /// Windows: content-file mirrors that cannot be surfaced at the hub root
 /// without the symlink privilege (Developer Mode). Empty on POSIX.
 fn findUnsurfacedFiles(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) ![]Unsurfaced {
@@ -560,6 +578,7 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
         .shadows = try findShadows(alloc, active_dirs, archived_dirs),
         .orphaned_content = try findOrphanedContent(alloc, &.{ active_dirs, archived_dirs }),
         .stale_aliases = try findStaleAliases(alloc, scan.ok),
+        .bad_aliases = try findBadAliases(alloc, scan.ok),
         .conflict_copies = try findConflictCopies(alloc, ws),
         .clone_temps = try findCloneTemps(alloc, ws, opts.fix),
         .unsurfaced_files = try findUnsurfacedFiles(alloc, ws, scan.ok),
