@@ -8,6 +8,7 @@
 const std = @import("std");
 const json = @import("json");
 const fsutil = @import("fsutil.zig");
+const identity = @import("identity.zig");
 const diagnostic = @import("diag.zig");
 const testing = std.testing;
 
@@ -29,6 +30,41 @@ pub fn markerEvicted(alloc: std.mem.Allocator, content_dir: []const u8) bool {
     return fsutil.exists(placeholder);
 }
 
+/// Why a member's source or alias value did not parse. Faulted values keep
+/// their raw form and survive load/save; only their parsed field is null.
+pub const Fault = enum { not_a_string, unsafe_segment, unrecognized_url };
+
+/// A remote member: the URL exactly as the marker spelled it, plus the
+/// identity parsed from it. `url` is used at exactly two kinds of site - the
+/// bytes `save` writes and the bytes git receives; `id` everywhere else.
+/// Storing only the identity would rewrite `git@...` remotes as `https://...`
+/// on the next save, since the parse is lossy.
+pub const Remote = struct {
+    url: []const u8,
+    id: identity.Identity,
+};
+
+pub const Source = union(enum) { remote: Remote, local: fsutil.SafeSegment };
+
+pub const Entry = struct {
+    /// Marker key, verbatim. Never joined into a path; a lookup handle and a
+    /// display string.
+    name: []const u8,
+
+    /// The `repos` value exactly as the file held it - any JSON value, so a
+    /// future holt's richer member survives. Null when this entry exists only
+    /// because `aliases` named it.
+    raw_source: ?json.Value,
+    source: ?Source,
+    source_fault: ?Fault,
+
+    /// The `aliases` value exactly as the file held it - also any JSON value,
+    /// for the same reason.
+    raw_alias: ?json.Value,
+    alias: ?fsutil.SafeSegment,
+    alias_fault: ?Fault,
+};
+
 pub const Marker = struct {
     version: u32,
     /// Portable self-description only - the on-disk directory a marker is
@@ -40,24 +76,81 @@ pub const Marker = struct {
     /// Optional per-repo hub link name override, keyed by repo short name.
     /// Absent from the on-disk marker until a user runs `holt repo alias`.
     aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+    /// One entry per `repos` or `aliases` key, in file order: members first,
+    /// then alias-only names.
+    entries: []Entry = &.{},
+    /// Unknown top-level keys, verbatim, re-emitted by `save`.
+    extra: json.ObjectMap = .empty,
+
+    /// Every entry, faulted or not - addressing and removal.
+    pub fn findEntry(m: *const Marker, name: []const u8) ?*Entry {
+        return findIn(m.entries, name);
+    }
+
+    /// Entries the file listed under `repos` - repo queries and membership.
+    /// Excludes alias-only names, so a fuzzy repo query cannot match one.
+    pub fn findRepo(m: *const Marker, name: []const u8) ?*Entry {
+        const e = findIn(m.entries, name) orelse return null;
+        return if (e.raw_source != null) e else null;
+    }
+
+    fn findIn(entries: []Entry, name: []const u8) ?*Entry {
+        for (entries) |*e| if (std.mem.eql(u8, e.name, name)) return e;
+        return null;
+    }
 };
 
-// Mirrors the on-disk shape before validation. `repos` and `aliases` stay
-// dynamic `Value`s here: a StringArrayHashMapUnmanaged has no typed-decode
-// support, and `version` needs a range check before it becomes load's
-// UnsupportedMarkerVersion, so all three get custom handling below rather
-// than decoding straight into `Marker`. `aliases` defaults to null so a
-// marker without the key loads as an empty map.
-const Raw = struct {
-    version: u32,
-    org: []const u8,
-    name: []const u8,
-    repos: json.Value,
-    aliases: ?json.Value = null,
-};
+/// Required string field lookup with the decoder's diagnostics reproduced.
+fn getString(alloc: std.mem.Allocator, obj: json.ObjectMap, key: []const u8, diag: ?*diagnostic.Diagnostic) ![]const u8 {
+    const v = obj.get(key) orelse {
+        if (diag) |d| d.set(alloc, "missing required field `{s}`", .{key});
+        return error.MissingField;
+    };
+    if (v != .string) {
+        if (diag) |d| d.set(alloc, "expected string, got {s}", .{@tagName(v)});
+        return error.TypeMismatch;
+    }
+    return v.string;
+}
+
+/// Classifies one member's raw `repos` value into an `Entry`. A value that
+/// does not parse keeps its raw form and gets a fault instead of an error.
+fn sourceEntry(alloc: std.mem.Allocator, name: []const u8, raw: json.Value) error{OutOfMemory}!Entry {
+    var e: Entry = .{
+        .name = name,
+        .raw_source = raw,
+        .source = null,
+        .source_fault = null,
+        .raw_alias = null,
+        .alias = null,
+        .alias_fault = null,
+    };
+    if (raw != .string) {
+        e.source_fault = .not_a_string;
+        return e;
+    }
+    const s = raw.string;
+    if (std.mem.startsWith(u8, s, "local:")) {
+        if (fsutil.SafeSegment.parse(s["local:".len..])) |seg| {
+            e.source = .{ .local = seg };
+        } else {
+            e.source_fault = .unsafe_segment;
+        }
+        return e;
+    }
+    if (identity.fromUrl(alloc, s)) |id| {
+        e.source = .{ .remote = .{ .url = s, .id = id } };
+    } else |err| switch (err) {
+        error.UnrecognizedUrl => e.source_fault = .unrecognized_url,
+        error.OutOfMemory => return error.OutOfMemory,
+    }
+    return e;
+}
 
 /// Loads and validates the marker at `path`. All returned memory lives in
 /// `alloc` (the caller's per-command arena); nothing is individually freed.
+/// `entries` classifies each member and alias at this boundary; a value that
+/// fails its predicate is kept raw and marked with a fault, never dropped.
 ///
 /// A diagnostic names only what is wrong, never the path it was read from:
 /// the caller already holds `path` and is the one that knows how to show it
@@ -66,7 +159,7 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
     const src = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, alloc, .limited(1 << 20));
 
     var errs: std.ArrayList(json.Diagnostic) = .empty;
-    const raw = json.parseInto(Raw, alloc, src, .{ .errors = &errs }) catch |err| {
+    const root = json.parse(alloc, src, .{ .errors = &errs }) catch |err| {
         if (diag) |d| {
             if (errs.items.len > 0) {
                 d.set(alloc, "{s}", .{errs.items[0].message});
@@ -76,28 +169,68 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
         }
         return err;
     };
+    if (root != .object) {
+        if (diag) |d| d.set(alloc, "expected object, got {s}", .{@tagName(root)});
+        return error.TypeMismatch;
+    }
+    const obj = root.object;
 
-    if (raw.version != marker_version) {
-        if (diag) |d| d.set(alloc, "unsupported marker version {d} (want {d})", .{ raw.version, marker_version });
+    // Known keys are lifted out by hand rather than through the decoder, so
+    // the top level stays a `json.Value` object; the decoder's diagnostics
+    // for the required fields are reproduced below.
+    var kit = obj.iterator();
+    outer: while (kit.next()) |kv| {
+        inline for ([_][]const u8{ "version", "org", "name", "repos", "aliases" }) |known| {
+            if (std.mem.eql(u8, kv.key_ptr.*, known)) continue :outer;
+        }
+        if (diag) |d| d.set(alloc, "unknown field `{s}`", .{kv.key_ptr.*});
+        return error.UnknownField;
+    }
+
+    const version_val = obj.get("version") orelse {
+        if (diag) |d| d.set(alloc, "missing required field `version`", .{});
+        return error.MissingField;
+    };
+    const version: u32 = switch (version_val) {
+        .integer => |n| std.math.cast(u32, n) orelse {
+            if (diag) |d| d.set(alloc, "integer {d} out of range for u32", .{n});
+            return error.Overflow;
+        },
+        else => {
+            if (diag) |d| d.set(alloc, "expected integer, got {s}", .{@tagName(version_val)});
+            return error.TypeMismatch;
+        },
+    };
+    const org = try getString(alloc, obj, "org", diag);
+    const name = try getString(alloc, obj, "name", diag);
+    const raw_repos = obj.get("repos") orelse {
+        if (diag) |d| d.set(alloc, "missing required field `repos`", .{});
+        return error.MissingField;
+    };
+
+    if (version != marker_version) {
+        if (diag) |d| d.set(alloc, "unsupported marker version {d} (want {d})", .{ version, marker_version });
         return error.UnsupportedMarkerVersion;
     }
-    if (raw.repos != .object) {
+    if (raw_repos != .object) {
         if (diag) |d| d.set(alloc, "\"repos\" must be an object", .{});
         return error.MalformedMarker;
     }
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    var it = raw.repos.object.iterator();
+    var entries: std.ArrayList(Entry) = .empty;
+    var it = raw_repos.object.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.* != .string) {
             if (diag) |d| d.set(alloc, "repos.{s} must be a string", .{entry.key_ptr.*});
             return error.MalformedMarker;
         }
         try repos.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
+        try entries.append(alloc, try sourceEntry(alloc, entry.key_ptr.*, entry.value_ptr.*));
     }
 
     var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    if (raw.aliases) |av| {
+    if (obj.get("aliases")) |av| {
         if (av != .object) {
             if (diag) |d| d.set(alloc, "\"aliases\" must be an object", .{});
             return error.MalformedMarker;
@@ -109,10 +242,39 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
                 return error.MalformedMarker;
             }
             try aliases.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
+
+            const target = Marker.findIn(entries.items, entry.key_ptr.*) orelse blk: {
+                try entries.append(alloc, .{
+                    .name = entry.key_ptr.*,
+                    .raw_source = null,
+                    .source = null,
+                    .source_fault = null,
+                    .raw_alias = null,
+                    .alias = null,
+                    .alias_fault = null,
+                });
+                break :blk &entries.items[entries.items.len - 1];
+            };
+            target.raw_alias = entry.value_ptr.*;
+            if (entry.value_ptr.* != .string) {
+                target.alias_fault = .not_a_string;
+            } else if (fsutil.SafeSegment.parse(entry.value_ptr.*.string)) |seg| {
+                target.alias = seg;
+            } else {
+                target.alias_fault = .unsafe_segment;
+            }
         }
     }
 
-    return .{ .version = raw.version, .org = raw.org, .name = raw.name, .repos = repos, .aliases = aliases };
+    return .{
+        .version = version,
+        .org = org,
+        .name = name,
+        .repos = repos,
+        .aliases = aliases,
+        .entries = try entries.toOwnedSlice(alloc),
+        .extra = .empty,
+    };
 }
 
 /// Writes `m` to `path` as sorted-key, 2-space pretty JSON with a trailing
@@ -414,6 +576,86 @@ test "load: rejects a non-object repos value" {
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.MalformedMarker, load(arena, path, &d));
     try testing.expect(std.mem.indexOf(u8, d.message, "repos") != null);
+}
+
+test "load: entries classify remote, local, and faulted sources, keeping raw values" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = marker_basename,
+        .data = "{\"version\":1,\"org\":\"acme\",\"name\":\"proj\",\"repos\":{" ++
+            "\"widget\":\"git@github.com:acme/widget.git\"," ++
+            "\"scratch\":\"local:scratch\"," ++
+            "\"evil\":\"local:../../evil\"," ++
+            "\"dashy\":\"-dashy://github.com/acme/gadget\"}}\n",
+    });
+    const path = try markerPath(&tmp);
+    defer testing.allocator.free(path);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const m = try load(arena, path, null);
+    try testing.expectEqual(@as(usize, 4), m.entries.len);
+
+    const widget = m.findRepo("widget").?;
+    try testing.expectEqualStrings("git@github.com:acme/widget.git", widget.source.?.remote.url);
+    try testing.expectEqualStrings("github.com", widget.source.?.remote.id.host);
+    try testing.expectEqualStrings("acme", widget.source.?.remote.id.owner);
+    try testing.expectEqualStrings("widget", widget.source.?.remote.id.repo);
+    try testing.expect(widget.source_fault == null);
+
+    const scratch = m.findRepo("scratch").?;
+    try testing.expectEqualStrings("scratch", scratch.source.?.local.bytes);
+
+    const evil = m.findRepo("evil").?;
+    try testing.expect(evil.source == null);
+    try testing.expectEqual(Fault.unsafe_segment, evil.source_fault.?);
+    try testing.expectEqualStrings("local:../../evil", evil.raw_source.?.string);
+
+    const dashy = m.findRepo("dashy").?;
+    try testing.expect(dashy.source == null);
+    try testing.expectEqual(Fault.unrecognized_url, dashy.source_fault.?);
+    try testing.expectEqualStrings("-dashy://github.com/acme/gadget", dashy.raw_source.?.string);
+}
+
+test "load: aliases attach to their member, fault on unsafe values, and orphan into their own entry" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = marker_basename,
+        .data = "{\"version\":1,\"org\":\"acme\",\"name\":\"proj\"," ++
+            "\"repos\":{\"widget\":\"https://github.com/acme/widget\",\"gizmo\":\"https://github.com/acme/gizmo\"}," ++
+            "\"aliases\":{\"widget\":\"gadget\",\"gizmo\":\"../evil\",\"ghost\":\"x\"}}\n",
+    });
+    const path = try markerPath(&tmp);
+    defer testing.allocator.free(path);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const m = try load(arena, path, null);
+    try testing.expectEqual(@as(usize, 3), m.entries.len);
+
+    const widget = m.findEntry("widget").?;
+    try testing.expectEqualStrings("gadget", widget.alias.?.bytes);
+    try testing.expect(widget.alias_fault == null);
+
+    // Unusable alias on a valid member: only the alias is lost.
+    const gizmo = m.findEntry("gizmo").?;
+    try testing.expect(gizmo.source != null);
+    try testing.expect(gizmo.alias == null);
+    try testing.expectEqual(Fault.unsafe_segment, gizmo.alias_fault.?);
+    try testing.expectEqualStrings("../evil", gizmo.raw_alias.?.string);
+
+    // Orphan alias: addressable, but never a repo-query match.
+    const ghost = m.findEntry("ghost").?;
+    try testing.expect(ghost.raw_source == null);
+    try testing.expectEqualStrings("x", ghost.alias.?.bytes);
+    try testing.expect(m.findRepo("ghost") == null);
+    try testing.expect(m.findRepo("widget") != null);
 }
 
 test "load: rejects a non-string repos entry" {
