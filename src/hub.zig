@@ -131,7 +131,7 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
     for (repo_names, aliases) |name, *slot| {
         slot.* = null;
         const alias = p.marker.aliases.get(name) orelse continue;
-        if (isValidLinkName(alias)) {
+        if (fsutil.SafeSegment.parse(alias) != null) {
             slot.* = alias;
         } else {
             try ignored_aliases.append(alloc, name);
@@ -687,24 +687,6 @@ test "desiredLinks: aliasing one of two colliding members frees the other to sta
     }
     try testing.expect(saw_alias);
     try testing.expect(saw_flat_docs);
-}
-
-test "isValidLinkName: accepts a plain segment, refuses every form that leaves the code dir" {
-    try testing.expect(isValidLinkName("gadget"));
-    try testing.expect(isValidLinkName("my-docs"));
-    try testing.expect(isValidLinkName("web.app"));
-
-    try testing.expect(!isValidLinkName(""));
-    try testing.expect(!isValidLinkName("."));
-    try testing.expect(!isValidLinkName(".."));
-    try testing.expect(!isValidLinkName("/"));
-    try testing.expect(!isValidLinkName("../../evil"));
-    try testing.expect(!isValidLinkName("a/b"));
-    try testing.expect(!isValidLinkName("..\\..\\evil"));
-    try testing.expect(!isValidLinkName("a\\b"));
-    try testing.expect(!isValidLinkName("~"));
-    try testing.expect(!isValidLinkName("~/evil"));
-    try testing.expect(!isValidLinkName("~evil"));
 }
 
 test "desiredLinks: a traversing alias is ignored and the member keeps its derived name" {

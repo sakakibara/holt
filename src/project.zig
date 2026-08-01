@@ -5,6 +5,7 @@
 const std = @import("std");
 const marker = @import("marker.zig");
 const identity = @import("identity.zig");
+const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
 
@@ -36,7 +37,7 @@ pub const Project = struct {
         const url = self.marker.repos.get(repo_name) orelse return error.UnknownRepo;
         if (std.mem.startsWith(u8, url, "local:")) {
             const name = url["local:".len..];
-            if (!identity.isSafeLocalName(name)) return error.UnrecognizedUrl;
+            if (fsutil.SafeSegment.parse(name) == null) return error.UnrecognizedUrl;
             return identity.local(name);
         }
         return identity.fromUrl(alloc, url);

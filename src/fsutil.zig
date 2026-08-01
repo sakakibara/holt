@@ -139,6 +139,27 @@ pub fn toAbsolute(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.fs.path.resolve(alloc, &.{ buf[0..n], path });
 }
 
+/// A single path segment safe to join under a holt-managed root without
+/// normalizing: non-empty; not `.` or `..`; no `/` or `\`; not `~`-leading;
+/// not `.git` (clone detection reads `exists(<dir>/.git)`); and no
+/// `.holt-tmp` or `@worktrees` suffix (both name holt's own staging and
+/// worktree siblings). `parse` is the one construction point; Zig has no
+/// field privacy, so the guarantee is grep-auditable, not type-enforced.
+pub const SafeSegment = struct {
+    bytes: []const u8,
+
+    pub fn parse(bytes: []const u8) ?SafeSegment {
+        if (bytes.len == 0) return null;
+        if (std.mem.eql(u8, bytes, ".") or std.mem.eql(u8, bytes, "..")) return null;
+        if (bytes[0] == '~') return null;
+        for (bytes) |c| if (c == '/' or c == '\\') return null;
+        if (std.mem.eql(u8, bytes, ".git")) return null;
+        if (std.mem.endsWith(u8, bytes, ".holt-tmp")) return null;
+        if (std.mem.endsWith(u8, bytes, "@worktrees")) return null;
+        return .{ .bytes = bytes };
+    }
+};
+
 /// Lexical containment check on two already-resolved absolute paths: true
 /// if `child` equals `parent` or is nested under it. Does no filesystem
 /// access or path resolution itself.
@@ -600,6 +621,22 @@ test "pathIsInside: lexical containment on resolved absolute paths" {
     try testing.expect(pathIsInside(a_b_c, a_b));
     try testing.expect(!pathIsInside(a_bc, a_b));
     try testing.expect(pathIsInside(a_b, a_b));
+}
+
+test "SafeSegment.parse: accepts a plain segment, refuses every form that escapes or shadows a managed root" {
+    for ([_][]const u8{ "scratch", "my.repo", "a-b_c", "x~y", ".dotfiles", ".gitignore", "worktrees", "holt-tmp" }) |name| {
+        try testing.expect(SafeSegment.parse(name) != null);
+        try testing.expectEqualStrings(name, SafeSegment.parse(name).?.bytes);
+    }
+    for ([_][]const u8{
+        "",           ".",          "..",
+        "a/b",        "../../evil", "..\\..\\evil",
+        "a\\b",       "~",          "~/evil",
+        "~evil",      ".git",       ".holt-tmp",
+        "x.holt-tmp", "@worktrees", "x@worktrees",
+    }) |bad| {
+        try testing.expect(SafeSegment.parse(bad) == null);
+    }
 }
 
 test "exists: true for a present path, false for a missing one" {

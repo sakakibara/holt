@@ -129,7 +129,7 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
     const clone_path = try target.id.clonePath(alloc, ws.cfg.code_root);
 
     if (target.id.isLocal()) {
-        if (!identity.isSafeLocalName(a.spec)) {
+        if (fsutil.SafeSegment.parse(a.spec) == null) {
             try ctx.err.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
             return 1;
         }
@@ -423,7 +423,7 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
         // so it is held to the same single-safe-segment rule every reader of a
         // "local:<name>" marker value applies. Refusing here - before the
         // move - keeps adopt from minting a value nothing can read back.
-        if (!identity.isSafeLocalName(basename)) {
+        if (fsutil.SafeSegment.parse(basename) == null) {
             try ctx.err.print("holt: directory name \"{s}\" is not a usable repo name; rename the directory or give it an origin\n", .{basename});
             return 1;
         }
@@ -705,7 +705,7 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
 fn identityFromKey(alloc: std.mem.Allocator, key: []const u8) !identity.Identity {
     if (std.mem.startsWith(u8, key, "local/")) {
         const name = key["local/".len..];
-        if (!identity.isSafeLocalName(name)) return error.UnrecognizedUrl;
+        if (fsutil.SafeSegment.parse(name) == null) return error.UnrecognizedUrl;
         return identity.local(name);
     }
     return identity.fromUrl(alloc, try identity.expand(alloc, key));
@@ -929,7 +929,7 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
     // `findReferencing` matches marker values by raw string compare, so the
     // name never passes through `repoIdentity`; check it here, before it
     // becomes the clone path this command moves and prunes around.
-    if (!identity.isSafeLocalName(name)) {
+    if (fsutil.SafeSegment.parse(name) == null) {
         try ctx.err.print("holt: \"{s}\" is not a usable local repo name\n", .{name});
         return 1;
     }
@@ -1077,7 +1077,7 @@ fn runAlias(ctx: *app.Ctx, a: cli.Args(AliasSpec)) anyerror!u8 {
     }
 
     if (new_name) |name| {
-        if (!hub.isValidLinkName(name)) {
+        if (fsutil.SafeSegment.parse(name) == null) {
             try ctx.err.print("holt: \"{s}\" is not a valid link name (must be a single path segment)\n", .{name});
             return 1;
         }
@@ -1174,7 +1174,7 @@ test "new: an unsafe local name is rejected" {
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    for ([_][]const u8{ "..", ".hidden", "~x" }) |bad| {
+    for ([_][]const u8{ "..", "~x", ".git", "x.holt-tmp", "x@worktrees" }) |bad| {
         const got = try testutil.runCmd(arena, new_command.run, ws, &.{bad});
         try testing.expectEqual(@as(u8, 1), got.code);
     }
@@ -1235,7 +1235,7 @@ test "new: a scheme'd url with a traversal segment is refused via fromUrl" {
 
     // A full URL bypasses expand's shorthand path and reaches fromUrl, which
     // rejects the ".." segment - proving new's classify/run error routing
-    // (not isSafeLocalName, which only guards the bare-name local branch).
+    // (not the SafeSegment guard, which only covers the bare-name local branch).
     const got = try testutil.runCmd(arena, new_command.run, ws, &.{"https://github.com/acme/../evil"});
     try testing.expectEqual(@as(u8, 1), got.code);
     // Nothing created on refusal.
@@ -1734,6 +1734,33 @@ test "adopt: adopts a no-remote dir into local/<basename> with a local: marker v
     try testing.expectEqualStrings("local:myrepo", loaded.repos.get("myrepo").?);
 }
 
+test "adopt: a dot-leading no-remote dir is a usable local name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
+
+    const stray_path = try std.fs.path.join(arena, &.{ sb.root, ".dotfiles" });
+    try fsutil.ensureDir(stray_path);
+    try testutil.runGit(&sb, stray_path, &.{ "init", "-b", "main" });
+
+    const got = try testutil.runCmd(arena, adopt_command.run, ws, &.{ stray_path, "-p", "proj" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const want_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", ".dotfiles" });
+    try testing.expect(!fsutil.exists(stray_path));
+    try testing.expect(fsutil.exists(want_path));
+
+    const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const loaded = try marker.load(arena, marker_path, null);
+    try testing.expectEqualStrings("local:.dotfiles", loaded.repos.get(".dotfiles").?);
+}
+
 test "adopt: a no-remote dir whose name is unusable as a local name is refused before the move" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1747,7 +1774,7 @@ test "adopt: a no-remote dir whose name is unusable as a local name is refused b
 
     // The basename is the whole local identity here, and every reader of a
     // "local:<name>" marker value rejects these - so adopt must never mint one.
-    for ([_][]const u8{ ".dotfiles", "~cache" }) |bad_name| {
+    for ([_][]const u8{ "~cache", "x.holt-tmp", "x@worktrees" }) |bad_name| {
         const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray", bad_name });
         try fsutil.ensureDir(stray_path);
         try testutil.runGit(&sb, stray_path, &.{ "init", "-b", "main" });

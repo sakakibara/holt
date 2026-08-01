@@ -48,9 +48,9 @@ pub const Identity = struct {
 
 /// Identity for a repo with no remote yet; relPath is "local/<name>". Unlike
 /// fromUrl, fields borrow `name`/static strings rather than owning memory.
-/// `name` must satisfy `isSafeLocalName` - this constructor does no parsing
-/// of its own, so a caller taking the name from user input or a marker file
-/// checks it first.
+/// `name` must have passed `fsutil.SafeSegment.parse` - this constructor
+/// does no parsing of its own, so a caller taking the name from user input
+/// or a marker file checks it first.
 pub fn local(name: []const u8) Identity {
     return .{ .host = "local", .owner = "", .repo = name };
 }
@@ -361,15 +361,6 @@ test "relPath and clonePath join host/owner/repo, including subgroup owners" {
     const want_clone = try std.fs.path.join(testing.allocator, &.{ "/code", "gitlab.com", "a", "b", "c" });
     defer testing.allocator.free(want_clone);
     try testing.expectEqualStrings(want_clone, clone);
-}
-
-test "isSafeLocalName: accepts a plain segment, rejects traversal, separators, and dot/tilde leads" {
-    for ([_][]const u8{ "scratch", "my.repo", "a-b_c", "x~y" }) |name| {
-        try testing.expect(isSafeLocalName(name));
-    }
-    for ([_][]const u8{ "", ".", "..", ".hidden", "~x", "a/b", "..\\..\\evil", "../../outside/victim" }) |bad| {
-        try testing.expect(!isSafeLocalName(bad));
-    }
 }
 
 test "local: isLocal, relPath, and clonePath" {

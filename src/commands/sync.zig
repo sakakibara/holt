@@ -225,7 +225,7 @@ fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem
             if (!std.mem.startsWith(u8, url, "local:")) continue;
 
             const name = url["local:".len..];
-            if (!identity.isSafeLocalName(name)) continue;
+            if (fsutil.SafeSegment.parse(name) == null) continue;
             if (seen.contains(name)) continue;
             try seen.put(alloc, name, {});
 

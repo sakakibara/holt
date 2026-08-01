@@ -229,7 +229,7 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
                     if (!std.mem.startsWith(u8, url, "local:")) continue;
                     // Never offer a name `repo promote` would refuse.
                     const local_name = url["local:".len..];
-                    if (!identity.isSafeLocalName(local_name)) continue;
+                    if (fsutil.SafeSegment.parse(local_name) == null) continue;
                     try seen.put(alloc, local_name, {});
                 }
             }
