@@ -447,9 +447,9 @@ fn collectConflictCopies(alloc: std.mem.Allocator, root_path: []const u8, out: *
 fn findStaleAliases(alloc: std.mem.Allocator, projects: []const Project) ![]StaleAlias {
     var out: std.ArrayList(StaleAlias) = .empty;
     for (projects) |p| {
-        for (p.marker.aliases.keys()) |alias_key| {
-            if (!p.marker.repos.contains(alias_key)) {
-                try out.append(alloc, .{ .project = try p.qualified(alloc), .alias = alias_key });
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) {
+                try out.append(alloc, .{ .project = try p.qualified(alloc), .alias = e.name });
             }
         }
     }
@@ -492,17 +492,21 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
     var present: std.ArrayList(CloneCheck) = .empty;
     for (scan.ok) |p| {
         const qualified = try p.qualified(alloc);
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = p.repoIdentity(alloc, repo_name) catch {
-                try bad_identities.append(alloc, .{ .project = qualified, .repo = repo_name });
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) continue;
+            const src = e.source orelse {
+                try bad_identities.append(alloc, .{ .project = qualified, .repo = e.name });
                 continue;
             };
-            if (id.isLocal()) continue;
-            const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
+            const rem = switch (src) {
+                .remote => |r| r,
+                .local => continue,
+            };
+            const clone_path = try rem.id.clonePath(alloc, ws.cfg.code_root);
             if (!fsutil.exists(clone_path)) {
-                try missing_clones.append(alloc, .{ .project = qualified, .repo = repo_name, .path = clone_path });
+                try missing_clones.append(alloc, .{ .project = qualified, .repo = e.name, .path = clone_path });
             } else {
-                try present.append(alloc, .{ .project = qualified, .repo = repo_name, .path = clone_path });
+                try present.append(alloc, .{ .project = qualified, .repo = e.name, .path = clone_path });
             }
         }
     }
