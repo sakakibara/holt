@@ -205,8 +205,9 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             if (prev) |project_query| {
                 if (try oneProject(alloc, w, project_query)) |p| {
                     var out: std.ArrayList(Candidate) = .empty;
-                    for (p.marker.repos.keys()) |name| {
-                        try out.append(alloc, .{ .value = name, .description = repoState(alloc, p, name, w.cfg.code_root) });
+                    for (p.marker.entries) |*e| {
+                        if (e.raw_source == null) continue;
+                        try out.append(alloc, .{ .value = e.name, .description = repoState(alloc, e, w.cfg.code_root) });
                     }
                     return out.toOwnedSlice(alloc);
                 }
@@ -214,7 +215,10 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             const all = try w.list(alloc);
             var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
             for (all) |p| {
-                for (p.marker.repos.keys()) |name| try seen.put(alloc, name, {});
+                for (p.marker.entries) |*e| {
+                    if (e.raw_source == null) continue;
+                    try seen.put(alloc, e.name, {});
+                }
             }
             var out: std.ArrayList([]const u8) = .empty;
             for (seen.keys()) |name| try out.append(alloc, name);
@@ -224,13 +228,13 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
             const all = try w.list(alloc);
             var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
             for (all) |p| {
-                for (p.marker.repos.keys()) |name| {
-                    const url = p.marker.repos.get(name).?;
-                    if (!std.mem.startsWith(u8, url, "local:")) continue;
-                    // Never offer a name `repo promote` would refuse.
-                    const local_name = url["local:".len..];
-                    if (fsutil.SafeSegment.parse(local_name) == null) continue;
-                    try seen.put(alloc, local_name, {});
+                for (p.marker.entries) |*e| {
+                    const src = e.source orelse continue;
+                    const seg = switch (src) {
+                        .local => |s| s,
+                        .remote => continue,
+                    };
+                    try seen.put(alloc, seg.bytes, {});
                 }
             }
             var out: std.ArrayList([]const u8) = .empty;
@@ -270,8 +274,9 @@ fn oneProject(alloc: std.mem.Allocator, w: *const workspace.Workspace, query: []
 /// for a repo with no remote yet (a `local:` marker entry), else `"cloned"`
 /// or `"missing"` depending on whether its clone path exists on disk. One
 /// `fsutil.exists` check per repo - no git.
-fn repoState(alloc: std.mem.Allocator, p: project.Project, name: []const u8, code_root: []const u8) ?[]const u8 {
-    const id = p.repoIdentity(alloc, name) catch return null;
+fn repoState(alloc: std.mem.Allocator, e: *const marker.Entry, code_root: []const u8) ?[]const u8 {
+    const src = e.source orelse return null;
+    const id = src.id();
     if (id.isLocal()) return "local";
     const clone_path = id.clonePath(alloc, code_root) catch return null;
     return if (fsutil.exists(clone_path)) "cloned" else "missing";
@@ -291,17 +296,9 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
     };
 
     const repo_query = repo_sel[slash + 1 ..];
-    var member: ?[]const u8 = null;
-    for (p.marker.repos.keys()) |name| {
-        if (std.mem.eql(u8, name, repo_query)) {
-            member = name;
-            break;
-        }
-    }
-    const repo_name = member orelse return &.{};
-
-    const id = p.repoIdentity(alloc, repo_name) catch return &.{};
-    const clone_path = try id.clonePath(alloc, w.cfg.code_root);
+    const member = p.marker.findRepo(repo_query) orelse return &.{};
+    const src = member.source orelse return &.{};
+    const clone_path = try src.id().clonePath(alloc, w.cfg.code_root);
     const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
 
     var out: std.ArrayList(Candidate) = .empty;

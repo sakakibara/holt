@@ -262,9 +262,9 @@ pub const Workspace = struct {
 
         var matches: std.ArrayList(Project) = .empty;
         for (all) |p| {
-            for (p.marker.repos.keys()) |repo_name| {
-                const repo_id = p.repoIdentity(alloc, repo_name) catch continue;
-                if (identity.Identity.eql(repo_id, id)) {
+            for (p.marker.entries) |*e| {
+                const src = e.source orelse continue;
+                if (identity.Identity.eql(src.id(), id)) {
                     try matches.append(alloc, p);
                     break;
                 }

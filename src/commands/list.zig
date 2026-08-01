@@ -96,7 +96,10 @@ fn runJson(ctx: *app.Ctx, all: []const project_mod.Project, org_filter: ?[]const
         }
 
         var repo_items: std.ArrayList(json.Value) = .empty;
-        for (p.marker.repos.keys()) |name| try repo_items.append(alloc, .{ .string = name });
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) continue;
+            try repo_items.append(alloc, .{ .string = e.name });
+        }
 
         var obj: json.ObjectMap = .empty;
         try obj.put(alloc, "org", .{ .string = p.org });

@@ -220,12 +220,13 @@ fn hubHasRealFile(alloc: std.mem.Allocator, path: []const u8) !bool {
 fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, all: []const project_mod.Project) !void {
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
     for (all) |p| {
-        for (p.marker.repos.keys()) |repo_name| {
-            const url = p.marker.repos.get(repo_name).?;
-            if (!std.mem.startsWith(u8, url, "local:")) continue;
-
-            const name = url["local:".len..];
-            const seg = fsutil.SafeSegment.parse(name) orelse continue;
+        for (p.marker.entries) |*e| {
+            const src = e.source orelse continue;
+            const seg = switch (src) {
+                .local => |s| s,
+                .remote => continue,
+            };
+            const name = seg.bytes;
             if (seen.contains(name)) continue;
             try seen.put(alloc, name, {});
 
