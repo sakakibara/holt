@@ -102,6 +102,7 @@ pub fn worktreeAdd(alloc: std.mem.Allocator, repo: []const u8, path: []const u8,
     // Windows; a native `\`-path here can fail to match on a later
     // `worktree remove`/`repair`, so forward-slash it before handing it off.
     const git_path = try fsutil.forwardSlashed(alloc, path);
+    defer alloc.free(git_path);
     // `worktree.useRelativePaths` (git 2.48+) records the worktree's admin
     // links relative to the clone, so moving the clone and its sibling
     // `@worktrees` dir together (see common.moveClone) keeps them working with
@@ -134,6 +135,7 @@ pub fn worktreeList(alloc: std.mem.Allocator, repo: []const u8) ![]u8 {
 /// --force, which is deliberately not passed: `diag` carries that refusal.
 pub fn worktreeRemove(alloc: std.mem.Allocator, repo: []const u8, path: []const u8, diag: ?*diagnostic.Diagnostic) !void {
     const git_path = try fsutil.forwardSlashed(alloc, path);
+    defer alloc.free(git_path);
     const res = try run(alloc, &.{ "git", "-C", repo, "worktree", "remove", git_path }, null);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
@@ -155,7 +157,15 @@ pub fn worktreeRepair(alloc: std.mem.Allocator, repo: []const u8, paths: []const
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(alloc);
     try argv.appendSlice(alloc, &.{ "git", "-C", repo, "worktree", "repair" });
-    for (paths) |p| try argv.append(alloc, try fsutil.forwardSlashed(alloc, p));
+    const fixed_len = argv.items.len;
+    defer for (argv.items[fixed_len..]) |p| alloc.free(p);
+    for (paths) |p| {
+        const slashed = try fsutil.forwardSlashed(alloc, p);
+        argv.append(alloc, slashed) catch |err| {
+            alloc.free(slashed);
+            return err;
+        };
+    }
     const res = run(alloc, argv.items, null) catch return;
     alloc.free(res.stdout);
     alloc.free(res.stderr);
@@ -433,6 +443,29 @@ test "worktreeAdd: a branch beginning with `-` is a ref git rejects, not an opti
     );
     defer testing.allocator.free(d.message);
     try testing.expect(!fsutil.exists(wt_path));
+}
+
+test "worktreeAdd: a backslashed path is slashed for git without leaking the copy" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    // A `\` in the path makes forwardSlashed copy on every platform, so the
+    // testing allocator bounds the copy's lifetime here, not only in Windows
+    // CI where every absolute path carries one.
+    const wt_path = try std.fs.path.join(testing.allocator, &.{ sb.root, "wt\\sub" });
+    defer testing.allocator.free(wt_path);
+
+    var d: diagnostic.Diagnostic = .{};
+    try testing.expectError(
+        error.WorktreeAddFailed,
+        worktreeAdd(testing.allocator, work, wt_path, "--detach", &d),
+    );
+    defer testing.allocator.free(d.message);
 }
 
 test "inspectable: true for a real repo, false for a plain directory and a nonexistent path" {

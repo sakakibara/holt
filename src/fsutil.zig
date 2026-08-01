@@ -64,12 +64,10 @@ pub fn joinSlashy(alloc: std.mem.Allocator, base: []const u8, rel: []const u8) !
 /// Forward-slashes `path` - git's own internals (worktree admin links,
 /// `insteadOf` config values, and other paths it later matches by string
 /// comparison) normalize on '/' even on Windows, so a native `\`-path handed
-/// to it can fail to match what it already has on file. A no-op (and thus
-/// the identical slice) on POSIX, where '\' never appears in a path, and
-/// whenever `path` already carries no backslash. Caller owns the returned
-/// memory only when a copy was actually made.
-pub fn forwardSlashed(alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, path, '\\') == null) return path;
+/// to it can fail to match what it already has on file. Always returns an
+/// owned copy, even when nothing needed replacing, so the caller frees it
+/// unconditionally.
+pub fn forwardSlashed(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     const out = try alloc.dupe(u8, path);
     std.mem.replaceScalar(u8, out, '\\', '/');
     return out;
