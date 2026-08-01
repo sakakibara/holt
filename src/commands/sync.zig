@@ -225,11 +225,11 @@ fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem
             if (!std.mem.startsWith(u8, url, "local:")) continue;
 
             const name = url["local:".len..];
-            if (fsutil.SafeSegment.parse(name) == null) continue;
+            const seg = fsutil.SafeSegment.parse(name) orelse continue;
             if (seen.contains(name)) continue;
             try seen.put(alloc, name, {});
 
-            const local_clone_path = try identity.local(name).clonePath(alloc, ws.cfg.code_root);
+            const local_clone_path = try identity.local(seg).clonePath(alloc, ws.cfg.code_root);
             if (!fsutil.exists(local_clone_path)) continue;
             const origin = try git.remoteUrl(alloc, local_clone_path) orelse continue;
             const new_id = identity.fromUrl(alloc, origin) catch continue;
@@ -443,7 +443,7 @@ test "run: hints a local repo that has grown an origin, without moving anything"
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try fsutil.ensureDir(std.fs.path.dirname(local_clone_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, local_clone_path });
     try testutil.runGit(&sb, local_clone_path, &.{ "remote", "set-url", "origin", fake_origin });
@@ -641,7 +641,7 @@ test "run: a local: marker whose clone dir is absent is skipped, not a crash" {
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try testing.expect(!fsutil.exists(local_clone_path));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});

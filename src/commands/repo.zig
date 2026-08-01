@@ -104,12 +104,16 @@ fn runFallback(ctx: *app.Ctx) anyerror!u8 {
 }
 
 /// Classifies <spec>: a recognized url/shorthand yields its identity and the
-/// expanded origin url; a bare word yields a local identity and null url.
+/// expanded origin url; a bare word that is a safe path segment yields a
+/// local identity and null url. Anything else is UnrecognizedUrl.
 const Target = struct { id: identity.Identity, origin: ?[]const u8 };
 
 fn classify(alloc: std.mem.Allocator, spec: []const u8) !Target {
     const url = identity.expand(alloc, spec) catch |err| switch (err) {
-        error.UnrecognizedUrl => return .{ .id = identity.local(spec), .origin = null },
+        error.UnrecognizedUrl => {
+            const seg = fsutil.SafeSegment.parse(spec) orelse return error.UnrecognizedUrl;
+            return .{ .id = identity.local(seg), .origin = null };
+        },
         else => return err,
     };
     return .{ .id = try identity.fromUrl(alloc, url), .origin = url };
@@ -121,19 +125,12 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(NewSpec)) anyerror!u8 {
 
     const target = classify(alloc, a.spec) catch |err| switch (err) {
         error.UnrecognizedUrl => {
-            try ctx.err.print("holt: \"{s}\" is not a valid repo url\n", .{a.spec});
+            try ctx.err.print("holt: \"{s}\" is not a valid repo url or name\n", .{a.spec});
             return 1;
         },
         else => return err,
     };
     const clone_path = try target.id.clonePath(alloc, ws.cfg.code_root);
-
-    if (target.id.isLocal()) {
-        if (fsutil.SafeSegment.parse(a.spec) == null) {
-            try ctx.err.print("holt: \"{s}\" is not a valid repo name\n", .{a.spec});
-            return 1;
-        }
-    }
 
     // Resolve -p BEFORE any filesystem work, so a bad project fails without
     // leaving an orphaned git init behind.
@@ -423,11 +420,11 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
         // so it is held to the same single-safe-segment rule every reader of a
         // "local:<name>" marker value applies. Refusing here - before the
         // move - keeps adopt from minting a value nothing can read back.
-        if (fsutil.SafeSegment.parse(basename) == null) {
+        const seg = fsutil.SafeSegment.parse(basename) orelse {
             try ctx.err.print("holt: directory name \"{s}\" is not a usable repo name; rename the directory or give it an origin\n", .{basename});
             return 1;
-        }
-        id = identity.local(basename);
+        };
+        id = identity.local(seg);
         marker_value = try std.fmt.allocPrint(alloc, "local:{s}", .{basename});
     }
 
@@ -705,8 +702,8 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
 fn identityFromKey(alloc: std.mem.Allocator, key: []const u8) !identity.Identity {
     if (std.mem.startsWith(u8, key, "local/")) {
         const name = key["local/".len..];
-        if (fsutil.SafeSegment.parse(name) == null) return error.UnrecognizedUrl;
-        return identity.local(name);
+        const seg = fsutil.SafeSegment.parse(name) orelse return error.UnrecognizedUrl;
+        return identity.local(seg);
     }
     return identity.fromUrl(alloc, try identity.expand(alloc, key));
 }
@@ -929,10 +926,10 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
     // `findReferencing` matches marker values by raw string compare, so the
     // name never passes through `repoIdentity`; check it here, before it
     // becomes the clone path this command moves and prunes around.
-    if (fsutil.SafeSegment.parse(name) == null) {
+    const seg = fsutil.SafeSegment.parse(name) orelse {
         try ctx.err.print("holt: \"{s}\" is not a usable local repo name\n", .{name});
         return 1;
-    }
+    };
 
     const referencing = try findReferencing(alloc, &ws, name);
     if (referencing.len == 0) {
@@ -940,7 +937,7 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
         return 1;
     }
 
-    const old_path = try identity.local(name).clonePath(alloc, ws.cfg.code_root);
+    const old_path = try identity.local(seg).clonePath(alloc, ws.cfg.code_root);
     const resolved = try resolveOrigin(ctx, alloc, &ws, name, old_path, referencing) orelse return 1;
     const origin = resolved.origin;
     const new_path = resolved.new_path;
@@ -1280,7 +1277,7 @@ test "new: -p attaches a local member (marker local:<name> + hub) and doctor doe
     const m = try marker.load(arena, marker_path, null);
     try testing.expectEqualStrings("local:tool", m.repos.get("tool").?);
 
-    const clone_path = try identity.local("tool").clonePath(arena, ws.cfg.code_root);
+    const clone_path = try identity.local(fsutil.SafeSegment.parse("tool").?).clonePath(arena, ws.cfg.code_root);
     try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ clone_path, ".git" })));
 
     const doctor = @import("../doctor.zig");
@@ -1299,7 +1296,7 @@ test "new: -p to a nonexistent project fails without creating the repo" {
     const got = try testutil.runCmd(arena, new_command.run, ws, &.{ "tool", "-p", "no/such" });
     try testing.expectEqual(@as(u8, 1), got.code);
     // No orphaned repo left behind.
-    const clone_path = try identity.local("tool").clonePath(arena, ws.cfg.code_root);
+    const clone_path = try identity.local(fsutil.SafeSegment.parse("tool").?).clonePath(arena, ws.cfg.code_root);
     try testing.expect(!fsutil.exists(clone_path));
 }
 
@@ -2731,7 +2728,7 @@ test "promote: promotes a local repo shared by two projects, rewriting both mark
     try repos_b.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
     const first_before = switch (try ws.find(arena, "first")) {
@@ -2785,7 +2782,7 @@ test "promote: carries a repo's worktrees along and keeps them working" {
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
     // A worktree on the local clone, at its sibling `@worktrees` dir.
@@ -2827,7 +2824,7 @@ test "promote: --dry-run prints the planned move and affected projects, changing
     try repos_b.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
     const new_id = try identity.fromUrl(arena, fake_origin);
@@ -2868,7 +2865,7 @@ test "promote: a dirty clone refuses without --force, then proceeds with --force
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
     var clone_dir = try std.Io.Dir.cwd().openDir(fsutil.io(), local_clone_path, .{});
@@ -2913,7 +2910,7 @@ test "promote: a destination already cloned from the same remote stops without c
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
     const new_id = try identity.fromUrl(arena, fake_origin);
@@ -2952,7 +2949,7 @@ test "promote: a destination occupied by a different repo is a hard error" {
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
     const new_id = try identity.fromUrl(arena, fake_origin);
@@ -3040,7 +3037,7 @@ test "promote: no remote configured on the local clone is a hard error" {
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try fsutil.ensureDir(local_clone_path);
     try testutil.runGit(&sb, local_clone_path, &.{ "init", "-b", "main" });
 
@@ -3076,7 +3073,7 @@ test "promote: resumes an interrupted promote, finishing the leftover marker and
     const new_clone_path = try new_id.clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, new_clone_path, fake_origin);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try testing.expect(!fsutil.exists(local_clone_path));
 
     const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
@@ -3127,7 +3124,7 @@ test "promote: resumes a promote whose clone moved before any marker was written
     const new_clone_path = try new_id.clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, new_clone_path, fake_origin);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try testing.expect(!fsutil.exists(local_clone_path));
 
     const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
@@ -3167,7 +3164,7 @@ test "promote: promoting the last local repo prunes the emptied code_root/local/
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
     const local_dir = std.fs.path.dirname(local_clone_path).?;
@@ -3196,10 +3193,10 @@ test "promote: promoting one of two local repos leaves code_root/local/ in place
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
 
-    const other_local_path = try identity.local("other").clonePath(arena, ws.cfg.code_root);
+    const other_local_path = try identity.local(fsutil.SafeSegment.parse("other").?).clonePath(arena, ws.cfg.code_root);
     try fsutil.ensureDir(other_local_path);
 
     const local_dir = std.fs.path.dirname(local_clone_path).?;
@@ -3226,7 +3223,7 @@ test "promote: a local clone missing from both the old and new path is a hard er
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
     try testing.expect(!fsutil.exists(local_clone_path));
 
     const got = try testutil.runCmd(arena, promote_command.run, ws, &.{"scratch"});

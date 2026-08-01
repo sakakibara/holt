@@ -37,8 +37,8 @@ pub const Project = struct {
         const url = self.marker.repos.get(repo_name) orelse return error.UnknownRepo;
         if (std.mem.startsWith(u8, url, "local:")) {
             const name = url["local:".len..];
-            if (fsutil.SafeSegment.parse(name) == null) return error.UnrecognizedUrl;
-            return identity.local(name);
+            const seg = fsutil.SafeSegment.parse(name) orelse return error.UnrecognizedUrl;
+            return identity.local(seg);
         }
         return identity.fromUrl(alloc, url);
     }

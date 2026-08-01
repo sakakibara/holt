@@ -47,12 +47,10 @@ pub const Identity = struct {
 };
 
 /// Identity for a repo with no remote yet; relPath is "local/<name>". Unlike
-/// fromUrl, fields borrow `name`/static strings rather than owning memory.
-/// `name` must have passed `fsutil.SafeSegment.parse` - this constructor
-/// does no parsing of its own, so a caller taking the name from user input
-/// or a marker file checks it first.
-pub fn local(name: []const u8) Identity {
-    return .{ .host = "local", .owner = "", .repo = name };
+/// fromUrl, fields borrow the segment/static strings rather than owning
+/// memory.
+pub fn local(name: fsutil.SafeSegment) Identity {
+    return .{ .host = "local", .owner = "", .repo = name.bytes };
 }
 
 /// A local repo name must be a single safe path segment: no separator, no
@@ -364,7 +362,7 @@ test "relPath and clonePath join host/owner/repo, including subgroup owners" {
 }
 
 test "local: isLocal, relPath, and clonePath" {
-    const id = local("scratch");
+    const id = local(fsutil.SafeSegment.parse("scratch").?);
     try testing.expect(id.isLocal());
 
     const rel = try id.relPath(testing.allocator);
