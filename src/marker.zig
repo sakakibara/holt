@@ -1,9 +1,9 @@
 //! Reads and writes the per-project marker file `.holt.json`: the
-//! authoritative record of a project's org/name and its repo membership
-//! (short name -> remote URL). A repo with no remote yet is recorded with
-//! the pseudo-URL "local:<name>" (portable across machines - marker
-//! consumers check that prefix and build `identity.local(name)` instead of
-//! calling `identity.fromUrl`, which rejects it).
+//! authoritative record of a project's org/name and its repo membership.
+//! `load` classifies every member and alias at this boundary into typed
+//! `Entry` values; consumers read parsed sources, never raw strings. A repo
+//! with no remote yet is recorded with the pseudo-URL "local:<name>"
+//! (portable across machines).
 
 const std = @import("std");
 const json = @import("json");
@@ -83,12 +83,8 @@ pub const Marker = struct {
     /// real org/name from that path rather than from these fields.
     org: []const u8,
     name: []const u8,
-    repos: std.StringArrayHashMapUnmanaged([]const u8),
-    /// Optional per-repo hub link name override, keyed by repo short name.
-    /// Absent from the on-disk marker until a user runs `holt repo alias`.
-    aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
     /// One entry per `repos` or `aliases` key, in file order: members first,
-    /// then alias-only names. What `save` writes; the maps are a read view.
+    /// then alias-only names. What `save` writes.
     entries: []Entry,
     /// Unknown top-level keys, verbatim, re-emitted by `save`.
     extra: json.ObjectMap,
@@ -110,14 +106,30 @@ pub const Marker = struct {
         return null;
     }
 
+    /// Number of members - entries the file listed under `repos`.
+    pub fn memberCount(m: *const Marker) usize {
+        var n: usize = 0;
+        for (m.entries) |*e| {
+            if (e.raw_source != null) n += 1;
+        }
+        return n;
+    }
+
+    /// Number of entries carrying an alias value, usable or not.
+    pub fn aliasCount(m: *const Marker) usize {
+        var n: usize = 0;
+        for (m.entries) |*e| {
+            if (e.raw_alias != null) n += 1;
+        }
+        return n;
+    }
+
     /// A marker with no members yet; grow it through the mutation API.
     pub fn init(org: []const u8, name: []const u8) Marker {
         return .{
             .version = marker_version,
             .org = org,
             .name = name,
-            .repos = .empty,
-            .aliases = .empty,
             .entries = &.{},
             .extra = .empty,
         };
@@ -136,7 +148,6 @@ pub const Marker = struct {
         } else {
             try m.appendEntry(alloc, parsed);
         }
-        try m.repos.put(alloc, name, raw_value);
     }
 
     /// Sets (`alias_value != null`) or clears (`null`) the alias on `name`.
@@ -167,15 +178,11 @@ pub const Marker = struct {
                 e.alias = null;
                 e.alias_fault = .unsafe_segment;
             }
-            try m.aliases.put(alloc, name, v);
-        } else {
-            if (existing) |e| {
-                e.raw_alias = null;
-                e.alias = null;
-                e.alias_fault = null;
-                if (e.raw_source == null) _ = m.remove(name);
-            }
-            _ = m.aliases.orderedRemove(name);
+        } else if (existing) |e| {
+            e.raw_alias = null;
+            e.alias = null;
+            e.alias_fault = null;
+            if (e.raw_source == null) _ = m.remove(name);
         }
         return had;
     }
@@ -188,13 +195,9 @@ pub const Marker = struct {
             if (std.mem.eql(u8, e.name, name)) {
                 std.mem.copyForwards(Entry, m.entries[i .. m.entries.len - 1], m.entries[i + 1 ..]);
                 m.entries = m.entries[0 .. m.entries.len - 1];
-                _ = m.repos.orderedRemove(name);
-                _ = m.aliases.orderedRemove(name);
                 return true;
             }
         }
-        _ = m.repos.orderedRemove(name);
-        _ = m.aliases.orderedRemove(name);
         return false;
     }
 
@@ -324,19 +327,12 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
         return error.MalformedMarker;
     }
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     var entries: std.ArrayList(Entry) = .empty;
     var it = raw_repos.object.iterator();
     while (it.next()) |entry| {
-        // A non-string value faults the entry rather than the marker; only
-        // the string map view omits it.
-        if (entry.value_ptr.* == .string) {
-            try repos.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
-        }
         try entries.append(alloc, try sourceEntry(alloc, entry.key_ptr.*, entry.value_ptr.*));
     }
 
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     if (obj.get("aliases")) |av| {
         if (av != .object) {
             if (diag) |d| d.set(alloc, "\"aliases\" must be an object", .{});
@@ -344,10 +340,6 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
         }
         var ait = av.object.iterator();
         while (ait.next()) |entry| {
-            if (entry.value_ptr.* == .string) {
-                try aliases.put(alloc, entry.key_ptr.*, entry.value_ptr.*.string);
-            }
-
             const target = Marker.findIn(entries.items, entry.key_ptr.*) orelse blk: {
                 try entries.append(alloc, .{
                     .name = entry.key_ptr.*,
@@ -375,8 +367,6 @@ pub fn load(alloc: std.mem.Allocator, path: []const u8, diag: ?*diagnostic.Diagn
         .version = version,
         .org = org,
         .name = name,
-        .repos = repos,
-        .aliases = aliases,
         .entries = try entries.toOwnedSlice(alloc),
         .extra = extra,
     };
@@ -492,9 +482,9 @@ test "round-trip: load(save(m)) equals m" {
     try testing.expectEqual(@as(u32, 1), loaded.version);
     try testing.expectEqualStrings("acme", loaded.org);
     try testing.expectEqualStrings("proj", loaded.name);
-    try testing.expectEqual(@as(usize, 2), loaded.repos.count());
-    try testing.expectEqualStrings("https://github.com/acme/widget", loaded.repos.get("widget").?);
-    try testing.expectEqualStrings("local:scratch", loaded.repos.get("scratch").?);
+    try testing.expectEqual(@as(usize, 2), loaded.memberCount());
+    try testing.expectEqualStrings("https://github.com/acme/widget", loaded.findRepo("widget").?.raw_source.?.string);
+    try testing.expectEqualStrings("local:scratch", loaded.findRepo("scratch").?.raw_source.?.string);
 }
 
 test "save: an aliases object appears only when non-empty, sorted after the other keys" {
@@ -562,8 +552,8 @@ test "round-trip: load(save(m)) preserves aliases" {
     try save(&original, path);
 
     const loaded = try load(arena, path, null);
-    try testing.expectEqual(@as(usize, 1), loaded.aliases.count());
-    try testing.expectEqualStrings("gadget", loaded.aliases.get("widget").?);
+    try testing.expectEqual(@as(usize, 1), loaded.aliasCount());
+    try testing.expectEqualStrings("gadget", loaded.findEntry("widget").?.raw_alias.?.string);
 }
 
 test "load: a marker without an aliases key loads with an empty aliases map" {
@@ -581,7 +571,7 @@ test "load: a marker without an aliases key loads with an empty aliases map" {
     const arena = arena_state.allocator();
 
     const loaded = try load(arena, path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
+    try testing.expectEqual(@as(usize, 0), loaded.aliasCount());
 }
 
 test "load: a non-string aliases entry is kept faulted, not fatal" {
@@ -602,7 +592,7 @@ test "load: a non-string aliases entry is kept faulted, not fatal" {
     const e = m.findEntry("a").?;
     try testing.expectEqual(Fault.not_a_string, e.alias_fault.?);
     try testing.expectEqual(@as(i128, 7), e.raw_alias.?.integer);
-    try testing.expect(m.aliases.get("a") == null);
+    try testing.expect(m.findEntry("a").?.alias == null);
 
     // save re-emits the value it could not parse.
     try save(&m, path);
@@ -787,7 +777,7 @@ test "load: a non-string repos entry is kept faulted, not fatal" {
     const e = m.findRepo("a").?;
     try testing.expectEqual(Fault.not_a_string, e.source_fault.?);
     try testing.expectEqual(@as(i128, 42), e.raw_source.?.integer);
-    try testing.expect(m.repos.get("a") == null);
+    try testing.expect(m.findRepo("a").?.source == null);
 
     // The member stays removable even though its value never parsed.
     var mm = m;

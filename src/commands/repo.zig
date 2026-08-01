@@ -932,9 +932,9 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
     const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
-    // `findReferencing` matches marker values by raw string compare, so the
-    // name never passes through `repoIdentity`; check it here, before it
-    // becomes the clone path this command moves and prunes around.
+    // The name arrives from argv, not from a parsed marker entry; check it
+    // here, before it becomes the clone path this command moves and prunes
+    // around.
     const seg = fsutil.SafeSegment.parse(name) orelse {
         try ctx.err.print("holt: \"{s}\" is not a usable local repo name\n", .{name});
         return 1;
@@ -1144,7 +1144,7 @@ test "new: a bare name creates a local repo and attaches it when -p is given" {
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:scratch", loaded.repos.get("scratch").?);
+    try testing.expectEqualStrings("local:scratch", loaded.findRepo("scratch").?.raw_source.?.string);
 }
 
 test "new: a bare name creates a local repo at code_root/local/<name>, prints the path, no marker or hub" {
@@ -1284,7 +1284,7 @@ test "new: -p attaches a local member (marker local:<name> + hub) and doctor doe
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", marker.marker_basename });
     const m = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:tool", m.repos.get("tool").?);
+    try testing.expectEqualStrings("local:tool", m.findRepo("tool").?.raw_source.?.string);
 
     const clone_path = try identity.local(fsutil.SafeSegment.parse("tool").?).clonePath(arena, ws.cfg.code_root);
     try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ clone_path, ".git" })));
@@ -1369,7 +1369,7 @@ test "get: with -p clones, checks out a branch, and records the repo as a projec
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings(url, loaded.repos.get("widget").?);
+    try testing.expectEqualStrings(url, loaded.findRepo("widget").?.raw_source.?.string);
 }
 
 test "get: a local: argument is rejected and points at adopt" {
@@ -1656,7 +1656,7 @@ test "adopt: takes the project as -p, not as a leading positional" {
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 1), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 1), loaded.memberCount());
 }
 
 test "get: -p to no matching project exits 1 and reports on stderr" {
@@ -1704,7 +1704,7 @@ test "adopt: adopts an out-of-place clone with an origin, moving it to the ident
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+    try testing.expectEqualStrings(fake_origin, loaded.findRepo("scratch").?.raw_source.?.string);
 
     const code_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "scratch" });
     switch (try fsutil.linkState(arena, code_link)) {
@@ -1737,7 +1737,7 @@ test "adopt: adopts a no-remote dir into local/<basename> with a local: marker v
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:myrepo", loaded.repos.get("myrepo").?);
+    try testing.expectEqualStrings("local:myrepo", loaded.findRepo("myrepo").?.raw_source.?.string);
 }
 
 test "adopt: a dot-leading no-remote dir is a usable local name" {
@@ -1764,7 +1764,7 @@ test "adopt: a dot-leading no-remote dir is a usable local name" {
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:.dotfiles", loaded.repos.get(".dotfiles").?);
+    try testing.expectEqualStrings("local:.dotfiles", loaded.findRepo(".dotfiles").?.raw_source.?.string);
 }
 
 test "adopt: a no-remote dir whose name is unusable as a local name is refused before the move" {
@@ -1801,7 +1801,7 @@ test "adopt: a no-remote dir whose name is unusable as a local name is refused b
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 }
 
 test "adopt: a dirty out-of-place clone refuses without --force, then proceeds with --force" {
@@ -1833,7 +1833,7 @@ test "adopt: a dirty out-of-place clone refuses without --force, then proceeds w
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const before = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), before.repos.count());
+    try testing.expectEqual(@as(usize, 0), before.memberCount());
 
     const forced = try testutil.runCmd(arena, adopt_command.run, ws, &.{ stray_path, "-p", "proj", "--force" });
     try testing.expectEqual(@as(u8, 0), forced.code);
@@ -1961,7 +1961,7 @@ test "adopt: a marker-save failure after the move names the new clone path and r
 
         const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
         const loaded = try marker.load(arena, marker_path, null);
-        try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+        try testing.expectEqualStrings(fake_origin, loaded.findRepo("scratch").?.raw_source.?.string);
     }
 }
 
@@ -1986,7 +1986,7 @@ test "adopt: a plain directory with no .git is refused as unreadable, nothing mo
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 }
 
 test "adopt: a nonexistent path is a hard error, not a crash" {
@@ -2076,7 +2076,7 @@ test "adopt: a relative path argument resolves against the cwd instead of crashi
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+    try testing.expectEqualStrings(fake_origin, loaded.findRepo("scratch").?.raw_source.?.string);
 
     const code_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "scratch" });
     switch (try fsutil.linkState(arena, code_link)) {
@@ -2229,7 +2229,7 @@ test "remove: -p unlinks the member and leaves the clone on disk" {
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
     try testing.expect(fsutil.exists(clone_path));
 }
 
@@ -2328,7 +2328,7 @@ test "remove: --clone with -p keeps the clone when the prompt is declined, but t
     // Declining the delete does not undo the unlink that already happened.
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "only", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 }
 
 test "remove: --clone refuses to delete a clone that has a linked worktree, even with --force" {
@@ -2500,7 +2500,7 @@ test "remove: -p removing from one of two referencing projects keeps the clone a
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "first", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 
     const code_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "first", "code", "widget" });
     try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(arena, code_link));
@@ -2550,8 +2550,8 @@ test "remove: -p removing a repo drops its stale alias from the marker" {
 
     const marker_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expect(!loaded.aliases.contains("widget"));
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expect(loaded.findEntry("widget") == null);
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 }
 
 test "remove: -p to a repo not a member of the project is a hard error" {
@@ -2607,7 +2607,7 @@ test "remove: -p and --clone together unlink and delete when nothing else refere
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "only", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 }
 
 test "remove: -p and --clone together unlink but keep the clone when a second project still references it" {
@@ -2639,7 +2639,7 @@ test "remove: -p and --clone together unlink but keep the clone when a second pr
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "first", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 }
 
 test "remove: -p with an unparseable marker url refuses without falling back to a code-tree key" {
@@ -2652,7 +2652,7 @@ test "remove: -p with an unparseable marker url refuses without falling back to 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     // The member's short name ("acme/widget") happens to also look like a
-    // valid owner/repo shorthand - if repoIdentity's failure silently fell
+    // valid owner/repo shorthand - if the unusable marker value silently fell
     // back to identityFromKey, this would resolve to and threaten to delete
     // github.com/acme/widget, an entirely unrelated clone.
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
@@ -2670,7 +2670,7 @@ test "remove: -p with an unparseable marker url refuses without falling back to 
     // Refused before mutating the marker: the bad entry is still there to fix.
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 1), loaded.repos.count());
+    try testing.expectEqual(@as(usize, 1), loaded.memberCount());
 }
 
 test "remove: -p without --clone removes a member whose value never parsed" {
@@ -2807,7 +2807,7 @@ test "promote: promotes a local repo shared by two projects, rewriting both mark
     for ([_][]const u8{ "first", "second" }) |proj_name| {
         const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", proj_name, marker.marker_basename });
         const loaded = try marker.load(arena, marker_path, null);
-        try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+        try testing.expectEqualStrings(fake_origin, loaded.findRepo("scratch").?.raw_source.?.string);
 
         const code_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", proj_name, "code", "scratch" });
         switch (try fsutil.linkState(arena, code_link)) {
@@ -2896,7 +2896,7 @@ test "promote: --dry-run prints the planned move and affected projects, changing
     for ([_][]const u8{ "first", "second" }) |proj_name| {
         const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", proj_name, marker.marker_basename });
         const loaded = try marker.load(arena, marker_path, null);
-        try testing.expectEqualStrings("local:scratch", loaded.repos.get("scratch").?);
+        try testing.expectEqualStrings("local:scratch", loaded.findRepo("scratch").?.raw_source.?.string);
     }
 }
 
@@ -2931,7 +2931,7 @@ test "promote: a dirty clone refuses without --force, then proceeds with --force
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded_after_refusal = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:scratch", loaded_after_refusal.repos.get("scratch").?);
+    try testing.expectEqualStrings("local:scratch", loaded_after_refusal.findRepo("scratch").?.raw_source.?.string);
 
     const forced = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--force" });
     try testing.expectEqual(@as(u8, 0), forced.code);
@@ -2942,7 +2942,7 @@ test "promote: a dirty clone refuses without --force, then proceeds with --force
     try testing.expect(fsutil.exists(new_clone_path));
 
     const loaded_after_force = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings(fake_origin, loaded_after_force.repos.get("scratch").?);
+    try testing.expectEqualStrings(fake_origin, loaded_after_force.findRepo("scratch").?.raw_source.?.string);
 }
 
 test "promote: a destination already cloned from the same remote stops without changing anything" {
@@ -2978,7 +2978,7 @@ test "promote: a destination already cloned from the same remote stops without c
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:scratch", loaded.repos.get("scratch").?);
+    try testing.expectEqualStrings("local:scratch", loaded.findRepo("scratch").?.raw_source.?.string);
 }
 
 test "promote: a destination occupied by a different repo is a hard error" {
@@ -3073,7 +3073,7 @@ test "promote: a traversing local name is refused, leaving the outside checkout 
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:../../outside/victim", loaded.repos.get("widget").?);
+    try testing.expectEqualStrings("local:../../outside/victim", loaded.findRepo("widget").?.raw_source.?.string);
 }
 
 test "promote: no remote configured on the local clone is a hard error" {
@@ -3135,7 +3135,7 @@ test "promote: resumes an interrupted promote, finishing the leftover marker and
     for ([_][]const u8{ "first", "second" }) |proj_name| {
         const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", proj_name, marker.marker_basename });
         const loaded = try marker.load(arena, marker_path, null);
-        try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+        try testing.expectEqualStrings(fake_origin, loaded.findRepo("scratch").?.raw_source.?.string);
 
         const code_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", proj_name, "code", "scratch" });
         switch (try fsutil.linkState(arena, code_link)) {
@@ -3186,7 +3186,7 @@ test "promote: resumes a promote whose clone moved before any marker was written
     for ([_][]const u8{ "first", "second" }) |proj_name| {
         const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", proj_name, marker.marker_basename });
         const loaded = try marker.load(arena, marker_path, null);
-        try testing.expectEqualStrings(fake_origin, loaded.repos.get("scratch").?);
+        try testing.expectEqualStrings(fake_origin, loaded.findRepo("scratch").?.raw_source.?.string);
 
         const code_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", proj_name, "code", "scratch" });
         switch (try fsutil.linkState(arena, code_link)) {
@@ -3302,7 +3302,7 @@ test "alias: takes the project as -p and renames the hub link" {
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("gadget", loaded.aliases.get("widget").?);
+    try testing.expectEqualStrings("gadget", loaded.findEntry("widget").?.raw_alias.?.string);
 }
 
 test "alias: missing -p is a usage error naming the requirement" {
@@ -3348,7 +3348,7 @@ test "alias: setting an alias records it and reconciles the hub link" {
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("gadget", loaded.aliases.get("widget").?);
+    try testing.expectEqualStrings("gadget", loaded.findEntry("widget").?.raw_alias.?.string);
 
     const alias_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "gadget" });
     switch (try fsutil.linkState(arena, alias_link)) {
@@ -3393,7 +3393,7 @@ test "alias: clearing an alias reverts the hub link to the derived name" {
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
+    try testing.expectEqual(@as(usize, 0), loaded.aliasCount());
 
     const derived_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "widget" });
     switch (try fsutil.linkState(arena, derived_link)) {
@@ -3425,7 +3425,7 @@ test "alias: an alias colliding with a reserved link name errors and changes not
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
+    try testing.expectEqual(@as(usize, 0), loaded.aliasCount());
 }
 
 test "alias: an alias carrying a path separator errors and changes nothing" {
@@ -3450,7 +3450,7 @@ test "alias: an alias carrying a path separator errors and changes nothing" {
         try testing.expect(std.mem.indexOf(u8, got.err, "not a valid link name") != null);
 
         const loaded = try marker.load(arena, marker_path, null);
-        try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
+        try testing.expectEqual(@as(usize, 0), loaded.aliasCount());
     }
 }
 
@@ -3476,7 +3476,7 @@ test "alias: an alias colliding with another member's link errors and changes no
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.aliases.count());
+    try testing.expectEqual(@as(usize, 0), loaded.aliasCount());
 }
 
 test "alias: aliasing a non-member repo is a hard error" {

@@ -460,7 +460,7 @@ test "run: hints a local repo that has grown an origin, without moving anything"
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqualStrings("local:scratch", loaded.repos.get("scratch").?);
+    try testing.expectEqualStrings("local:scratch", loaded.findRepo("scratch").?.raw_source.?.string);
 }
 
 test "run: an orphaned hub with no project is pruned; --dry-run only reports it" {

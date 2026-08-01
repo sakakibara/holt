@@ -53,16 +53,6 @@ pub fn local(name: fsutil.SafeSegment) Identity {
     return .{ .host = "local", .owner = "", .repo = name.bytes };
 }
 
-/// A local repo name must be a single safe path segment: no separator, no
-/// `..`, no leading `.`/`~` (each would escape or shadow the `local/` bucket
-/// under code_root, which `clonePath` joins without normalizing).
-pub fn isSafeLocalName(name: []const u8) bool {
-    if (name.len == 0) return false;
-    if (name[0] == '.' or name[0] == '~') return false;
-    for (name) |c| if (c == '/' or c == '\\') return false;
-    return true;
-}
-
 /// A remote url reaches `git` as a positional argument, where a leading `-`
 /// is read as an option instead (`--upload-pack=<cmd>` names a command git
 /// runs). No accepted form - scheme, scp-like, or shorthand - begins with

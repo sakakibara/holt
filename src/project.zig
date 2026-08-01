@@ -4,8 +4,6 @@
 
 const std = @import("std");
 const marker = @import("marker.zig");
-const identity = @import("identity.zig");
-const fsutil = @import("fsutil.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
 
@@ -26,22 +24,6 @@ pub const Project = struct {
     pub fn markerPath(self: Project, alloc: std.mem.Allocator) ![]u8 {
         return std.fs.path.join(alloc, &.{ self.content_path, marker.marker_basename });
     }
-
-    /// Resolves one of the project's marker repo entries to an Identity.
-    /// A marker value of "local:<name>" has no remote yet and is not a URL
-    /// identity.fromUrl understands, so it is special-cased into
-    /// `identity.local` - with `<name>` held to the same single-safe-segment
-    /// rule fromUrl applies, since a marker is synced data and the identity
-    /// it yields becomes a clone path that callers move and delete.
-    pub fn repoIdentity(self: Project, alloc: std.mem.Allocator, repo_name: []const u8) !identity.Identity {
-        const url = self.marker.repos.get(repo_name) orelse return error.UnknownRepo;
-        if (std.mem.startsWith(u8, url, "local:")) {
-            const name = url["local:".len..];
-            const seg = fsutil.SafeSegment.parse(name) orelse return error.UnrecognizedUrl;
-            return identity.local(seg);
-        }
-        return identity.fromUrl(alloc, url);
-    }
 };
 
 test "qualified: joins org and name" {
@@ -59,7 +41,7 @@ test "qualified: joins org and name" {
     try testing.expectEqualStrings("acme/widget", try p.qualified(arena));
 }
 
-test "repoIdentity: resolves a remote URL and a local: pseudo-URL" {
+test "a member entry resolves a remote URL and a local: pseudo-URL to an identity" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -68,25 +50,17 @@ test "repoIdentity: resolves a remote URL and a local: pseudo-URL" {
     try m.upsert(arena, "widget", "https://github.com/acme/widget");
     try m.upsert(arena, "scratch", "local:scratch");
 
-    const p: Project = .{
-        .org = "acme",
-        .name = "proj",
-        .content_path = try arena.dupe(u8, "/synced/projects/acme/proj"),
-        .hub_path = try arena.dupe(u8, "/hub/acme/proj"),
-        .marker = m,
-    };
-
-    const remote_id = try p.repoIdentity(arena, "widget");
+    const remote_id = m.findRepo("widget").?.source.?.id();
     try testing.expectEqualStrings("github.com", remote_id.host);
     try testing.expectEqualStrings("acme", remote_id.owner);
     try testing.expectEqualStrings("widget", remote_id.repo);
 
-    const local_id = try p.repoIdentity(arena, "scratch");
+    const local_id = m.findRepo("scratch").?.source.?.id();
     try testing.expect(local_id.isLocal());
     try testing.expectEqualStrings("scratch", local_id.repo);
 }
 
-test "repoIdentity: a local: value that escapes the local bucket is refused" {
+test "a local: value that escapes the local bucket faults its entry at load" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -109,11 +83,14 @@ test "repoIdentity: a local: value that escapes the local bucket is refused" {
         \\}
     );
 
-    try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "escape"));
-    try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "dotdot"));
+    for ([_][]const u8{ "escape", "dotdot" }) |name| {
+        const e = p.marker.findRepo(name).?;
+        try testing.expect(e.source == null);
+        try testing.expectEqual(marker.Fault.unsafe_segment, e.source_fault.?);
+    }
 }
 
-test "repoIdentity: a url that git would read as an option is refused" {
+test "a url that git would read as an option faults its entry at load" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -136,21 +113,14 @@ test "repoIdentity: a url that git would read as an option is refused" {
         \\}
     );
 
-    try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "widget"));
-    try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "gadget"));
+    for ([_][]const u8{ "widget", "gadget" }) |name| {
+        const e = p.marker.findRepo(name).?;
+        try testing.expect(e.source == null);
+        try testing.expectEqual(marker.Fault.unrecognized_url, e.source_fault.?);
+    }
 }
 
-test "repoIdentity: unknown repo name errors" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const p: Project = .{
-        .org = "acme",
-        .name = "proj",
-        .content_path = try arena.dupe(u8, "/synced/projects/acme/proj"),
-        .hub_path = try arena.dupe(u8, "/hub/acme/proj"),
-        .marker = .init("acme", "proj"),
-    };
-    try testing.expectError(error.UnknownRepo, p.repoIdentity(arena, "nope"));
+test "findRepo: an unknown repo name resolves to null" {
+    const m: marker.Marker = .init("acme", "proj");
+    try testing.expect(m.findRepo("nope") == null);
 }

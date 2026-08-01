@@ -41,19 +41,6 @@ pub const Desired = struct {
     ignored_aliases: [][]const u8,
 };
 
-/// A hub link name must be a single safe path segment: non-empty, no `/` or
-/// `\` separator, no `.`/`..` directory reference, no leading `~`. Each would
-/// let the link land outside the hub, which joins the name without
-/// normalizing it. Marker `aliases` values are synced data, so the name they
-/// supply is held to this rule wherever it is read, not only where written.
-pub fn isValidLinkName(name: []const u8) bool {
-    if (name.len == 0) return false;
-    if (name[0] == '~') return false;
-    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
-    for (name) |c| if (c == '/' or c == '\\') return false;
-    return true;
-}
-
 // Test seam: forces file-target link creation to report "skipped for lack of
 // privilege", so the no-privilege degrade path (unreachable on an admin CI
 // runner, where real file symlinks succeed) is exercised on any platform.

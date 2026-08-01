@@ -117,8 +117,8 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     }
     {
         const loaded = try marker.load(arena, marker_path_proj, null);
-        try testing.expectEqual(@as(usize, 1), loaded.repos.count());
-        try testing.expectEqualStrings(url_a, loaded.repos.get("alpha").?);
+        try testing.expectEqual(@as(usize, 1), loaded.memberCount());
+        try testing.expectEqualStrings(url_a, loaded.findRepo("alpha").?.raw_source.?.string);
     }
     try testing.expect(fsutil.exists(clone_alpha));
     try expectSymlink(arena, hub_proj_docs);
@@ -134,7 +134,7 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     }
     {
         const loaded = try marker.load(arena, marker_path_proj, null);
-        try testing.expectEqual(@as(usize, 2), loaded.repos.count());
+        try testing.expectEqual(@as(usize, 2), loaded.memberCount());
     }
     try testing.expect(fsutil.exists(clone_beta));
     try expectSymlink(arena, hub_proj_code_beta);
@@ -156,7 +156,7 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     try testing.expectEqual(stat_before.inode, stat_after.inode);
     {
         const loaded = try marker.load(arena, marker_path_other, null);
-        try testing.expectEqual(@as(usize, 1), loaded.repos.count());
+        try testing.expectEqual(@as(usize, 1), loaded.memberCount());
     }
     switch (try fsutil.linkState(arena, hub_other_code_alpha)) {
         .symlink => |t| try testing.expectEqualStrings(clone_alpha, t),
@@ -184,8 +184,8 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     }
     {
         const loaded = try marker.load(arena, marker_path_proj, null);
-        try testing.expectEqual(@as(usize, 1), loaded.repos.count());
-        try testing.expect(loaded.repos.contains("alpha"));
+        try testing.expectEqual(@as(usize, 1), loaded.memberCount());
+        try testing.expect((loaded.findRepo("alpha") != null));
     }
     try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(arena, hub_proj_code_beta));
     try testing.expect(fsutil.exists(clone_beta));
