@@ -158,6 +158,28 @@ pub const SafeSegment = struct {
     }
 };
 
+/// A `/`-delimited relative path (a git branch name, which namespaces on
+/// '/') safe to hand to `joinSlashy` under a holt-managed dir: every
+/// segment non-empty (also rejects leading/trailing/double slashes), not
+/// `.` or `..`, no `\`, not `~`-leading. The multi-segment sibling of
+/// `SafeSegment`, with the same convention: `parse` is the one
+/// construction point, grep-auditable rather than type-enforced.
+pub const SafeRel = struct {
+    bytes: []const u8,
+
+    pub fn parse(bytes: []const u8) ?SafeRel {
+        if (bytes.len == 0) return null;
+        var it = std.mem.splitScalar(u8, bytes, '/');
+        while (it.next()) |seg| {
+            if (seg.len == 0) return null;
+            if (std.mem.eql(u8, seg, ".") or std.mem.eql(u8, seg, "..")) return null;
+            if (seg[0] == '~') return null;
+            for (seg) |c| if (c == '\\') return null;
+        }
+        return .{ .bytes = bytes };
+    }
+};
+
 /// Lexical containment check on two already-resolved absolute paths: true
 /// if `child` equals `parent` or is nested under it. Does no filesystem
 /// access or path resolution itself.
@@ -634,6 +656,22 @@ test "SafeSegment.parse: accepts a plain segment, refuses every form that escape
         "x.holt-tmp", "@worktrees", "x@worktrees",
     }) |bad| {
         try testing.expect(SafeSegment.parse(bad) == null);
+    }
+}
+
+test "SafeRel.parse: accepts slashy branch names, refuses any segment that escapes" {
+    for ([_][]const u8{ "main", "feature-x", "feature/login", "a/b/c", "v1.2", "x~y", "release/.hotfix" }) |rel| {
+        try testing.expect(SafeRel.parse(rel) != null);
+        try testing.expectEqualStrings(rel, SafeRel.parse(rel).?.bytes);
+    }
+    for ([_][]const u8{
+        "",        ".",           "..",
+        "../evil", "a/../b",      "a/..",
+        "/a",      "a/",          "a//b",
+        "a\\b",    "..\\..\\pwn", "~",
+        "~/evil",  "a/~b",        "a/.",
+    }) |bad| {
+        try testing.expect(SafeRel.parse(bad) == null);
     }
 }
 

@@ -53,6 +53,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     if (project_query.len == 0 or repo_query.len == 0) {
         return app.usageError(ctx, "worktree takes <project>/<repo>", .{});
     }
+    if (a.branch) |b| {
+        if (fsutil.SafeRel.parse(b) == null) {
+            return app.usageError(ctx, "invalid branch name \"{s}\"", .{b});
+        }
+    }
 
     const id = (try path.resolveRepoId(ctx, ws, project_query, repo_query)) orelse return 1;
     const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
@@ -134,6 +139,32 @@ test "run: creating a worktree before the clone exists reports a restore hint" {
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "not cloned") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "restore") != null);
+}
+
+test "run: a branch whose segments would escape the worktrees dir is a usage error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    for ([_][]const u8{ "../evil", "a/../b", "..\\..\\pwn" }) |branch| {
+        const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", branch });
+        try testing.expectEqual(@as(u8, 2), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, "invalid branch name") != null);
+
+        const removed = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", branch, "-r" });
+        try testing.expectEqual(@as(u8, 2), removed.code);
+        try testing.expect(std.mem.indexOf(u8, removed.err, "invalid branch name") != null);
+    }
 }
 
 test "run: an emptied @worktrees dir (raw git removal) drops the hub link on reconcile" {

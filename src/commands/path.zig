@@ -124,6 +124,9 @@ fn resolveRepo(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []const u8
 /// repo does not resolve or has no such worktree.
 fn resolveWorktree(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []const u8, repo_query: []const u8, branch: []const u8) anyerror!u8 {
     const alloc = ctx.alloc;
+    if (fsutil.SafeRel.parse(branch) == null) {
+        return app.usageError(ctx, "invalid branch name \"{s}\"", .{branch});
+    }
     const clone_path = (try resolveRepoPath(ctx, ws, project_query, repo_query)) orelse return 1;
     const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
     const wt_path = try fsutil.joinSlashy(alloc, worktrees_dir, branch);
@@ -219,6 +222,32 @@ test "run: <project>/<repo>@<branch> resolves the worktree path, and misses repo
     const miss = try testutil.runCmd(arena, command.run, ws, &.{"proj/backend@nope"});
     try testing.expectEqual(@as(u8, 1), miss.code);
     try testing.expect(std.mem.indexOf(u8, miss.err, "no worktree") != null);
+}
+
+test "run: an @<branch> whose segments would escape the worktrees dir is a usage error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    // The traversal target exists, so without validation the escaped path
+    // would pass the exists() check and be printed for a `cd $(...)`.
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    try fsutil.ensureDir(try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}));
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"proj/backend@../.."});
+    try testing.expectEqual(@as(u8, 2), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "invalid branch name") != null);
+    try testing.expectEqualStrings("", got.out);
 }
 
 test "run: bare query (empty positional) prints the hub root" {
