@@ -9,6 +9,7 @@ const project_mod = @import("../project.zig");
 const common = @import("common.zig");
 const git = @import("../git.zig");
 const hub = @import("../hub.zig");
+const identity = @import("../identity.zig");
 const fsutil = @import("../fsutil.zig");
 const parallel = @import("../parallel.zig");
 const diagnostic = @import("../diag.zig");
@@ -90,18 +91,22 @@ fn runProjects(ctx: *app.Ctx, targets: []const project_mod.Project, jobs_cap: ?u
     var job_of_path = std.StringHashMap(usize).init(alloc);
     for (targets) |p| {
         const qualified = try p.qualified(alloc);
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = p.repoIdentity(alloc, repo_name) catch {
-                try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ qualified, repo_name });
+        for (p.marker.entries) |*e| {
+            if (e.raw_source == null) continue;
+            const src = e.source orelse {
+                try ctx.err.print("holt: {s}: cannot resolve repo {s} (malformed marker url)\n", .{ qualified, e.name });
                 had_error = true;
                 continue;
             };
-            if (id.isLocal()) continue;
-            const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
+            const rem = switch (src) {
+                .remote => |r| r,
+                .local => continue,
+            };
+            const clone_path = try rem.id.clonePath(alloc, ws.cfg.code_root);
             if (fsutil.exists(clone_path)) continue;
             if (job_of_path.contains(clone_path)) continue;
             try job_of_path.put(clone_path, jobs.items.len);
-            try jobs.append(alloc, .{ .url = p.marker.repos.get(repo_name).?, .clone_path = clone_path });
+            try jobs.append(alloc, .{ .url = rem.url, .clone_path = clone_path });
         }
     }
 
@@ -121,16 +126,19 @@ fn runProjects(ctx: *app.Ctx, targets: []const project_mod.Project, jobs_cap: ?u
         const qualified = try p.qualified(alloc);
         var attempted_any = false;
 
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = p.repoIdentity(alloc, repo_name) catch continue;
-            if (id.isLocal()) continue;
-            const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
+        for (p.marker.entries) |*e| {
+            const src = e.source orelse continue;
+            const rem = switch (src) {
+                .remote => |r| r,
+                .local => continue,
+            };
+            const clone_path = try rem.id.clonePath(alloc, ws.cfg.code_root);
             const ji = job_of_path.get(clone_path) orelse continue;
             attempted_any = true;
 
             if (results[ji].ok) {
                 if (!success_printed[ji]) {
-                    try ctx.out.print("{s}: cloned {s} -> {s}\n", .{ qualified, repo_name, try app.tilde(ctx, clone_path) });
+                    try ctx.out.print("{s}: cloned {s} -> {s}\n", .{ qualified, e.name, try app.tilde(ctx, clone_path) });
                     success_printed[ji] = true;
                 }
             } else {
@@ -138,7 +146,7 @@ fn runProjects(ctx: *app.Ctx, targets: []const project_mod.Project, jobs_cap: ?u
                     try ctx.err.print("holt: {s}\n", .{results[ji].message});
                     fail_reported[ji] = true;
                 }
-                try ctx.err.print("holt: could not restore {s} repo {s}\n", .{ qualified, repo_name });
+                try ctx.err.print("holt: could not restore {s} repo {s}\n", .{ qualified, e.name });
                 had_error = true;
             }
         }
@@ -151,12 +159,15 @@ fn runProjects(ctx: *app.Ctx, targets: []const project_mod.Project, jobs_cap: ?u
 
         // A local repo has no remote to re-clone, so a missing clone after
         // the pass leaves a dangling hub link only re-adoption can rebuild.
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = p.repoIdentity(alloc, repo_name) catch continue;
-            if (!id.isLocal()) continue;
-            const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
+        for (p.marker.entries) |*e| {
+            const src = e.source orelse continue;
+            const seg = switch (src) {
+                .local => |s| s,
+                .remote => continue,
+            };
+            const clone_path = try identity.local(seg).clonePath(alloc, ws.cfg.code_root);
             if (fsutil.exists(clone_path)) continue;
-            try ctx.err.print("holt: {s}: local repo {s} has no remote and its clone is missing; re-adopt it to restore its hub link\n", .{ qualified, repo_name });
+            try ctx.err.print("holt: {s}: local repo {s} has no remote and its clone is missing; re-adopt it to restore its hub link\n", .{ qualified, e.name });
         }
     }
     return if (had_error) 1 else 0;
