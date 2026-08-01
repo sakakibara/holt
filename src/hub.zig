@@ -791,9 +791,11 @@ test "reconcile: an ignored alias links the member under its own name, nothing o
     );
 
     // A symlink where the traversal points: it must survive untouched, since
-    // replaceLink would otherwise remove it before writing its own.
+    // replaceLink would otherwise remove it before writing its own. The
+    // target is relative and separator-free because Windows rewrites `/` in
+    // a target, and the read-back below compares it byte for byte.
     const planted = try std.fs.path.join(arena, &.{ root, "planted" });
-    try fsutil.replaceSymlink("/nowhere", planted);
+    try fsutil.replaceSymlink("planted-target", planted);
 
     const report = try reconcile(arena, &ws, &p, false);
 
@@ -802,7 +804,7 @@ test "reconcile: an ignored alias links the member under its own name, nothing o
     try testing.expectEqual(@as(u32, 1), report.created);
     try testing.expect(try symlinkExists(arena, try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" })));
     switch (try fsutil.linkState(arena, planted)) {
-        .symlink => |t| try testing.expectEqualStrings("/nowhere", t),
+        .symlink => |t| try testing.expectEqualStrings("planted-target", t),
         else => return error.TestUnexpectedResult,
     }
 }
