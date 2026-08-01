@@ -176,8 +176,12 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
     if (std.fs.path.dirname(p.content_path)) |old_org_dir| fsutil.rmdirIfEmpty(old_org_dir);
     try ctx.out.print("deleted {s}\n", .{qualified});
 
-    for (p.marker.repos.keys()) |repo_name| {
-        const id = p.repoIdentity(alloc, repo_name) catch continue;
+    for (p.marker.entries) |*e| {
+        const src = e.source orelse continue;
+        const id = switch (src) {
+            .remote => |r| r.id,
+            .local => |seg| identity.local(seg),
+        };
         const others = try ws.projectsUsing(alloc, id);
         if (others.len == 0) {
             const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
@@ -333,10 +337,13 @@ fn runArchive(ctx: *app.Ctx, a: cli.Args(ArchiveSpec)) anyerror!u8 {
     // later --prune knows what this project referenced.
     var members: std.ArrayList(Member) = .empty;
     if (a.prune) {
-        for (p.marker.repos.keys()) |repo_name| {
-            const id = p.repoIdentity(alloc, repo_name) catch continue;
-            if (id.isLocal()) continue;
-            try members.append(alloc, .{ .repo = repo_name, .id = id, .clone_path = try id.clonePath(alloc, ws.cfg.code_root) });
+        for (p.marker.entries) |*e| {
+            const src = e.source orelse continue;
+            const rem = switch (src) {
+                .remote => |r| r,
+                .local => continue,
+            };
+            try members.append(alloc, .{ .repo = e.name, .id = rem.id, .clone_path = try rem.id.clonePath(alloc, ws.cfg.code_root) });
         }
     }
 
