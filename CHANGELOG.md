@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-08-02
+
+### Fixed
+
+- `holt worktree` and `holt path <project>/<repo>@<branch>` no longer join
+  the branch name into the `<clone>@worktrees/` path unchecked: a branch
+  whose segments would escape the directory (`..`, a backslash, an empty
+  or `~`-leading segment) is refused as a usage error instead of resolving
+  -- and, for `path`, printing -- a location outside the managed tree.
+- `holt sync`'s `run: holt repo promote <name>` hint now shell-quotes a
+  repo name containing spaces or shell metacharacters, so pasting the
+  hinted command runs it verbatim. Plain names print unchanged.
+- `holt doctor` reports a member whose alias value is unusable (not a
+  string, or a segment the path rules refuse) under "aliases valid";
+  before, such an alias silently did nothing and no check named it.
+
 ## [0.9.0] - 2026-08-01
 
 ### Changed
@@ -396,6 +412,9 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
+[0.9.1]: https://github.com/sakakibara/holt/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/sakakibara/holt/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/sakakibara/holt/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/sakakibara/holt/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/sakakibara/holt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/sakakibara/holt/compare/v0.5.2...v0.6.0
