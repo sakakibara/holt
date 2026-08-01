@@ -621,7 +621,7 @@ test "checkD1: a planted symlink under projects is caught, one under archive too
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const projects_link = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "evil" });
     try fsutil.replaceSymlink("/nonexistent-huge-tree", projects_link);
@@ -753,7 +753,7 @@ test "run: an evicted marker is reported as evicted and suppresses its hub-orpha
     const ws = try testutil.testWorkspace(arena, root);
 
     // A real project keeps the org dir alive.
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "real", .{ .version = 1, .org = "acme", .name = "real", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "real", .empty, .empty);
 
     // An evicted project: only the placeholder on disk, plus a leftover hub
     // dir that would read as a hub orphan if eviction were not recognized.
@@ -780,7 +780,7 @@ test "run: a corrupted marker is reported as a failure, not fatal to the whole r
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", .{ .version = 1, .org = "acme", .name = "good", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", .empty, .empty);
 
     const broken_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
@@ -805,7 +805,7 @@ test "run: a missing clone is reported with its would-be path" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const report = try run(arena, &ws, .{});
     try testing.expectEqual(@as(usize, 1), report.missing_clones.len);
@@ -825,7 +825,7 @@ test "run: a member clone present but incomplete is reported under broken clones
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // Plant a half-finished clone at the member's identity path: a `.git`
     // with no commits (existence checks pass, HEAD does not resolve).
@@ -852,7 +852,7 @@ test "run: --fix repairs a stale hub link but leaves a still-missing clone repor
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const scan = try scanMarkers(arena, &ws);
     _ = try hub.reconcile(arena, &ws, &scan.ok[0], false);

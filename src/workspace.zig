@@ -419,12 +419,12 @@ test "list: a conflict-copy project or org directory is never adopted as a proje
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     const proot = try ws.projectsRoot(arena);
-    try testutil.writeMarker(arena, proot, "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, proot, "acme", "widget", emptyRepos(), .empty);
     // A whole-dir conflict copy of the project - marker and all, exactly what a
     // cloud client leaves behind.
-    try testutil.writeMarker(arena, proot, "acme", "widget (conflicted copy 2024-01-01)", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarkerAs(arena, proot, "acme", "widget (conflicted copy 2024-01-01)", "acme", "widget", emptyRepos(), .empty);
     // A conflict copy of the whole org.
-    try testutil.writeMarker(arena, proot, "acme (conflicted copy)", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarkerAs(arena, proot, "acme (conflicted copy)", "widget", "acme", "widget", emptyRepos(), .empty);
 
     const got = try ws.list(arena);
     try testing.expectEqual(@as(usize, 1), got.len);
@@ -444,7 +444,7 @@ test "scanProjects: a dir whose marker is evicted becomes an evicted entry, not 
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     const proot = try ws.projectsRoot(arena);
-    try testutil.writeMarker(arena, proot, "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, proot, "acme", "widget", emptyRepos(), .empty);
 
     // A project dir with only the iCloud eviction placeholder where the marker
     // should be - real project, marker not downloaded.
@@ -481,9 +481,9 @@ test "list: finds all orgs and projects, sorted by org/name" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .{ .version = 1, .org = "zebra", .name = "aardvark", .repos = emptyRepos() });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gadget", .{ .version = 1, .org = "acme", .name = "gadget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", emptyRepos(), .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gadget", emptyRepos(), .empty);
 
     const got = try ws.list(arena);
 
@@ -507,7 +507,7 @@ test "list: a broken marker warns and is skipped, others still listed" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", .{ .version = 1, .org = "acme", .name = "good", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", emptyRepos(), .empty);
 
     const broken_dir = try std.fs.path.join(arena, &.{ root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
@@ -531,7 +531,7 @@ test "find: exact org/name match" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
 
     const result = try ws.find(arena, "acme/widget");
     switch (result) {
@@ -551,7 +551,7 @@ test "find: unique short name match" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
 
     const result = try ws.find(arena, "widget");
     switch (result) {
@@ -571,8 +571,8 @@ test "find: ambiguous exact name reports all candidates" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", .{ .version = 1, .org = "other", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", emptyRepos(), .empty);
 
     const result = try ws.find(arena, "widget");
     switch (result) {
@@ -592,7 +592,7 @@ test "find: case-insensitive subsequence match" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dotfiles", .{ .version = 1, .org = "acme", .name = "dotfiles", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dotfiles", emptyRepos(), .empty);
 
     const result = try ws.find(arena, "dtf");
     switch (result) {
@@ -615,8 +615,8 @@ test "find: a prefix match wins over a looser subsequence match" {
     // "wid" is a prefix of "widget" and only a scattered subsequence of
     // "worldwide-cdn" (w..i..d): the prefix tier decides, so widget wins
     // uniquely rather than the two being ambiguous.
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "worldwide-cdn", .{ .version = 1, .org = "acme", .name = "worldwide-cdn", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "worldwide-cdn", emptyRepos(), .empty);
 
     switch (try ws.find(arena, "wid")) {
         .one => |p| try testing.expectEqualStrings("widget", p.name),
@@ -635,8 +635,8 @@ test "find: smartcase - lowercase is case-insensitive, an uppercase letter makes
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "Widget", .{ .version = 1, .org = "acme", .name = "Widget", .repos = emptyRepos() });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", .{ .version = 1, .org = "other", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "Widget", emptyRepos(), .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", emptyRepos(), .empty);
 
     // Lowercase query is case-insensitive: both names match exactly.
     switch (try ws.find(arena, "widget")) {
@@ -661,7 +661,7 @@ test "find: no match returns none" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
 
     const result = try ws.find(arena, "zzz");
     try testing.expectEqual(FindResult.none, result);
@@ -678,7 +678,7 @@ test "hasMalformedMarker: true for a corrupt marker, false for no such dir and f
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = emptyRepos() });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
 
     const broken_dir = try std.fs.path.join(arena, &.{ root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
@@ -704,11 +704,11 @@ test "projectsUsing: returns both projects sharing one identity" {
 
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "shared", "https://github.com/acme/shared");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "fe", .{ .version = 1, .org = "acme", .name = "fe", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "fe", repos_a, .empty);
 
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "shared", "git@github.com:acme/shared.git");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dotfiles", .{ .version = 1, .org = "acme", .name = "dotfiles", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dotfiles", repos_b, .empty);
 
     const id = try identity.fromUrl(arena, "https://github.com/acme/shared");
     const got = try ws.projectsUsing(arena, id);

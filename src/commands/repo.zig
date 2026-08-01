@@ -1128,7 +1128,7 @@ test "new: a bare name creates a local repo and attaches it when -p is given" {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, new_command.run, ws, &.{ "scratch", "-p", "acme/proj" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -1271,7 +1271,7 @@ test "new: -p attaches a local member (marker local:<name> + hub) and doctor doe
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, new_command.run, ws, &.{ "tool", "-p", "acme/widget" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -1345,7 +1345,7 @@ test "get: with -p clones, checks out a branch, and records the repo as a projec
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const url = "https://holt-test.invalid/acme/widget";
     const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
@@ -1532,8 +1532,8 @@ test "get: -p to a second project shares an existing clone rather than re-clonin
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .empty, .empty);
 
     const url = "https://holt-test.invalid/acme/widget";
     const id = try identity.fromUrl(arena, url);
@@ -1579,7 +1579,7 @@ test "get: a repo already a member of the -p project is a hard error" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, get_command.run, ws, &.{ "https://holt-test.invalid/acme/widget", "-p", "proj" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -1596,7 +1596,7 @@ test "get: a local: argument with -p is rejected with adopt guidance" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, get_command.run, ws, &.{ "local:scratch", "-p", "proj" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -1613,7 +1613,7 @@ test "get: with -p, a parseable but unreachable url surfaces git's cause, not a 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     // Loopback with nothing listening: connection refused immediately, no
     // DNS or network dependency, so the failure is fast and deterministic.
@@ -1637,7 +1637,7 @@ test "adopt: takes the project as -p, not as a leading positional" {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
@@ -1680,7 +1680,7 @@ test "adopt: adopts an out-of-place clone with an origin, moving it to the ident
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const fake_origin = "https://holt-test.invalid/acme/scratch";
     const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray-clone" });
@@ -1716,7 +1716,7 @@ test "adopt: adopts a no-remote dir into local/<basename> with a local: marker v
     defer sb.deinit();
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const stray_path = try std.fs.path.join(arena, &.{ sb.root, "myrepo" });
     try fsutil.ensureDir(stray_path);
@@ -1743,7 +1743,7 @@ test "adopt: a no-remote dir whose name is unusable as a local name is refused b
     defer sb.deinit();
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     // The basename is the whole local identity here, and every reader of a
     // "local:<name>" marker value rejects these - so adopt must never mint one.
@@ -1782,7 +1782,7 @@ test "adopt: a dirty out-of-place clone refuses without --force, then proceeds w
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const fake_origin = "https://holt-test.invalid/acme/scratch";
     const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray-clone" });
@@ -1824,7 +1824,7 @@ test "adopt: a destination already occupied refuses to overwrite" {
     defer testing.allocator.free(other_bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const fake_origin = "https://holt-test.invalid/acme/scratch";
     const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray-clone" });
@@ -1855,7 +1855,7 @@ test "adopt: a repo short name already a member of the project is a hard error" 
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "https://holt-test.invalid/other/scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const fake_origin = "https://holt-test.invalid/acme/scratch";
     const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray-clone" });
@@ -1893,7 +1893,7 @@ test "adopt: a marker-save failure after the move names the new clone path and r
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const fake_origin = "https://holt-test.invalid/acme/scratch";
     const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray-clone" });
@@ -1941,7 +1941,7 @@ test "adopt: a plain directory with no .git is refused as unreadable, nothing mo
     defer sb.deinit();
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const plain_path = try std.fs.path.join(arena, &.{ sb.root, "plain-dir" });
     try fsutil.ensureDir(plain_path);
@@ -1966,7 +1966,7 @@ test "adopt: a nonexistent path is a hard error, not a crash" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const missing_path = try std.fs.path.join(arena, &.{ root, "does-not-exist" });
     const got = try testutil.runCmd(arena, adopt_command.run, ws, &.{ missing_path, "-p", "proj" });
@@ -2017,7 +2017,7 @@ test "adopt: a relative path argument resolves against the cwd instead of crashi
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const fake_origin = "https://holt-test.invalid/acme/scratch";
     const stray_path = try std.fs.path.join(arena, &.{ sb.root, "stray-clone" });
@@ -2185,7 +2185,7 @@ test "remove: -p unlinks the member and leaves the clone on disk" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const id = try identity.fromUrl(arena, "https://holt-test.invalid/acme/widget");
     const clone_path = try id.clonePath(arena, ws.cfg.code_root);
@@ -2277,7 +2277,7 @@ test "remove: --clone with -p keeps the clone when the prompt is declined, but t
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", .{ .version = 1, .org = "acme", .name = "only", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", repos, .empty);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
@@ -2398,7 +2398,7 @@ test "remove: --clone refuses while a project still references the repo, naming 
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "keeper", .{ .version = 1, .org = "acme", .name = "keeper", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "keeper", repos, .empty);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
@@ -2435,11 +2435,11 @@ test "remove: -p removing from one of two referencing projects keeps the clone a
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
 
     var repos2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos2.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos2 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos2, .empty);
 
     // A placeholder clone dir standing in for what a real `repo get` would
     // have cloned - remove never touches the clone in the -p-only path.
@@ -2484,7 +2484,7 @@ test "remove: -p removing the last reference reports the clone as kept, still on
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", .{ .version = 1, .org = "acme", .name = "only", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", repos, .empty);
 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try fsutil.ensureDir(clone_path);
@@ -2510,7 +2510,7 @@ test "remove: -p removing a repo drops its stale alias from the marker" {
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
     var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try aliases.put(arena, "widget", "gadget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "proj" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -2529,7 +2529,7 @@ test "remove: -p to a repo not a member of the project is a hard error" {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "proj" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -2561,7 +2561,7 @@ test "remove: -p and --clone together unlink and delete when nothing else refere
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", .{ .version = 1, .org = "acme", .name = "only", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", repos, .empty);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
@@ -2588,11 +2588,11 @@ test "remove: -p and --clone together unlink but keep the clone when a second pr
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
 
     var repos2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos2.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos2 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos2, .empty);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
@@ -2624,7 +2624,7 @@ test "remove: -p with an unparseable marker url refuses without falling back to 
     // github.com/acme/widget, an entirely unrelated clone.
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "acme/widget", "not a url");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const decoy_clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "widget" });
     try fsutil.ensureDir(decoy_clone);
@@ -2698,11 +2698,11 @@ test "promote: promotes a local repo shared by two projects, rewriting both mark
 
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_a, .empty);
 
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -2756,7 +2756,7 @@ test "promote: carries a repo's worktrees along and keeps them working" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -2794,11 +2794,11 @@ test "promote: --dry-run prints the planned move and affected projects, changing
 
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_a, .empty);
 
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -2839,7 +2839,7 @@ test "promote: a dirty clone refuses without --force, then proceeds with --force
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -2884,7 +2884,7 @@ test "promote: a destination already cloned from the same remote stops without c
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -2923,7 +2923,7 @@ test "promote: a destination occupied by a different repo is a hard error" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -2972,7 +2972,7 @@ test "promote: a traversing local name is refused, leaving the outside checkout 
     const name = "../../outside/victim";
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", try std.fmt.allocPrint(arena, "local:{s}", .{name}));
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const outside = try std.fs.path.join(arena, &.{ sb.root, "outside", "victim" });
     try cloneWithOrigin(&sb, bare, outside, "https://holt-test.invalid/acme/victim");
@@ -3011,7 +3011,7 @@ test "promote: no remote configured on the local clone is a hard error" {
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try fsutil.ensureDir(local_clone_path);
@@ -3039,11 +3039,11 @@ test "promote: resumes an interrupted promote, finishing the leftover marker and
     // the leftover this run must finish.
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "scratch", fake_origin);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_a, .empty);
 
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
     const new_id = try identity.fromUrl(arena, fake_origin);
     const new_clone_path = try new_id.clonePath(arena, ws.cfg.code_root);
@@ -3090,11 +3090,11 @@ test "promote: resumes a promote whose clone moved before any marker was written
     // write - no sibling marker survives to name the origin.
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_a, .empty);
 
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
     const new_id = try identity.fromUrl(arena, fake_origin);
     const new_clone_path = try new_id.clonePath(arena, ws.cfg.code_root);
@@ -3138,7 +3138,7 @@ test "promote: promoting the last local repo prunes the emptied code_root/local/
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -3167,7 +3167,7 @@ test "promote: promoting one of two local repos leaves code_root/local/ in place
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
@@ -3197,7 +3197,7 @@ test "promote: a local clone missing from both the old and new path is a hard er
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try testing.expect(!fsutil.exists(local_clone_path));
@@ -3219,7 +3219,7 @@ test "alias: takes the project as -p and renames the hub link" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, alias_command.run, ws, &.{ "widget", "gadget", "-p", "acme/proj" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -3257,7 +3257,7 @@ test "alias: setting an alias records it and reconciles the hub link" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // Build the hub first so the derived code/widget link exists to be swept.
     const p0 = switch (try ws.find(arena, "proj")) {
@@ -3301,7 +3301,7 @@ test "alias: clearing an alias reverts the hub link to the derived name" {
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
     var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try aliases.put(arena, "widget", "gadget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
     const p0 = switch (try ws.find(arena, "proj")) {
         .one => |proj| proj,
@@ -3341,7 +3341,7 @@ test "alias: an alias colliding with a reserved link name errors and changes not
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, alias_command.run, ws, &.{ "widget", "docs", "-p", "proj" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -3365,7 +3365,7 @@ test "alias: an alias carrying a path separator errors and changes nothing" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", marker.marker_basename });
     for ([_][]const u8{ "../../evil", "..\\..\\evil", "~evil" }) |bad| {
@@ -3392,7 +3392,7 @@ test "alias: an alias colliding with another member's link errors and changes no
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
     try repos.put(arena, "gadget", "https://holt-test.invalid/acme/gadget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, alias_command.run, ws, &.{ "widget", "gadget", "-p", "proj" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -3413,7 +3413,7 @@ test "alias: aliasing a non-member repo is a hard error" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, alias_command.run, ws, &.{ "widget", "gadget", "-p", "proj" });
     try testing.expectEqual(@as(u8, 1), got.code);

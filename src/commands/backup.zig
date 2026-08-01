@@ -169,7 +169,7 @@ test "run: creates a tar.gz under backups/ whose contents list the marker" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -203,7 +203,7 @@ test "run: a project directory name beginning with `-` is archived, not read by 
     // A project directory is synced data, so its name reaches tar as an
     // operand; read as an option instead, tar refuses the whole invocation.
     const name = "--holt-not-an-option";
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", name, .{ .version = 1, .org = "acme", .name = name, .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", name, .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{try std.fmt.allocPrint(arena, "acme/{s}", .{name})});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -232,7 +232,7 @@ test "run: a tar failure removes the partial tarball instead of leaving a trunca
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     // An unreadable file inside the content dir makes tar exit nonzero after
     // it has already opened (and started writing) its output archive. Mode

@@ -562,7 +562,7 @@ test "new: a project already in the archive is refused and nothing is created" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, new_command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -638,7 +638,7 @@ test "remove: deletes content and hub, keeps the clone, and reports it unreferen
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
 
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
@@ -672,7 +672,7 @@ test "remove: --yes deleting the last project in an org prunes the emptied org's
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -699,8 +699,8 @@ test "remove: --yes deleting one of two projects in an org leaves the org's cont
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .{ .version = 1, .org = "acme", .name = "gizmo", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .empty, .empty);
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -734,7 +734,7 @@ test "remove: --yes on a project with no repos deletes cleanly with no orphan re
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "acme/empty", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -769,7 +769,7 @@ test "remove: a partial content-delete failure keeps the marker, so the project 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -815,7 +815,7 @@ test "rename: moves content to the new org/name and rebuilds the hub" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "old", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/old", "acme/new" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -834,7 +834,7 @@ test "archive: moves content into archive/ and drops the hub" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "old", .empty, .empty);
 
     const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/old", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -854,7 +854,7 @@ test "rename: moves content, rewrites the marker, and rebuilds the hub at the ne
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", "docs" }));
     const old_p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
@@ -895,7 +895,7 @@ test "rename: a hub rebuild failure after the content move points the user at ho
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -929,8 +929,8 @@ test "rename: refuses when the target project already exists, leaving the source
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "corp", "gadget", .{ .version = 1, .org = "corp", .name = "gadget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "corp", "gadget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "corp/gadget" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -951,7 +951,7 @@ test "rename: source and target are the same project reports the clearer message
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "acme/widget" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -972,7 +972,7 @@ test "rename: renaming the last project out of an org prunes the emptied org's c
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     const old_p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -999,8 +999,8 @@ test "rename: renaming one of two projects out of an org leaves the org's conten
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .{ .version = 1, .org = "acme", .name = "gizmo", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .empty, .empty);
     const widget_p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -1034,7 +1034,7 @@ test "rename: a malformed <new-org>/<new-name> spec is a usage error" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "no-slash" });
     try testing.expectEqual(@as(u8, 2), got.code);
@@ -1051,7 +1051,7 @@ test "rename: a target that traverses out of the roots is rejected, leaving the 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme/widget", "acme/../x" });
     try testing.expectEqual(@as(u8, 2), got.code);
@@ -1089,7 +1089,7 @@ test "archive: moves content into archive/, drops the hub, and unarchive round-t
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget", "docs" }));
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
@@ -1131,7 +1131,7 @@ test "archive: archiving the last project in an org prunes the emptied org's con
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -1158,8 +1158,8 @@ test "archive: archiving one of two projects in an org leaves the org's content 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .{ .version = 1, .org = "acme", .name = "gizmo", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gizmo", .empty, .empty);
     const p = switch (try ws.find(arena, "acme/widget")) {
         .one => |proj| proj,
         else => return error.TestUnexpectedResult,
@@ -1193,8 +1193,8 @@ test "archive: refuses when the archive destination already exists, leaving cont
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, archive_command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -1207,7 +1207,7 @@ test "archive: refuses when the archive destination already exists, leaving cont
 fn writeProjectWithClone(sb: *testutil.Sandbox, arena: std.mem.Allocator, ws: workspace.Workspace, org: []const u8, name: []const u8, repo: []const u8, url: []const u8) ![]const u8 {
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, repo, url);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), org, name, .{ .version = 1, .org = org, .name = name, .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), org, name, repos, .empty);
     const bare = try testutil.makeBareRepo(sb, try std.fmt.allocPrint(arena, "{s}-{s}.git", .{ org, name }));
     defer testing.allocator.free(bare);
     const id = try identity.fromUrl(arena, url);
@@ -1249,7 +1249,7 @@ test "archive: --prune keeps a clone still referenced by another active project"
     // A second active project references the same clone.
     var repos2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos2.put(arena, "widget", url);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "other", .{ .version = 1, .org = "acme", .name = "other", .repos = repos2 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "other", repos2, .empty);
 
     const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -1328,7 +1328,7 @@ test "unarchive: moves an archived project back into projects/ and rebuilds its 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .empty, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget", "docs" }));
 
     const got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/widget"});
@@ -1359,7 +1359,7 @@ test "unarchive: unarchiving the only project in an org prunes the emptied archi
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .empty, .empty);
 
     const archive_org_dir = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme" });
     try testing.expect(fsutil.exists(archive_org_dir));
@@ -1397,8 +1397,8 @@ test "unarchive: unarchiving over an existing project is a hard error, archive k
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, unarchive_command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 1), got.code);

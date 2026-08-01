@@ -127,9 +127,9 @@ fn threeProjectSandbox(arena: std.mem.Allocator, tmp: *testing.TmpDir) !workspac
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws = testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .{ .version = 1, .org = "zebra", .name = "aardvark", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gadget", .{ .version = 1, .org = "acme", .name = "gadget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gadget", .empty, .empty);
 
     return ws;
 }
@@ -210,8 +210,8 @@ test "run: --json emits a parseable array with the right orgs, names, and repos"
 
     var repos_widget: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_widget.put(arena, "widget-repo", "https://holt-test.invalid/acme/widget-repo");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos_widget });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .{ .version = 1, .org = "zebra", .name = "aardvark", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos_widget, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--json"});
     try testing.expectEqual(@as(u8, 0), got.code);

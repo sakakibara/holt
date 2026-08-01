@@ -434,8 +434,8 @@ test "resolveCompletion: org filters and directs .nospace, including archive-onl
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "gone", "old", .{ .version = 1, .org = "gone", .name = "old", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "gone", "old", .empty, .empty);
 
     var ctx = withWs(ws);
 
@@ -469,7 +469,7 @@ test "resolveCompletion: repo completes off the preceding project positional" {
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try repos.put(arena, "frontend", "https://holt-test.invalid/acme/frontend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
 
     var ctx = withWs(ws);
     const got = try resolveCompletion(arena, "repo", "widget", "back", &ctx);
@@ -487,7 +487,7 @@ test "resolveCompletion: a path-shaped current word on the project key falls bac
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     var ctx = withWs(ws);
 
@@ -525,7 +525,7 @@ test "resolveCompletion: project_repo with an '@' completes worktree branches fi
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
     const leaf = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature", "x" });
@@ -556,7 +556,7 @@ test "resolveCompletion: worktree_branch returns bare branch names for the prece
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
     const leaf = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature", "x" });
@@ -582,7 +582,7 @@ test "candidatesFor: .repo offers every project's members when no project preced
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try candidatesFor(arena, "repo", null, &ws);
     var saw = false;
@@ -606,7 +606,7 @@ test "candidatesFor: .local_repo offers a usable local name and skips a traversi
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
     try repos.put(arena, "widget", "local:../../outside/victim");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try candidatesFor(arena, "local_repo", null, &ws);
     try testing.expectEqual(@as(usize, 1), got.len);

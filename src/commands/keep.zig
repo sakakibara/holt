@@ -96,7 +96,7 @@ test "run: moves a loose hub file into content and leaves a symlink" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);
@@ -140,7 +140,7 @@ test "run: keeping an already-kept entry is an idempotent no-op success" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);
@@ -184,7 +184,7 @@ test "run: refuses when content already has that name" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);
@@ -243,7 +243,7 @@ test "run: refuses a path that is not directly at the hub root" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);
@@ -284,7 +284,7 @@ test "run: refuses to keep a reserved name" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);
@@ -320,7 +320,7 @@ test "run: errors clearly when the given path does not exist" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);
@@ -351,7 +351,7 @@ test "run: keeps a loose directory, moving its contents and leaving a symlink" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);

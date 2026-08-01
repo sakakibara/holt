@@ -197,7 +197,7 @@ test "run: <project>/<repo>@<branch> resolves the worktree path, and misses repo
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // A worktree only needs to exist on disk for resolution; stage the dir.
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
@@ -301,7 +301,7 @@ test "run: a project query prints the hub path" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws = testWorkspace(arena, root, "/code");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"widget"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -324,7 +324,7 @@ test "run: a project/repo query prints the real clone path, not the hub link" {
     try repos.put(arena, "backend", "https://github.com/acme/backend");
 
     const ws = testWorkspace(arena, root, "/code");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
 
     const result = try testutil.runCmd(arena, command.run, ws, &.{"widget/backend"});
     try testing.expectEqual(@as(u8, 0), result.code);
@@ -351,7 +351,7 @@ test "run: repo resolves by unique subsequence when not an exact name" {
     try repos.put(arena, "backend", "https://github.com/acme/backend");
 
     const ws = testWorkspace(arena, root, "/code");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/bck"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -387,8 +387,8 @@ test "run: ambiguous project exits 1 and lists every candidate" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws = testWorkspace(arena, root, "/code");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", .{ .version = 1, .org = "other", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "widget", .empty, .empty);
 
     const result = try testutil.runCmd(arena, command.run, ws, &.{"widget"});
     try testing.expectEqual(@as(u8, 1), result.code);

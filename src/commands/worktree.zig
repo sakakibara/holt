@@ -128,7 +128,7 @@ test "run: creating a worktree before the clone exists reports a restore hint" {
     // A member repo whose clone was never fetched (fresh-machine case).
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", "feature" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -149,7 +149,7 @@ test "run: an emptied @worktrees dir (raw git removal) drops the hub link on rec
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
     try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
@@ -197,10 +197,10 @@ test "run: a worktree on a shared repo surfaces in every project that uses it" {
     // Two projects share the same repo.
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "lib", url);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "one", .{ .version = 1, .org = "acme", .name = "one", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "one", repos_a, .empty);
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "lib", url);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "two", .{ .version = 1, .org = "acme", .name = "two", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "two", repos_b, .empty);
 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "lib" });
     try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
@@ -234,7 +234,7 @@ test "run: create, list, and remove a worktree; the hub link tracks it" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // Clone the repo into its identity path and add a branch to check out.
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });

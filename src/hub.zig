@@ -425,7 +425,7 @@ pub fn removeHub(p: *const Project) !void {
     if (std.fs.path.dirname(p.hub_path)) |org_hub_path| fsutil.rmdirIfEmpty(org_hub_path);
 }
 
-fn testProject(alloc: std.mem.Allocator, ws: *const Workspace, org: []const u8, name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8)) !Project {
+fn testProject(alloc: std.mem.Allocator, ws: *const Workspace, org: []const u8, name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8), aliases: std.StringArrayHashMapUnmanaged([]const u8)) !Project {
     const content_path = try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "projects", org, name });
     const hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, org, name });
     return .{
@@ -433,7 +433,7 @@ fn testProject(alloc: std.mem.Allocator, ws: *const Workspace, org: []const u8, 
         .name = name,
         .content_path = content_path,
         .hub_path = hub_path,
-        .marker = .{ .version = 1, .org = org, .name = name, .repos = repos },
+        .marker = .{ .version = 1, .org = org, .name = name, .repos = repos, .aliases = aliases },
     };
 }
 
@@ -482,7 +482,7 @@ test "desiredLinks: content links plus one flat code link per repo, absolute tar
     const ws = try testutil.testWorkspace(arena, root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
@@ -514,7 +514,7 @@ test "desiredLinks: mirrors every content entry except the marker and code" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     // Create real content entries on disk, plus the marker and a stray "code".
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
@@ -552,7 +552,7 @@ test "desiredLinks: tags a content directory .dir and a content file .file" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "widget", repos);
+    const p = try testProject(arena, &ws, "acme", "widget", repos, .empty);
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
@@ -585,7 +585,7 @@ test "desiredLinks: colliding short names go owner-qualified, others stay flat" 
     try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "org", "proj", repos);
+    const p = try testProject(arena, &ws, "org", "proj", repos, .empty);
 
     const links = (try desiredLinks(arena, &ws, &p)).links;
 
@@ -617,7 +617,7 @@ test "desiredLinks: colliding local repo qualifies as local-<name>" {
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
     try repos.put(arena, "scratch2", "https://github.com/acme/scratch");
-    const p = try testProject(arena, &ws, "org", "proj", repos);
+    const p = try testProject(arena, &ws, "org", "proj", repos, .empty);
 
     const links = (try desiredLinks(arena, &ws, &p)).links;
 
@@ -640,8 +640,9 @@ test "desiredLinks: an aliased repo links as code/<alias> at its real clone path
     const ws = try testutil.testWorkspace(arena, root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    var p = try testProject(arena, &ws, "acme", "proj", repos);
-    try p.marker.aliases.put(arena, "holt", "gadget");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "holt", "gadget");
+    const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
 
     const links = (try desiredLinks(arena, &ws, &p)).links;
 
@@ -672,8 +673,9 @@ test "desiredLinks: aliasing one of two colliding members frees the other to sta
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
-    var p = try testProject(arena, &ws, "org", "proj", repos);
-    try p.marker.aliases.put(arena, "docs-a", "mydocs");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "docs-a", "mydocs");
+    const p = try testProject(arena, &ws, "org", "proj", repos, aliases);
 
     const links = (try desiredLinks(arena, &ws, &p)).links;
 
@@ -716,8 +718,9 @@ test "desiredLinks: a traversing alias is ignored and the member keeps its deriv
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    var p = try testProject(arena, &ws, "acme", "proj", repos);
-    try p.marker.aliases.put(arena, "holt", "../../../../evil");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "holt", "../../../../evil");
+    const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -738,8 +741,9 @@ test "desiredLinks: a backslash alias is ignored, since it traverses on Windows"
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    var p = try testProject(arena, &ws, "acme", "proj", repos);
-    try p.marker.aliases.put(arena, "holt", "..\\..\\evil");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "holt", "..\\..\\evil");
+    const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -761,8 +765,9 @@ test "desiredLinks: a member whose alias is ignored rejoins the collision groupi
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
-    var p = try testProject(arena, &ws, "org", "proj", repos);
-    try p.marker.aliases.put(arena, "docs-a", "../evil");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "docs-a", "../evil");
+    const p = try testProject(arena, &ws, "org", "proj", repos, aliases);
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -783,8 +788,9 @@ test "reconcile: an ignored alias links the member under its own name, nothing o
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    var p = try testProject(arena, &ws, "acme", "proj", repos);
-    try p.marker.aliases.put(arena, "holt", "../../../../planted");
+    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try aliases.put(arena, "holt", "../../../../planted");
+    const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
 
     // A symlink where the traversal points: it must survive untouched, since
     // replaceLink would otherwise remove it before writing its own.
@@ -816,7 +822,7 @@ test "desiredLinks: a member whose url does not resolve is reported, not raised"
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "evil", "local:../../evil");
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -839,7 +845,7 @@ test "reconcile: an unresolvable member costs only its own link" {
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "evil", "local:../../evil");
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
 
@@ -866,7 +872,7 @@ test "reconcile: a project whose every member is unresolvable grows no code dir"
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "evil", "local:../../evil");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     const report = try reconcile(arena, &ws, &p, false);
 
@@ -887,14 +893,14 @@ test "reconcile: code dir exists only when the project has repos" {
 
     // Repo-less project: no code/ dir after reconcile.
     const empty_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    const p0 = try testProject(arena, &ws, "acme", "docsonly", empty_repos);
+    const p0 = try testProject(arena, &ws, "acme", "docsonly", empty_repos, .empty);
     _ = try reconcile(arena, &ws, &p0, false);
     const code0 = try std.fs.path.join(arena, &.{ p0.hub_path, "code" });
     try testing.expect(!fsutil.exists(code0));
 
     // Project with a repo: code/ dir present.
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p1 = try testProject(arena, &ws, "acme", "withcode", repos);
+    const p1 = try testProject(arena, &ws, "acme", "withcode", repos, .empty);
     _ = try reconcile(arena, &ws, &p1, false);
     const code1 = try std.fs.path.join(arena, &.{ p1.hub_path, "code" });
     try testing.expect(fsutil.exists(code1));
@@ -911,7 +917,7 @@ test "reconcile: an emptied code dir is pruned when the last repo is removed" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    var p = try testProject(arena, &ws, "acme", "proj", repos);
+    var p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
     const code_dir = try std.fs.path.join(arena, &.{ p.hub_path, "code" });
@@ -934,7 +940,7 @@ test "reconcile: fresh build creates all links with correct targets" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
@@ -974,7 +980,7 @@ test "reconcile: a file mirror that cannot be linked is recorded, not created, n
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const p = try testProject(arena, &ws, "acme", "widget", .empty);
+    const p = try testProject(arena, &ws, "acme", "widget", .empty, .empty);
 
     // One content file whose mirror will be forced to "skip".
     try fsutil.ensureDir(p.content_path);
@@ -1005,7 +1011,7 @@ test "reconcile: second run is idempotent (all zero)" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     _ = try reconcile(arena, &ws, &p, false);
     const report = try reconcile(arena, &ws, &p, false);
@@ -1026,7 +1032,7 @@ test "reconcile: a second run over an already-correct hub retargets nothing" {
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const p = try testProject(arena, &ws, "acme", "widget", .empty);
+    const p = try testProject(arena, &ws, "acme", "widget", .empty, .empty);
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
 
@@ -1050,11 +1056,11 @@ test "reconcile: a marker URL change retargets the existing link" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
     const moved_repos = try oneRepo(arena, "holt", "https://github.com/newowner/holt");
-    const p2 = try testProject(arena, &ws, "acme", "proj", moved_repos);
+    const p2 = try testProject(arena, &ws, "acme", "proj", moved_repos, .empty);
     const report = try reconcile(arena, &ws, &p2, false);
 
     try testing.expectEqual(@as(u32, 0), report.created);
@@ -1083,7 +1089,7 @@ test "reconcile: a stale extra symlink is swept" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
     const stale_link = try std.fs.path.join(arena, &.{ p.hub_path, "code", "gone" });
@@ -1106,7 +1112,7 @@ test "reconcile: a real file in code/ is a conflict and is preserved" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
     const stray_path = try std.fs.path.join(arena, &.{ p.hub_path, "code", "stray.txt" });
@@ -1130,7 +1136,7 @@ test "reconcile: dry_run computes the report without touching disk" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
@@ -1159,7 +1165,7 @@ test "reconcile: collision case links both members owner-qualified, third stays 
     try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "org", "proj", repos);
+    const p = try testProject(arena, &ws, "org", "proj", repos, .empty);
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
@@ -1190,7 +1196,7 @@ test "sweepDir: hub root leaves loose files and foreign symlinks, prunes stale m
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     try fsutil.ensureDir(p.hub_path);
 
@@ -1234,7 +1240,7 @@ test "removeHub: removes links and then-empty dirs" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
     try removeHub(&p);
@@ -1253,7 +1259,7 @@ test "removeHub: a real file left behind keeps the hub dir but drops the links" 
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos);
+    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
     const stray_path = try std.fs.path.join(arena, &.{ p.hub_path, "keep.txt" });

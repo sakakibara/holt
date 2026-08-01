@@ -244,13 +244,13 @@ fn threeProjectSandbox(arena: std.mem.Allocator, root: []const u8) !workspace.Wo
 
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos_a, .empty);
 
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "docs", "https://github.com/acme/docs");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gadget", .{ .version = 1, .org = "acme", .name = "gadget", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gadget", repos_b, .empty);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .{ .version = 1, .org = "zebra", .name = "aardvark", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .empty, .empty);
 
     // A real `holt project new` project always has these seeded on disk; the fixture
     // mirrors that so a project with no repos still yields desired links.
@@ -293,7 +293,7 @@ test "run: a hub conflict is reported and exits nonzero" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
 
     // A real "docs" content entry makes `docs` a desired hub link. A real
     // directory already sitting at that hub path blocks reconcile from
@@ -325,7 +325,7 @@ test "run: a marker alias that is not a link name is named, and plants nothing o
     try repos.put(arena, "widget", "https://github.com/acme/widget");
     var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try aliases.put(arena, "widget", "../../../../planted");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -358,11 +358,11 @@ test "run: a marker member with an unusable url is named, the rest of the worksp
     var poisoned: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try poisoned.put(arena, "evil", "local:../../evil");
     try poisoned.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = poisoned });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", poisoned, .empty);
 
     var sound: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try sound.put(arena, "docs", "https://github.com/acme/docs");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "gadget", .{ .version = 1, .org = "zebra", .name = "gadget", .repos = sound });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "gadget", sound, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -413,7 +413,7 @@ test "run: a stale hub link left by a marker change is swept on the next sync" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
 
     _ = try testutil.runCmd(arena, command.run, ws, &.{});
 
@@ -441,7 +441,7 @@ test "run: hints a local repo that has grown an origin, without moving anything"
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try fsutil.ensureDir(std.fs.path.dirname(local_clone_path).?);
@@ -614,7 +614,7 @@ test "run: warns about content files not surfaced for lack of privilege" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
     const content_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
     try fsutil.writeFileAtomic(arena, try std.fs.path.join(arena, &.{ content_path, "notes.md" }), "hi");
 
@@ -639,7 +639,7 @@ test "run: a local: marker whose clone dir is absent is skipped, not a crash" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const local_clone_path = try identity.local("scratch").clonePath(arena, ws.cfg.code_root);
     try testing.expect(!fsutil.exists(local_clone_path));

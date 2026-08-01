@@ -306,7 +306,7 @@ test "run: touches a marker file in each of 2 member clones, exit 0" {
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try repos.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
@@ -341,7 +341,7 @@ test "run: with HOLT_RUN_CAPTURE set, a child's stdout appears in ctx.out under 
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
@@ -374,7 +374,7 @@ test "run: a failing command in one repo doesn't stop the other, but the overall
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try repos.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
@@ -410,7 +410,7 @@ test "run: --repo limits execution to a single member" {
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try repos.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
@@ -444,7 +444,7 @@ test "run: a missing clone is reported and skipped, not a crash" {
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const override = try installCapture(arena);
     defer override.restore();
@@ -499,7 +499,7 @@ test "run: a command that doesn't exist is reported by name, not as a raw FileNo
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
@@ -525,7 +525,7 @@ test "run: a project with no member repos reports so instead of printing nothing
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty-proj", .{ .version = 1, .org = "acme", .name = "empty-proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty-proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/empty-proj", "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -551,15 +551,15 @@ test "run: --org runs in every member repo of every project in that org" {
 
     var repos_1: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_1.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", .{ .version = 1, .org = "acme", .name = "proj1", .repos = repos_1 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_1, .empty);
 
     var repos_2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_2.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", .{ .version = 1, .org = "acme", .name = "proj2", .repos = repos_2 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", repos_2, .empty);
 
     var repos_other: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_other.put(arena, "repo-c", "https://holt-test.invalid/other/repo-c");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj3", .{ .version = 1, .org = "other", .name = "proj3", .repos = repos_other });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj3", repos_other, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
@@ -603,11 +603,11 @@ test "run: --all spans every project in the workspace" {
 
     var repos_acme: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_acme.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", .{ .version = 1, .org = "acme", .name = "proj1", .repos = repos_acme });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_acme, .empty);
 
     var repos_other: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_other.put(arena, "repo-b", "https://holt-test.invalid/other/repo-b");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj2", .{ .version = 1, .org = "other", .name = "proj2", .repos = repos_other });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj2", repos_other, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
@@ -640,11 +640,11 @@ test "run: --all runs a repo shared by two projects exactly once" {
 
     var repos_1: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_1.put(arena, "shared", "https://holt-test.invalid/acme/shared");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", .{ .version = 1, .org = "acme", .name = "proj1", .repos = repos_1 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_1, .empty);
 
     var repos_2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_2.put(arena, "shared-alias", "https://holt-test.invalid/acme/shared");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", .{ .version = 1, .org = "acme", .name = "proj2", .repos = repos_2 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", repos_2, .empty);
 
     const shared_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
     try fsutil.ensureDir(std.fs.path.dirname(shared_path).?);
@@ -712,7 +712,7 @@ test "run: -j 4 runs the command in every repo, one failing child yields aggrega
         const url = try std.fmt.allocPrint(arena, "https://holt-test.invalid/acme/{s}", .{name});
         try repos.put(arena, name, url);
     }
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     var paths: [names.len][]const u8 = undefined;
     for (names, &paths) |name, *path| {
@@ -748,11 +748,11 @@ test "run: --all -j 4 runs a repo shared by two projects exactly once" {
 
     var repos_1: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_1.put(arena, "shared", "https://holt-test.invalid/acme/shared");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", .{ .version = 1, .org = "acme", .name = "proj1", .repos = repos_1 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_1, .empty);
 
     var repos_2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_2.put(arena, "shared-alias", "https://holt-test.invalid/acme/shared");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", .{ .version = 1, .org = "acme", .name = "proj2", .repos = repos_2 });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", repos_2, .empty);
 
     const shared_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
     try fsutil.ensureDir(std.fs.path.dirname(shared_path).?);
@@ -779,7 +779,7 @@ test "run: -j 4 with a captured child's stdout appears under its repo header" {
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
     try fsutil.ensureDir(std.fs.path.dirname(path_a).?);

@@ -146,11 +146,21 @@ pub fn makeWorkClone(sb: *Sandbox, bare_path: []const u8) ![]u8 {
 /// Writes a marker at `<parent_dir>/<org>/<name>/.holt.json`, creating any
 /// missing directories. `parent_dir` must already be the fully-qualified
 /// projects/archive directory (e.g. the result of `ws.projectsRoot(alloc)`
-/// or `ws.archiveRoot(alloc)`) - this only joins `org`/`name` onto it.
-pub fn writeMarker(alloc: std.mem.Allocator, parent_dir: []const u8, org: []const u8, name: []const u8, m: marker.Marker) !void {
-    const dir_path = try std.fs.path.join(alloc, &.{ parent_dir, org, name });
+/// or `ws.archiveRoot(alloc)`) - this only joins `org`/`name` onto it. The
+/// written marker's own `org`/`name` fields match the directory.
+pub fn writeMarker(alloc: std.mem.Allocator, parent_dir: []const u8, org: []const u8, name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8), aliases: std.StringArrayHashMapUnmanaged([]const u8)) !void {
+    return writeMarkerAs(alloc, parent_dir, org, name, org, name, repos, aliases);
+}
+
+/// As `writeMarker`, but lets the marker's own `org`/`name` fields differ
+/// from the directory (`dir_org`/`dir_name`) it is written under - for
+/// fixtures asserting that the on-disk directory is authoritative over a
+/// marker's self-description.
+pub fn writeMarkerAs(alloc: std.mem.Allocator, parent_dir: []const u8, dir_org: []const u8, dir_name: []const u8, marker_org: []const u8, marker_name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8), aliases: std.StringArrayHashMapUnmanaged([]const u8)) !void {
+    const dir_path = try std.fs.path.join(alloc, &.{ parent_dir, dir_org, dir_name });
     try fsutil.ensureDir(dir_path);
     const marker_path = try std.fs.path.join(alloc, &.{ dir_path, marker.marker_basename });
+    const m: marker.Marker = .{ .version = marker.marker_version, .org = marker_org, .name = marker_name, .repos = repos, .aliases = aliases };
     try marker.save(&m, marker_path);
 }
 
@@ -222,7 +232,7 @@ pub fn seedSyntheticWorkspace(alloc: std.mem.Allocator, root: []const u8, opts: 
                 const url = try std.fmt.allocPrint(alloc, "https://example.com/{s}/{s}.git", .{ org, rname });
                 try repos.put(alloc, rname, url);
             }
-            try writeMarker(alloc, projects_root, org, name, .{ .version = marker.marker_version, .org = org, .name = name, .repos = repos });
+            try writeMarker(alloc, projects_root, org, name, repos, .empty);
 
             if (git_env) |*env| {
                 for (repos.keys()) |rname| {

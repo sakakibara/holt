@@ -208,9 +208,9 @@ test "run: --org restricts the listing to one org" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "one", .{ .version = 1, .org = "acme", .name = "one", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "two", .{ .version = 1, .org = "acme", .name = "two", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "three", .{ .version = 1, .org = "zebra", .name = "three", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "one", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "two", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "three", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--org", "acme" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -230,7 +230,7 @@ test "run: --json emits objects; a project with no commit has a null timestamp" 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--json"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -254,9 +254,9 @@ test "run: -n caps the list and notes the remainder on stderr" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .{ .version = 1, .org = "acme", .name = "a", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .{ .version = 1, .org = "acme", .name = "b", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "c", .{ .version = 1, .org = "acme", .name = "c", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "c", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "-n", "1" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -280,11 +280,11 @@ test "run: orders projects by their most recent planted commit date, newest firs
 
     var repos_old: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_old.put(arena, "old-repo", "https://holt-test.invalid/acme/old-repo");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "older", .{ .version = 1, .org = "acme", .name = "older", .repos = repos_old });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "older", repos_old, .empty);
 
     var repos_new: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_new.put(arena, "new-repo", "https://holt-test.invalid/acme/new-repo");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "newer", .{ .version = 1, .org = "acme", .name = "newer", .repos = repos_new });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "newer", repos_new, .empty);
 
     const old_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "old-repo" });
     try fsutil.ensureDir(std.fs.path.dirname(old_path).?);
@@ -313,11 +313,11 @@ test "run: a project with no clones present sorts last" {
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "no-clone", .{ .version = 1, .org = "acme", .name = "no-clone", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "no-clone", .empty, .empty);
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "has-clone", "https://holt-test.invalid/acme/has-clone");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "has-clone", .{ .version = 1, .org = "acme", .name = "has-clone", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "has-clone", repos, .empty);
 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "has-clone" });
     try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
@@ -340,9 +340,9 @@ test "run: -n limits the count shown" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "one", .{ .version = 1, .org = "acme", .name = "one", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "two", .{ .version = 1, .org = "acme", .name = "two", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "three", .{ .version = 1, .org = "acme", .name = "three", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "one", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "two", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "three", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "-n", "2" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -402,7 +402,7 @@ test "run: -j 1 and -j 8 produce byte-identical ordering across many projects an
             try testutil.runGit(&sb, null, &.{ "clone", bare, path });
             try commitAtEpoch(arena, path, epoch);
         }
-        try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", spec.name, .{ .version = 1, .org = "acme", .name = spec.name, .repos = repos });
+        try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", spec.name, repos, .empty);
     }
 
     const serial = try testutil.runCmd(arena, command.run, ws, &.{ "-j", "1" });

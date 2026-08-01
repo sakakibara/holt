@@ -524,7 +524,7 @@ test "projectFromCwd: resolves the project when cwd is inside its hub" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const hub_dir = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub_dir);

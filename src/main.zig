@@ -197,14 +197,14 @@ fn completionCtx(alloc: std.mem.Allocator, out: *std.Io.Writer, err: *std.Io.Wri
 /// an org with a project carrying both a remote and a `local:` repo
 /// ("acme/proj"), and an org that only exists in the archive ("gone/old").
 fn seedCompletionFixture(alloc: std.mem.Allocator, ws: *const workspace.Workspace) !void {
-    try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "widget", .{ .version = marker.marker_version, .org = "acme", .name = "widget", .repos = .empty });
+    try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "widget", .empty, .empty);
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(alloc, "backend", "https://example.com/acme/backend.git");
     try repos.put(alloc, "tool", "local:tool");
-    try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "proj", .{ .version = marker.marker_version, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "proj", repos, .empty);
 
-    try testutil.writeMarker(alloc, try ws.archiveRoot(alloc), "gone", "old", .{ .version = marker.marker_version, .org = "gone", .name = "old", .repos = .empty });
+    try testutil.writeMarker(alloc, try ws.archiveRoot(alloc), "gone", "old", .empty, .empty);
 }
 
 test "integration: bare command and subcommand-group completion against the real command_table" {

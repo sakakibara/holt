@@ -86,7 +86,7 @@ test "run: spawns $EDITOR with the docs path as both argv[1] and cwd" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
@@ -119,7 +119,7 @@ test "run: <project>/<repo> opens the repo's real clone path, not the docs dir" 
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
 
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
     try fsutil.ensureDir(clone_path);
@@ -151,7 +151,7 @@ test "run: a project with no docs dir yet still gets one created for the editor"
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const docs_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "docs" });
     try testing.expect(!fsutil.exists(docs_path));
@@ -177,7 +177,7 @@ test "run: missing $EDITOR errors cleanly, without ever spawning anything" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const override = try testutil.EnvScope.without(arena, &.{"EDITOR"});
     defer override.restore();

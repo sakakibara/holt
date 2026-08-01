@@ -120,7 +120,7 @@ test "run: golden output over a project with one present clone and one missing c
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "absent", "https://github.com/acme/absent");
     try repos.put(arena, "present", "https://github.com/acme/present");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const present_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
     try fsutil.ensureDir(present_path);
@@ -160,7 +160,7 @@ test "run: --json emits a parseable object with per-repo identity, path, and sta
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "absent", "https://github.com/acme/absent");
     try repos.put(arena, "present", "https://github.com/acme/present");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const present_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
     try fsutil.ensureDir(present_path);
@@ -200,7 +200,7 @@ test "run: a clone that exists but is not a readable git repo is reported as suc
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "broken", "https://github.com/acme/broken");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // A plain directory, no .git at all: exists on disk but isn't a repo.
     const broken_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "broken" });

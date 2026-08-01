@@ -160,7 +160,7 @@ test "run: every planted violation is caught; --fix resolves only the hub drift"
     // to simulate drift, plus a repo whose clone never existed (missing).
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", .{ .version = 1, .org = "acme", .name = "good", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", repos, .empty);
 
     const good_hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "good" });
     const good_content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "good" });
@@ -215,7 +215,7 @@ test "run: a stale clone temp is reported, and --fix removes it" {
     const ws = try testutil.testWorkspace(arena, root);
 
     // A clean project with its hub built, so the only finding is the temp.
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
     const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
     const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
     const m = try marker.load(arena, try std.fs.path.join(arena, &.{ content_path, marker.marker_basename }), null);
@@ -248,7 +248,7 @@ test "run: a clean workspace passes every check and exits 0" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
 
     // doctor treats an unbuilt hub as drift (correctly), so the hub has to
     // be built first for this workspace to actually be clean.
@@ -308,7 +308,7 @@ test "run: output leads with human check names, never the internal D1/D2/D3 code
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
 
     const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
     const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
@@ -352,11 +352,11 @@ test "run: dangling hub links catches a deleted remote clone and a cloneless loc
 
     var remote_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try remote_repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "remote", .{ .version = 1, .org = "acme", .name = "remote", .repos = remote_repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "remote", remote_repos, .empty);
 
     var local_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try local_repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "scratchy", .{ .version = 1, .org = "acme", .name = "scratchy", .repos = local_repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "scratchy", local_repos, .empty);
 
     // --fix builds each hub before the dangling scan runs, so a single pass
     // both materializes the links and reports them dead.
@@ -388,8 +388,8 @@ test "run: an org/name present in both projects and archive is a shadow" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dup", .{ .version = 1, .org = "acme", .name = "dup", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "dup", .{ .version = 1, .org = "acme", .name = "dup", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dup", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "dup", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -409,7 +409,7 @@ test "run: a marker-less dir under an org is orphaned content" {
     const ws = try testutil.testWorkspace(arena, root);
 
     // A real project so the org dir exists, plus a sibling dir with no marker.
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "real", .{ .version = 1, .org = "acme", .name = "real", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "real", .empty, .empty);
     const leftover = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "leftover" });
     try fsutil.ensureDir(leftover);
 
@@ -431,10 +431,10 @@ test "run: cloud conflict copies are reported; NAS/sync metadata dirs are not or
     const ws = try testutil.testWorkspace(arena, root);
     const proot = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects" });
 
-    try testutil.writeMarker(arena, proot, "acme", "real", .{ .version = 1, .org = "acme", .name = "real", .repos = .empty });
+    try testutil.writeMarker(arena, proot, "acme", "real", .empty, .empty);
 
     // A name-level conflict copy (marker and all) and a whole-org conflict copy.
-    try testutil.writeMarker(arena, proot, "acme", "real (conflicted copy 2024-01-01)", .{ .version = 1, .org = "acme", .name = "real", .repos = .empty });
+    try testutil.writeMarkerAs(arena, proot, "acme", "real (conflicted copy 2024-01-01)", "acme", "real", .empty, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ proot, "acme (conflicted copy)", "child" }));
 
     // Cloud/NAS metadata dirs that must NOT be flagged as orphaned content.
@@ -466,7 +466,7 @@ test "run: a stale alias with no matching member is reported" {
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try aliases.put(arena, "ghost", "whatever");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -489,10 +489,10 @@ test "run: --fix never repairs the report-only checks" {
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try aliases.put(arena, "ghost", "whatever");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos, .aliases = aliases });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dup", .{ .version = 1, .org = "acme", .name = "dup", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "dup", .{ .version = 1, .org = "acme", .name = "dup", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dup", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "dup", .empty, .empty);
 
     const leftover = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "leftover" });
     try fsutil.ensureDir(leftover);

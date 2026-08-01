@@ -351,7 +351,7 @@ test "run: lists loose local files and skips the ignore-list" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub);
@@ -379,7 +379,7 @@ test "run: lists a real loose file but skips a symlink entry (the keep round-tri
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub);
@@ -415,7 +415,7 @@ test "run: flags a dirty repo and an unpushed repo, a missing clone is shown, no
     try repos.put(arena, "dirty-repo", "https://holt-test.invalid/acme/dirty-repo");
     try repos.put(arena, "unpushed-repo", "https://holt-test.invalid/acme/unpushed-repo");
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const dirty_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "dirty-repo" });
     try fsutil.ensureDir(std.fs.path.dirname(dirty_path).?);
@@ -466,7 +466,7 @@ test "run: a corrupted clone reports unreadable instead of a benign branch" {
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "corrupt-repo", "https://holt-test.invalid/acme/corrupt-repo");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const corrupt_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "corrupt-repo" });
     try fsutil.ensureDir(std.fs.path.dirname(corrupt_path).?);
@@ -517,11 +517,11 @@ test "run: with no project argument, every project gets its own section" {
 
     var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_a.put(arena, "missing-repo", "https://holt-test.invalid/acme/missing-repo");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_a });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_a, .empty);
 
     var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_b.put(arena, "other-missing", "https://holt-test.invalid/acme/other-missing");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos_b });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -542,7 +542,7 @@ test "run: --dirty with nothing to report omits the project section entirely" {
     const ws = try testutil.testWorkspace(arena, sb.root);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "clean-repo", "https://holt-test.invalid/acme/clean-repo");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const clean_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
     try fsutil.ensureDir(std.fs.path.dirname(clean_path).?);
@@ -597,7 +597,7 @@ test "run: a project with zero member repos reports so instead of printing nothi
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty-proj", .{ .version = 1, .org = "acme", .name = "empty-proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty-proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/empty-proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -618,11 +618,11 @@ test "run: --org filters to a single org's projects" {
 
     var repos_acme: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_acme.put(arena, "gone", "https://holt-test.invalid/acme/gone");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_acme });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_acme, .empty);
 
     var repos_other: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_other.put(arena, "gone", "https://holt-test.invalid/other/gone");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "second", .{ .version = 1, .org = "other", .name = "second", .repos = repos_other });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "second", repos_other, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--org", "other" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -644,7 +644,7 @@ test "run: colors the dirty/unpushed/missing/clean tokens when the destination i
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "clean-repo", "https://holt-test.invalid/acme/clean-repo");
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const clean_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
     try fsutil.ensureDir(std.fs.path.dirname(clean_path).?);
@@ -677,7 +677,7 @@ test "run: --json reports each repo's state as a string, no ANSI escapes" {
     try repos.put(arena, "clean-repo", "https://holt-test.invalid/acme/clean-repo");
     try repos.put(arena, "dirty-repo", "https://holt-test.invalid/acme/dirty-repo");
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const clean_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
     try fsutil.ensureDir(std.fs.path.dirname(clean_path).?);
@@ -721,7 +721,7 @@ test "runJson: includes a local_only array per project" {
 
     const ws = try testutil.testWorkspace(arena, root);
     const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
     const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
@@ -767,7 +767,7 @@ fn buildManyRepoWorkspace(arena: std.mem.Allocator, sb: *testutil.Sandbox) !work
             const url = try std.fmt.allocPrint(arena, "https://holt-test.invalid/acme/{s}", .{repo_name});
             try repos.put(arena, repo_name, url);
         }
-        try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", proj, .{ .version = 1, .org = "acme", .name = proj, .repos = repos });
+        try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", proj, repos, .empty);
     }
 
     // Materialize clones with a deterministic variety of states.

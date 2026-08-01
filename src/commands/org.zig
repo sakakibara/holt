@@ -248,9 +248,9 @@ test "run: rename moves every project in the org, rebuilds hubs, and leaves an u
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .{ .version = 1, .org = "acme", .name = "a", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .{ .version = 1, .org = "acme", .name = "b", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "work", "c", .{ .version = 1, .org = "work", .name = "c", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "work", "c", .empty, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a", "docs" }));
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b", "docs" }));
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "work", "c", "docs" }));
@@ -308,8 +308,8 @@ test "run: rename moves an org's active and archived projects, clearing the old 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "live", .{ .version = 1, .org = "acme", .name = "live", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "live", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .empty, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "live", "docs" }));
 
     const p = switch (try ws.find(arena, "acme/live")) {
@@ -352,7 +352,7 @@ test "run: rename an org that has only archived projects moves them and reports 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -373,9 +373,9 @@ test "run: rename refuses atomically on an archive-side collision, moving nothin
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .{ .version = 1, .org = "acme", .name = "widget", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .{ .version = 1, .org = "acme", .name = "old", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "corp", "old", .{ .version = 1, .org = "corp", .name = "old", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.archiveRoot(arena), "corp", "old", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -398,7 +398,7 @@ test "run: a mid-loop move failure reports progress and the rename converges on 
     const ws = try testutil.testWorkspace(arena, root);
 
     for ([_][]const u8{ "a", "b", "c" }) |name| {
-        try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", name, .{ .version = 1, .org = "acme", .name = name, .repos = .empty });
+        try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", name, .empty, .empty);
         const query = try std.fmt.allocPrint(arena, "acme/{s}", .{name});
         const p = switch (try ws.find(arena, query)) {
             .one => |proj| proj,
@@ -447,9 +447,9 @@ test "run: rename merges into an existing org when no project name collides" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .{ .version = 1, .org = "acme", .name = "a", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .{ .version = 1, .org = "acme", .name = "b", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "me", "x", .{ .version = 1, .org = "me", .name = "x", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "me", "x", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "me", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -471,9 +471,9 @@ test "run: refuses atomically when a destination name collides, moving nothing" 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .{ .version = 1, .org = "acme", .name = "a", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .{ .version = 1, .org = "acme", .name = "b", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "me", "a", .{ .version = 1, .org = "me", .name = "a", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "me", "a", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "me", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -496,8 +496,8 @@ test "run: renaming an org to itself reports the clearer message instead of fals
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .{ .version = 1, .org = "acme", .name = "a", .repos = .empty });
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .{ .version = 1, .org = "acme", .name = "b", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .empty, .empty);
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "acme", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -520,7 +520,7 @@ test "run: renaming an org with no projects reports no projects and exits 1" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj", .{ .version = 1, .org = "other", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "me", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -538,7 +538,7 @@ test "run: a new org that traverses or contains a slash is rejected, moving noth
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .{ .version = 1, .org = "acme", .name = "a", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .empty, .empty);
 
     for ([_][]const u8{ "..", "x/y" }) |bad| {
         const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", bad, "--yes" });

@@ -180,11 +180,11 @@ test "run: with no project argument, clones every missing member repo from its b
 
     var repos_first: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_first.put(arena, "repoa", url_a);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_first });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_first, .empty);
 
     var repos_second: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_second.put(arena, "repob", url_b);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos_second });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_second, .empty);
 
     const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{
@@ -233,12 +233,12 @@ test "run: with no project argument, reports and continues past an unreachable r
 
     var repos_bad: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_bad.put(arena, "repobad", url_bad);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "bad", .{ .version = 1, .org = "acme", .name = "bad", .repos = repos_bad });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "bad", repos_bad, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "bad", "docs" }));
 
     var repos_good: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_good.put(arena, "repogood", url_good);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", .{ .version = 1, .org = "acme", .name = "good", .repos = repos_good });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", repos_good, .empty);
 
     const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{
@@ -284,7 +284,7 @@ test "run: with no project argument, warns when a local repo's clone is missing 
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "proj", "docs" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
@@ -311,7 +311,7 @@ test "run: with no project argument, an already-complete project just rebuilds i
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .{ .version = 1, .org = "acme", .name = "empty", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "empty", "docs" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
@@ -342,11 +342,11 @@ test "run: with no project argument, clones a repo shared by two projects exactl
     // two workers onto one directory without dedup.
     var repos_first: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_first.put(arena, "lib", url);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", .{ .version = 1, .org = "acme", .name = "first", .repos = repos_first });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_first, .empty);
 
     var repos_second: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_second.put(arena, "lib", url);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", .{ .version = 1, .org = "acme", .name = "second", .repos = repos_second });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_second, .empty);
 
     const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{.{ .url = url, .bare = bare }});
@@ -398,7 +398,7 @@ test "run: with no project argument, reports a repo whose marker url cannot reso
     // skipped, and it must flip the exit code.
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "bad", "github.com");
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -422,7 +422,7 @@ test "run: a marker url that git would read as an option is refused, and nothing
     const artifact = try std.fs.path.join(arena, &.{ root, "pwned" });
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos.put(arena, "widget", try std.fmt.allocPrint(arena, "--upload-pack=touch {s}", .{artifact}));
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = repos });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/proj"});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -464,7 +464,7 @@ test "run: a bare project argument re-clones that project only, it does not unar
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .{ .version = 1, .org = "acme", .name = "proj", .repos = .empty });
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
