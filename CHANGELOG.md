@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-08-01
 
 ### Changed
 
@@ -75,6 +75,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   became an option. The separator covers `git clone`, `git worktree add`, and
   `git remote add` as well, so a branch or url starting with `-` is a bad ref
   or a bad url rather than a flag.
+- The worktree commands leaked a per-call copy of the path they hand to git.
+  The copy is made only when the path carries a backslash, so it leaked on
+  Windows every time and on POSIX never; it is now freed on every platform.
 
 ## [0.8.1] - 2026-07-31
 
