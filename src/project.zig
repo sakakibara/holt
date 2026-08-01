@@ -5,6 +5,7 @@
 const std = @import("std");
 const marker = @import("marker.zig");
 const identity = @import("identity.zig");
+const testutil = @import("testutil.zig");
 const testing = std.testing;
 
 pub const Project = struct {
@@ -89,17 +90,23 @@ test "repoIdentity: a local: value that escapes the local bucket is refused" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "escape", "local:../../outside/victim");
-    try repos.put(arena, "dotdot", "local:..");
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
 
-    const p: Project = .{
-        .org = "acme",
-        .name = "proj",
-        .content_path = try arena.dupe(u8, "/synced/projects/acme/proj"),
-        .hub_path = try arena.dupe(u8, "/hub/acme/proj"),
-        .marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos },
-    };
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": {
+        \\    "escape": "local:../../outside/victim",
+        \\    "dotdot": "local:.."
+        \\  }
+        \\}
+    );
 
     try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "escape"));
     try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "dotdot"));
@@ -110,17 +117,23 @@ test "repoIdentity: a url that git would read as an option is refused" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "widget", "--upload-pack=touch /tmp/pwned");
-    try repos.put(arena, "gadget", "-dashy://github.com/acme/gadget");
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws = try testutil.testWorkspace(arena, root);
 
-    const p: Project = .{
-        .org = "acme",
-        .name = "proj",
-        .content_path = try arena.dupe(u8, "/synced/projects/acme/proj"),
-        .hub_path = try arena.dupe(u8, "/hub/acme/proj"),
-        .marker = .{ .version = 1, .org = "acme", .name = "proj", .repos = repos },
-    };
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": {
+        \\    "widget": "--upload-pack=touch /tmp/pwned",
+        \\    "gadget": "-dashy://github.com/acme/gadget"
+        \\  }
+        \\}
+    );
 
     try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "widget"));
     try testing.expectError(error.UnrecognizedUrl, p.repoIdentity(arena, "gadget"));

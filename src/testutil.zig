@@ -13,6 +13,7 @@ const builtin = @import("builtin");
 const proc = @import("proc.zig");
 const fsutil = @import("fsutil.zig");
 const marker = @import("marker.zig");
+const project = @import("project.zig");
 const workspace = @import("workspace.zig");
 const identity = @import("identity.zig");
 const app = @import("app.zig");
@@ -162,6 +163,37 @@ pub fn writeMarkerAs(alloc: std.mem.Allocator, parent_dir: []const u8, dir_org: 
     const marker_path = try std.fs.path.join(alloc, &.{ dir_path, marker.marker_basename });
     const m: marker.Marker = .{ .version = marker.marker_version, .org = marker_org, .name = marker_name, .repos = repos, .aliases = aliases };
     try marker.save(&m, marker_path);
+}
+
+/// Writes `json_text` byte for byte as the marker at
+/// `<parent_dir>/<org>/<name>/.holt.json`, creating any missing directories.
+/// Nothing is parsed or validated on the way in, so a fixture can supply
+/// exactly the content a marker synced from another machine could carry -
+/// including content no in-memory `Marker` would hold.
+pub fn writeRawMarker(alloc: std.mem.Allocator, parent_dir: []const u8, org: []const u8, name: []const u8, json_text: []const u8) !void {
+    const dir_path = try std.fs.path.join(alloc, &.{ parent_dir, org, name });
+    try fsutil.ensureDir(dir_path);
+    const marker_path = try std.fs.path.join(alloc, &.{ dir_path, marker.marker_basename });
+    try fsutil.writeFileAtomic(alloc, marker_path, json_text);
+}
+
+/// The `Project` that `ws` yields for `<org>/<name>` when that project's
+/// marker file holds `json_text`: the bytes are written into `ws`'s projects
+/// root and read back through `marker.load`, so what the project carries is
+/// what the marker reader accepted from disk.
+pub fn testProjectFromRaw(alloc: std.mem.Allocator, ws: *const workspace.Workspace, org: []const u8, name: []const u8, json_text: []const u8) !project.Project {
+    const projects_root = try ws.projectsRoot(alloc);
+    try writeRawMarker(alloc, projects_root, org, name, json_text);
+
+    const content_path = try std.fs.path.join(alloc, &.{ projects_root, org, name });
+    const marker_path = try std.fs.path.join(alloc, &.{ content_path, marker.marker_basename });
+    return .{
+        .org = org,
+        .name = name,
+        .content_path = content_path,
+        .hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, org, name }),
+        .marker = try marker.load(alloc, marker_path, null),
+    };
 }
 
 /// Local-backend workspace rooted under `<root>/{synced,code,hub}` - the

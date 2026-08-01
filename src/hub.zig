@@ -717,10 +717,15 @@ test "desiredLinks: a traversing alias is ignored and the member keeps its deriv
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try aliases.put(arena, "holt", "../../../../evil");
-    const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": { "holt": "https://github.com/sakakibara/holt" },
+        \\  "aliases": { "holt": "../../../../evil" }
+        \\}
+    );
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -740,10 +745,15 @@ test "desiredLinks: a backslash alias is ignored, since it traverses on Windows"
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try aliases.put(arena, "holt", "..\\..\\evil");
-    const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": { "holt": "https://github.com/sakakibara/holt" },
+        \\  "aliases": { "holt": "..\\..\\evil" }
+        \\}
+    );
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -762,12 +772,18 @@ test "desiredLinks: a member whose alias is ignored rejoins the collision groupi
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
-    try repos.put(arena, "docs-b", "https://github.com/acme/docs");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try aliases.put(arena, "docs-a", "../evil");
-    const p = try testProject(arena, &ws, "org", "proj", repos, aliases);
+    const p = try testutil.testProjectFromRaw(arena, &ws, "org", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "org",
+        \\  "name": "proj",
+        \\  "repos": {
+        \\    "docs-a": "https://github.com/sakakibara/docs",
+        \\    "docs-b": "https://github.com/acme/docs"
+        \\  },
+        \\  "aliases": { "docs-a": "../evil" }
+        \\}
+    );
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -787,10 +803,15 @@ test "reconcile: an ignored alias links the member under its own name, nothing o
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try aliases.put(arena, "holt", "../../../../planted");
-    const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": { "holt": "https://github.com/sakakibara/holt" },
+        \\  "aliases": { "holt": "../../../../planted" }
+        \\}
+    );
 
     // A symlink where the traversal points: it must survive untouched, since
     // replaceLink would otherwise remove it before writing its own.
@@ -819,10 +840,17 @@ test "desiredLinks: a member whose url does not resolve is reported, not raised"
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "evil", "local:../../evil");
-    try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": {
+        \\    "evil": "local:../../evil",
+        \\    "holt": "https://github.com/sakakibara/holt"
+        \\  }
+        \\}
+    );
 
     const desired = try desiredLinks(arena, &ws, &p);
 
@@ -842,10 +870,17 @@ test "reconcile: an unresolvable member costs only its own link" {
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "evil", "local:../../evil");
-    try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": {
+        \\    "evil": "local:../../evil",
+        \\    "holt": "https://github.com/sakakibara/holt"
+        \\  }
+        \\}
+    );
 
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
 
@@ -871,8 +906,14 @@ test "reconcile: a project whose every member is unresolvable grows no code dir"
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos = try oneRepo(arena, "evil", "local:../../evil");
-    const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
+    const p = try testutil.testProjectFromRaw(arena, &ws, "acme", "proj",
+        \\{
+        \\  "version": 1,
+        \\  "org": "acme",
+        \\  "name": "proj",
+        \\  "repos": { "evil": "local:../../evil" }
+        \\}
+    );
 
     const report = try reconcile(arena, &ws, &p, false);
 
