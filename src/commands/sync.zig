@@ -217,6 +217,33 @@ fn hubHasRealFile(alloc: std.mem.Allocator, path: []const u8) !bool {
 /// origin - a candidate for `holt repo promote`. A name shared by more than
 /// one project is only ever hinted once, and a name `repo promote` would
 /// refuse is never hinted at all.
+/// `arg` ready to paste into a shell command: bare when it is unambiguously
+/// literal, otherwise single-quoted with embedded quotes spliced as `'\''`
+/// (the POSIX idiom, which fish also accepts). A marker-derived name may
+/// hold spaces or shell metacharacters - SafeSegment does not forbid them.
+fn quoteArg(alloc: std.mem.Allocator, arg: []const u8) ![]const u8 {
+    var plain = arg.len > 0;
+    for (arg) |c| {
+        switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9', '.', '_', '-' => {},
+            else => plain = false,
+        }
+    }
+    if (plain) return arg;
+
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(alloc, '\'');
+    for (arg) |c| {
+        if (c == '\'') {
+            try out.appendSlice(alloc, "'\\''");
+        } else {
+            try out.append(alloc, c);
+        }
+    }
+    try out.append(alloc, '\'');
+    return out.toOwnedSlice(alloc);
+}
+
 fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem.Allocator, all: []const project_mod.Project) !void {
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
     for (all) |p| {
@@ -235,7 +262,7 @@ fn printPromotable(ctx: *app.Ctx, ws: *const workspace.Workspace, alloc: std.mem
             const origin = try git.remoteUrl(alloc, local_clone_path) orelse continue;
             const new_id = identity.fromUrl(alloc, origin) catch continue;
             const rel = try new_id.relPath(alloc);
-            try ctx.out.print("promotable: {s} -> {s} (run: holt repo promote {s})\n", .{ name, rel, name });
+            try ctx.out.print("promotable: {s} -> {s} (run: holt repo promote {s})\n", .{ name, rel, try quoteArg(alloc, name) });
         }
     }
 }
@@ -425,6 +452,47 @@ test "run: a stale hub link left by a marker change is swept on the next sync" {
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "removed 1") != null);
     try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(arena, stale_link));
+}
+
+test "quoteArg: leaves a plain name bare, single-quotes anything a shell would reinterpret" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    for ([_][]const u8{ "scratch", "my.repo", "a-b_c", "v2" }) |plain| {
+        try testing.expectEqualStrings(plain, try quoteArg(arena, plain));
+    }
+    try testing.expectEqualStrings("'pkg send'", try quoteArg(arena, "pkg send"));
+    try testing.expectEqualStrings("'a$(x)'", try quoteArg(arena, "a$(x)"));
+    try testing.expectEqualStrings("'a;b'", try quoteArg(arena, "a;b"));
+    try testing.expectEqualStrings("'it'\\''s'", try quoteArg(arena, "it's"));
+}
+
+test "run: a promotable name a shell would reinterpret is hinted quoted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin = "https://holt-test.invalid/acme/scratch";
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "pkg send", "local:pkg send");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("pkg send").?).clonePath(arena, ws.cfg.code_root);
+    try fsutil.ensureDir(std.fs.path.dirname(local_clone_path).?);
+    try testutil.runGit(&sb, null, &.{ "clone", bare, local_clone_path });
+    try testutil.runGit(&sb, local_clone_path, &.{ "remote", "set-url", "origin", fake_origin });
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "run: holt repo promote 'pkg send'") != null);
 }
 
 test "run: hints a local repo that has grown an origin, without moving anything" {
