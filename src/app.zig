@@ -145,12 +145,13 @@ fn writeFlagSpelling(w: *std.Io.Writer, f: anytype) !void {
     if (f.takes_value) try w.print(" <{s}>", .{f.value_name});
 }
 
-/// Per-command help: usage line, blank line, summary, an optional Flags
-/// table, an optional details block. Deliberately does NOT use cli-zig's
-/// default renderer, which also emits Args:/Commands: sections - a
-/// command's explicit `.usage` string and a subcommand parent's `.details`
-/// prose already document that structure, so adding those sections would
-/// change the `--help` output users already see.
+/// Per-command help: usage line, blank line, summary, optional Flags,
+/// Constraints, and Commands tables, an optional details block.
+/// Deliberately does NOT use cli-zig's default renderer, whose Args:
+/// section would restate what a command's explicit `.usage` string
+/// already documents. A subcommand parent's Commands: table IS rendered -
+/// name plus one-line summary, like the top-level help - since a group's
+/// usage names its verbs but says nothing about what each one does.
 /// `cmd` is `anytype` (a `HoltCli.Command`, though that type cannot be named
 /// here - `Cli(cfg)` is still being built from this very hook).
 pub fn renderCommandHelp(w: *std.Io.Writer, prog_name: []const u8, cmd: anytype) anyerror!void {
@@ -202,6 +203,21 @@ pub fn renderCommandHelp(w: *std.Io.Writer, prog_name: []const u8, cmd: anytype)
                 },
             }
             if (c.why.len > 0) try w.print(" ({s})", .{c.why});
+            try w.writeByte('\n');
+        }
+    }
+
+    if (cmd.subcommands.len > 0) {
+        var width: usize = 0;
+        for (cmd.subcommands) |s| width = @max(width, s.name.len);
+        try w.writeAll("\nCommands:\n");
+        for (cmd.subcommands) |s| {
+            try w.writeAll("  ");
+            try w.writeAll(s.name);
+            if (s.summary.len > 0) {
+                try w.splatByteAll(' ', width - s.name.len);
+                try w.print("  {s}", .{s.summary});
+            }
             try w.writeByte('\n');
         }
     }
@@ -370,6 +386,44 @@ test "HoltCli wiring: top-level help renders holt's group headings and footer" {
     try testing.expect(std.mem.indexOf(u8, out, "\nSystem:\n") != null);
     try testing.expect(std.mem.indexOf(u8, out, "A <project> is <org>/<name>, or a unique name or abbreviation of one.\n") != null);
     try testing.expect(std.mem.indexOf(u8, out, "Run \"holt init <shell>\" to set up the h/hi shell helpers.\n") != null);
+}
+
+test "renderCommandHelp: a group parent's help lists its subcommands with summaries" {
+    const S = struct {
+        fn fallback(_: *Ctx) anyerror!u8 {
+            return 0;
+        }
+    };
+    const sub_cmd = command(SmokeSpec, .{
+        .name = "sub",
+        .summary = "does the sub thing",
+        .group = .system,
+    }, smokeRun);
+    const wide_cmd = command(SmokeSpec, .{
+        .name = "wider-name",
+        .summary = "does the wider thing",
+        .group = .system,
+    }, smokeRun);
+    const grp_cmd: Command = .{
+        .name = "grp",
+        .summary = "groups things",
+        .usage = "holt grp <sub|wider-name> ...",
+        .group = .system,
+        .subcommands = &.{ sub_cmd, wide_cmd },
+        .run = S.fallback,
+    };
+
+    var out_buf: [512]u8 = undefined;
+    var out_w = std.Io.Writer.fixed(&out_buf);
+    var err_buf: [64]u8 = undefined;
+    var err_w = std.Io.Writer.fixed(&err_buf);
+
+    const code = try run(testing.allocator, testing.io, &.{ "holt", "grp", "--help" }, &.{grp_cmd}, &out_w, &err_w);
+    try testing.expectEqual(@as(u8, 0), code);
+    const out = out_w.buffered();
+    try testing.expect(std.mem.indexOf(u8, out, "\nCommands:\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "  sub         does the sub thing\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "  wider-name  does the wider thing\n") != null);
 }
 
 test "HoltCli wiring: a command-body known error reports its friendly message verbatim" {
