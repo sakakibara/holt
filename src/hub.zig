@@ -106,35 +106,38 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
         }
     }
 
-    var resolved_names: std.ArrayList([]const u8) = .empty;
+    var resolved: std.ArrayList(*const marker.Entry) = .empty;
     var resolved_ids: std.ArrayList(identity.Identity) = .empty;
     var unresolved: std.ArrayList([]const u8) = .empty;
-    for (p.marker.repos.keys()) |name| {
-        const id = p.repoIdentity(alloc, name) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => {
-                try unresolved.append(alloc, name);
-                continue;
-            },
+    for (p.marker.entries) |*e| {
+        // Alias-only names are not members and get no link of their own.
+        if (e.raw_source == null) continue;
+        const src = e.source orelse {
+            try unresolved.append(alloc, e.name);
+            continue;
         };
-        try resolved_names.append(alloc, name);
-        try resolved_ids.append(alloc, id);
+        try resolved.append(alloc, e);
+        try resolved_ids.append(alloc, switch (src) {
+            .remote => |r| r.id,
+            .local => |seg| identity.local(seg),
+        });
     }
-    const repo_names = resolved_names.items;
+    const repo_names = try alloc.alloc([]const u8, resolved.items.len);
+    for (resolved.items, repo_names) |e, *slot| slot.* = e.name;
     const ids = resolved_ids.items;
 
     // An alias that is not a usable link name is dropped rather than turned
     // into a path, and its member keeps the name it derives from its own
     // identity - which also puts it back into the collision grouping below.
     var ignored_aliases: std.ArrayList([]const u8) = .empty;
-    const aliases = try alloc.alloc(?[]const u8, repo_names.len);
-    for (repo_names, aliases) |name, *slot| {
+    const aliases = try alloc.alloc(?[]const u8, resolved.items.len);
+    for (resolved.items, aliases) |e, *slot| {
         slot.* = null;
-        const alias = p.marker.aliases.get(name) orelse continue;
-        if (fsutil.SafeSegment.parse(alias) != null) {
-            slot.* = alias;
+        if (e.raw_alias == null) continue;
+        if (e.alias) |seg| {
+            slot.* = seg.bytes;
         } else {
-            try ignored_aliases.append(alloc, name);
+            try ignored_aliases.append(alloc, e.name);
         }
     }
 
@@ -951,7 +954,7 @@ test "reconcile: an emptied code dir is pruned when the last repo is removed" {
     const code_dir = try std.fs.path.join(arena, &.{ p.hub_path, "code" });
     try testing.expect(fsutil.exists(code_dir));
 
-    p.marker.repos = .empty;
+    _ = p.marker.remove("holt");
     _ = try reconcile(arena, &ws, &p, false);
 
     try testing.expect(!fsutil.exists(code_dir));
