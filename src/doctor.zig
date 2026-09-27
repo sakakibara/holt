@@ -12,7 +12,9 @@
 //! (shadow), a markerless directory under an org (orphaned content), a
 //! marker alias keyed to a repo that is not a member (stale alias), a
 //! member whose alias value does not parse (bad alias), and a clone under
-//! `<code_root>/local` that has grown an origin (local with origin).
+//! `<code_root>/local` that has grown an origin (local with origin). A
+//! `<code_root>/local` clone with no origin is noted but never fails: it is
+//! a normal state, only one no other machine can restore.
 //!
 //! `fix` applies only the hub-drift repair (`hub.reconcile` for real): it
 //! never touches CONTENT, never deletes a clone, never removes a D1 symlink
@@ -53,6 +55,10 @@ pub const ConflictCopy = struct { path: []const u8 };
 /// standalone clone for `holt repo adopt`. `target` is the identity path the
 /// origin resolves to, or null when the URL does not parse.
 pub const LocalWithOrigin = struct { name: []const u8, path: []const u8, target: ?[]const u8, claimed: bool };
+/// A clone under `<code_root>/local/<name>` with no origin: nothing synced
+/// can recreate it on another machine. `claimant` is the `<org>/<name>` of a
+/// project listing it as `local:<name>`, or null for a standalone clone.
+pub const Remoteless = struct { name: []const u8, path: []const u8, claimant: ?[]const u8 };
 pub const Unsurfaced = struct { project: []const u8, rel: []const u8 };
 /// A `*.holt-tmp` clone-staging dir under code_root, left by a clone that was
 /// hard-killed before its atomic rename. `removed` is set when `--fix` deleted
@@ -96,6 +102,8 @@ pub const Report = struct {
     conflict_copies: []ConflictCopy = &.{},
     clone_temps: []CloneTemp = &.{},
     locals_with_origin: []LocalWithOrigin = &.{},
+    /// Informational only; never affects `ok()`.
+    remoteless_locals: []Remoteless = &.{},
     unsurfaced_files: []Unsurfaced = &.{},
 
     pub fn ok(self: Report) bool {
@@ -484,15 +492,34 @@ fn findBadAliases(alloc: std.mem.Allocator, projects: []const Project) ![]BadAli
     return out.toOwnedSlice(alloc);
 }
 
-/// Every clone directly under `<code_root>/local` whose `origin` is set,
-/// claimed by a marker or not. A marker-less clone is invisible to every
-/// marker-driven check, so this walks the directory rather than the markers.
-fn findLocalsWithOrigin(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) ![]LocalWithOrigin {
-    var out: std.ArrayList(LocalWithOrigin) = .empty;
+/// The first project whose marker lists `name` as `local:<name>`, as
+/// `<org>/<name>`, or null when none does.
+fn localClaimant(alloc: std.mem.Allocator, projects: []const Project, name: []const u8) !?[]const u8 {
+    for (projects) |p| {
+        for (p.marker.entries) |*e| {
+            const src = e.source orelse continue;
+            switch (src) {
+                .local => |seg| if (std.mem.eql(u8, seg.bytes, name)) return try p.qualified(alloc),
+                .remote => {},
+            }
+        }
+    }
+    return null;
+}
+
+const LocalScan = struct { with_origin: []LocalWithOrigin, remoteless: []Remoteless };
+
+/// Every clone directly under `<code_root>/local`, split by whether its
+/// `origin` is set, claimed by a marker or not. A marker-less clone is
+/// invisible to every marker-driven check, so this walks the directory
+/// rather than the markers. Both lists are sorted by name.
+fn scanLocalClones(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) !LocalScan {
+    var with_origin: std.ArrayList(LocalWithOrigin) = .empty;
+    var remoteless: std.ArrayList(Remoteless) = .empty;
     const local_root = try std.fs.path.join(alloc, &.{ ws.cfg.code_root, "local" });
 
     var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), local_root, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound, error.NotDir => return out.toOwnedSlice(alloc),
+        error.FileNotFound, error.NotDir => return .{ .with_origin = &.{}, .remoteless = &.{} },
         else => return err,
     };
     defer dir.close(fsutil.io());
@@ -503,36 +530,31 @@ fn findLocalsWithOrigin(alloc: std.mem.Allocator, ws: *const Workspace, projects
         if (fsutil.SafeSegment.parse(entry.name) == null) continue;
         const path = try std.fs.path.join(alloc, &.{ local_root, entry.name });
         if (!fsutil.exists(try std.fs.path.join(alloc, &.{ path, ".git" }))) continue;
-        const origin = try git.remoteUrl(alloc, path) orelse continue;
         const name = try alloc.dupe(u8, entry.name);
+        const claimant = try localClaimant(alloc, projects, name);
 
+        const origin = try git.remoteUrl(alloc, path) orelse {
+            try remoteless.append(alloc, .{ .name = name, .path = path, .claimant = claimant });
+            continue;
+        };
         const target: ?[]const u8 = if (identity.fromUrl(alloc, origin)) |id| try id.relPath(alloc) else |err| switch (err) {
             error.UnrecognizedUrl => null,
             error.OutOfMemory => return err,
         };
-
-        var claimed = false;
-        for (projects) |p| {
-            for (p.marker.entries) |*e| {
-                const src = e.source orelse continue;
-                switch (src) {
-                    .local => |seg| if (std.mem.eql(u8, seg.bytes, name)) {
-                        claimed = true;
-                    },
-                    .remote => {},
-                }
-            }
-        }
-
-        try out.append(alloc, .{ .name = name, .path = path, .target = target, .claimed = claimed });
+        try with_origin.append(alloc, .{ .name = name, .path = path, .target = target, .claimed = claimant != null });
     }
 
-    std.mem.sort(LocalWithOrigin, out.items, {}, struct {
+    std.mem.sort(LocalWithOrigin, with_origin.items, {}, struct {
         fn lt(_: void, a: LocalWithOrigin, b: LocalWithOrigin) bool {
             return std.mem.lessThan(u8, a.name, b.name);
         }
     }.lt);
-    return out.toOwnedSlice(alloc);
+    std.mem.sort(Remoteless, remoteless.items, {}, struct {
+        fn lt(_: void, a: Remoteless, b: Remoteless) bool {
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.lt);
+    return .{ .with_origin = try with_origin.toOwnedSlice(alloc), .remoteless = try remoteless.toOwnedSlice(alloc) };
 }
 
 /// Windows: content-file mirrors that cannot be surfaced at the hub root
@@ -621,6 +643,8 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
         }
     }
 
+    const locals = try scanLocalClones(alloc, ws, scan.ok);
+
     const active_dirs = try scanNameDirs(alloc, try ws.projectsRoot(alloc));
     const archived_dirs = try scanNameDirs(alloc, try ws.archiveRoot(alloc));
 
@@ -642,7 +666,8 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
         .bad_aliases = try findBadAliases(alloc, scan.ok),
         .conflict_copies = try findConflictCopies(alloc, ws),
         .clone_temps = try findCloneTemps(alloc, ws, opts.fix),
-        .locals_with_origin = try findLocalsWithOrigin(alloc, ws, scan.ok),
+        .locals_with_origin = locals.with_origin,
+        .remoteless_locals = locals.remoteless,
         .unsurfaced_files = try findUnsurfacedFiles(alloc, ws, scan.ok),
     };
 }

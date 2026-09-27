@@ -158,6 +158,17 @@ fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
         }
     }
 
+    if (report.remoteless_locals.len > 0) {
+        try w.print("note: {d} local repo(s) have no remote; no other machine can restore them (hint: push them, or copy them before retiring this machine):\n", .{report.remoteless_locals.len});
+        for (report.remoteless_locals) |l| {
+            if (l.claimant) |c| {
+                try w.print("  {s} (member of {s})\n", .{ try app.tilde(ctx, l.path), c });
+            } else {
+                try w.print("  {s}\n", .{try app.tilde(ctx, l.path)});
+            }
+        }
+    }
+
     if (builtin.os.tag == .windows and report.unsurfaced_files.len > 0) {
         try w.print("note: {d} content file(s) not surfaced at the hub root (run `holt sync`; on Windows, file links need Developer Mode):\n", .{report.unsurfaced_files.len});
         for (report.unsurfaced_files) |u| try w.print("  {s}: {s}\n", .{ u.project, u.rel });
@@ -591,9 +602,10 @@ test "run: a local clone that has grown an origin fails, hinted promote when cla
     try testing.expect(std.mem.indexOf(u8, got.out, "claimed -> holt-test.invalid/acme/claimed (hint: holt repo promote claimed)") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "stray -> holt-test.invalid/acme/stray (hint: holt repo adopt ") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "plain ->") == null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "note: 1 local repo(s) have no remote") != null);
 }
 
-test "run: local clones without an origin pass the local-origin check" {
+test "run: local clones without an origin pass the local-origin check and are noted" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -602,9 +614,34 @@ test "run: local clones without an origin pass the local-origin check" {
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
-    try testutil.seedMinimalGitClone(arena, &sb.git_env, path);
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "claimed", "local:claimed");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    for ([_][]const u8{ "scratch", "claimed" }) |name| {
+        const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", name });
+        try testutil.seedMinimalGitClone(arena, &sb.git_env, path);
+    }
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expect(std.mem.indexOf(u8, got.out, "no local repos with an origin: PASS") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "note: 2 local repo(s) have no remote") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "/local/claimed (member of acme/proj)\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "/local/scratch\n") != null);
+}
+
+test "run: remoteless local clones alone never fail doctor" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
+    try testutil.seedMinimalGitClone(arena, &sb.git_env, path);
+
+    const report = try doctor.run(arena, &ws, .{});
+    try testing.expectEqual(@as(usize, 1), report.remoteless_locals.len);
+    try testing.expect(report.ok());
 }
