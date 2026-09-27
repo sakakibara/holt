@@ -10,8 +10,9 @@
 //! Report-only besides: hub symlinks pointing at a target that no longer
 //! exists (dangling), an `<org>/<name>` present in both projects and archive
 //! (shadow), a markerless directory under an org (orphaned content), a
-//! marker alias keyed to a repo that is not a member (stale alias), and a
-//! member whose alias value does not parse (bad alias).
+//! marker alias keyed to a repo that is not a member (stale alias), a
+//! member whose alias value does not parse (bad alias), and a clone under
+//! `<code_root>/local` that has grown an origin (local with origin).
 //!
 //! `fix` applies only the hub-drift repair (`hub.reconcile` for real): it
 //! never touches CONTENT, never deletes a clone, never removes a D1 symlink
@@ -25,6 +26,7 @@ const project_mod = @import("project.zig");
 const marker = @import("marker.zig");
 const hub = @import("hub.zig");
 const git = @import("git.zig");
+const identity = @import("identity.zig");
 const fsutil = @import("fsutil.zig");
 const parallel = @import("parallel.zig");
 const testutil = @import("testutil.zig");
@@ -45,6 +47,12 @@ pub const OrphanedContent = struct { path: []const u8 };
 pub const StaleAlias = struct { project: []const u8, alias: []const u8 };
 pub const BadAlias = struct { project: []const u8, repo: []const u8 };
 pub const ConflictCopy = struct { path: []const u8 };
+/// A clone under `<code_root>/local/<name>` that has an origin, so its path
+/// no longer matches its identity. `claimed` is true when some marker lists
+/// it as `local:<name>` (`holt repo promote` moves it); otherwise it is a
+/// standalone clone for `holt repo adopt`. `target` is the identity path the
+/// origin resolves to, or null when the URL does not parse.
+pub const LocalWithOrigin = struct { name: []const u8, path: []const u8, target: ?[]const u8, claimed: bool };
 pub const Unsurfaced = struct { project: []const u8, rel: []const u8 };
 /// A `*.holt-tmp` clone-staging dir under code_root, left by a clone that was
 /// hard-killed before its atomic rename. `removed` is set when `--fix` deleted
@@ -87,6 +95,7 @@ pub const Report = struct {
     bad_aliases: []BadAlias = &.{},
     conflict_copies: []ConflictCopy = &.{},
     clone_temps: []CloneTemp = &.{},
+    locals_with_origin: []LocalWithOrigin = &.{},
     unsurfaced_files: []Unsurfaced = &.{},
 
     pub fn ok(self: Report) bool {
@@ -105,6 +114,7 @@ pub const Report = struct {
         if (self.bad_aliases.len != 0) return false;
         if (self.conflict_copies.len != 0) return false;
         for (self.clone_temps) |t| if (!t.removed) return false;
+        if (self.locals_with_origin.len != 0) return false;
         for (self.drift) |d| if (d.unresolved()) return false;
         return true;
     }
@@ -474,6 +484,57 @@ fn findBadAliases(alloc: std.mem.Allocator, projects: []const Project) ![]BadAli
     return out.toOwnedSlice(alloc);
 }
 
+/// Every clone directly under `<code_root>/local` whose `origin` is set,
+/// claimed by a marker or not. A marker-less clone is invisible to every
+/// marker-driven check, so this walks the directory rather than the markers.
+fn findLocalsWithOrigin(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) ![]LocalWithOrigin {
+    var out: std.ArrayList(LocalWithOrigin) = .empty;
+    const local_root = try std.fs.path.join(alloc, &.{ ws.cfg.code_root, "local" });
+
+    var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), local_root, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return out.toOwnedSlice(alloc),
+        else => return err,
+    };
+    defer dir.close(fsutil.io());
+
+    var it = dir.iterate();
+    while (try it.next(fsutil.io())) |entry| {
+        if (entry.kind != .directory) continue;
+        if (fsutil.SafeSegment.parse(entry.name) == null) continue;
+        const path = try std.fs.path.join(alloc, &.{ local_root, entry.name });
+        if (!fsutil.exists(try std.fs.path.join(alloc, &.{ path, ".git" }))) continue;
+        const origin = try git.remoteUrl(alloc, path) orelse continue;
+        const name = try alloc.dupe(u8, entry.name);
+
+        const target: ?[]const u8 = if (identity.fromUrl(alloc, origin)) |id| try id.relPath(alloc) else |err| switch (err) {
+            error.UnrecognizedUrl => null,
+            error.OutOfMemory => return err,
+        };
+
+        var claimed = false;
+        for (projects) |p| {
+            for (p.marker.entries) |*e| {
+                const src = e.source orelse continue;
+                switch (src) {
+                    .local => |seg| if (std.mem.eql(u8, seg.bytes, name)) {
+                        claimed = true;
+                    },
+                    .remote => {},
+                }
+            }
+        }
+
+        try out.append(alloc, .{ .name = name, .path = path, .target = target, .claimed = claimed });
+    }
+
+    std.mem.sort(LocalWithOrigin, out.items, {}, struct {
+        fn lt(_: void, a: LocalWithOrigin, b: LocalWithOrigin) bool {
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.lt);
+    return out.toOwnedSlice(alloc);
+}
+
 /// Windows: content-file mirrors that cannot be surfaced at the hub root
 /// without the symlink privilege (Developer Mode). Empty on POSIX.
 fn findUnsurfacedFiles(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) ![]Unsurfaced {
@@ -581,6 +642,7 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
         .bad_aliases = try findBadAliases(alloc, scan.ok),
         .conflict_copies = try findConflictCopies(alloc, ws),
         .clone_temps = try findCloneTemps(alloc, ws, opts.fix),
+        .locals_with_origin = try findLocalsWithOrigin(alloc, ws, scan.ok),
         .unsurfaced_files = try findUnsurfacedFiles(alloc, ws, scan.ok),
     };
 }

@@ -71,6 +71,14 @@ fn passFail(w: *std.Io.Writer, color_enabled: bool, name: []const u8, passed: bo
     try w.writeByte('\n');
 }
 
+/// `path` tilde-contracted and shell-quoted, keeping a leading `~/` bare so
+/// the shell still expands it.
+fn quotePath(ctx: *app.Ctx, path: []const u8) ![]const u8 {
+    const t = try app.tilde(ctx, path);
+    if (std.mem.startsWith(u8, t, "~/")) return std.mem.concat(ctx.alloc, u8, &.{ "~/", try ui.shellQuote(ctx.alloc, t[2..]) });
+    return ui.shellQuote(ctx.alloc, t);
+}
+
 fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
     const w = ctx.out;
     const color_enabled = ctx.context.?.color;
@@ -138,6 +146,16 @@ fn render(ctx: *app.Ctx, report: *const doctor.Report) !void {
     for (report.clone_temps) |t| {
         const status = if (t.removed) "removed" else "run doctor --fix to remove";
         try w.print("  {s} ({s})\n", .{ try app.tilde(ctx, t.path), status });
+    }
+
+    try passFail(w, color_enabled, "no local repos with an origin", report.locals_with_origin.len == 0);
+    for (report.locals_with_origin) |l| {
+        const target = l.target orelse "an unrecognized url";
+        if (l.claimed) {
+            try w.print("  {s} -> {s} (hint: holt repo promote {s})\n", .{ try app.tilde(ctx, l.path), target, try ui.shellQuote(ctx.alloc, l.name) });
+        } else {
+            try w.print("  {s} -> {s} (hint: holt repo adopt {s})\n", .{ try app.tilde(ctx, l.path), target, try quotePath(ctx, l.path) });
+        }
     }
 
     if (builtin.os.tag == .windows and report.unsurfaced_files.len > 0) {
@@ -533,4 +551,60 @@ test "run: --fix never repairs the report-only checks" {
     const archived_marker = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "archive", "acme", "dup", marker.marker_basename });
     try testing.expect(fsutil.exists(archived_marker));
     try testing.expect(fsutil.exists(leftover));
+}
+
+test "run: a local clone that has grown an origin fails, hinted promote when claimed and adopt when not" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "claimed", "local:claimed");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const local_root = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local" });
+    try fsutil.ensureDir(local_root);
+    for ([_][2][]const u8{
+        .{ "claimed", "https://holt-test.invalid/acme/claimed" },
+        .{ "stray", "https://holt-test.invalid/acme/stray" },
+        .{ "plain", "" },
+    }) |c| {
+        const path = try std.fs.path.join(arena, &.{ local_root, c[0] });
+        try testutil.runGit(&sb, null, &.{ "clone", bare, path });
+        if (c[1].len == 0) {
+            try testutil.runGit(&sb, path, &.{ "remote", "remove", "origin" });
+        } else {
+            try testutil.runGit(&sb, path, &.{ "remote", "set-url", "origin", c[1] });
+        }
+    }
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "no local repos with an origin: FAIL") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "claimed -> holt-test.invalid/acme/claimed (hint: holt repo promote claimed)") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "stray -> holt-test.invalid/acme/stray (hint: holt repo adopt ") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "plain ->") == null);
+}
+
+test "run: local clones without an origin pass the local-origin check" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
+    try testutil.seedMinimalGitClone(arena, &sb.git_env, path);
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{});
+    try testing.expect(std.mem.indexOf(u8, got.out, "no local repos with an origin: PASS") != null);
 }
