@@ -41,6 +41,33 @@ pub fn padTo(w: *std.Io.Writer, text: []const u8, width: usize) !void {
     if (text.len < width) try w.splatByteAll(' ', width - text.len);
 }
 
+/// `arg` ready to paste into a shell command: bare when it is unambiguously
+/// literal, otherwise single-quoted with embedded quotes spliced as `'\''`
+/// (the POSIX idiom, which fish also accepts). A marker-derived name may
+/// hold spaces or shell metacharacters - SafeSegment does not forbid them.
+pub fn shellQuote(alloc: std.mem.Allocator, arg: []const u8) ![]const u8 {
+    var plain = arg.len > 0;
+    for (arg) |c| {
+        switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9', '.', '_', '-', '/' => {},
+            else => plain = false,
+        }
+    }
+    if (plain) return arg;
+
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(alloc, '\'');
+    for (arg) |c| {
+        if (c == '\'') {
+            try out.appendSlice(alloc, "'\\''");
+        } else {
+            try out.append(alloc, c);
+        }
+    }
+    try out.append(alloc, '\'');
+    return out.toOwnedSlice(alloc);
+}
+
 /// True iff the trimmed line starts with 'y' or 'Y' (matches "y", "yes",
 /// etc). Anything else, including an empty line, means no.
 fn parseYesNo(line: []const u8) bool {
@@ -194,4 +221,18 @@ test "matchesExpected: exact match, whitespace-tolerant, rejects wrong name or p
     try testing.expect(!matchesExpected("personal/other", "personal/feed"));
     try testing.expect(!matchesExpected("", "personal/feed"));
     try testing.expect(!matchesExpected("personal/f", "personal/fe"));
+}
+
+test "shellQuote: leaves a plain name bare, single-quotes anything a shell would reinterpret" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    for ([_][]const u8{ "scratch", "my.repo", "a-b_c", "v2", "code/local/x" }) |plain| {
+        try testing.expectEqualStrings(plain, try shellQuote(arena, plain));
+    }
+    try testing.expectEqualStrings("'pkg send'", try shellQuote(arena, "pkg send"));
+    try testing.expectEqualStrings("'a$(x)'", try shellQuote(arena, "a$(x)"));
+    try testing.expectEqualStrings("'a;b'", try shellQuote(arena, "a;b"));
+    try testing.expectEqualStrings("'it'\\''s'", try shellQuote(arena, "it's"));
 }
