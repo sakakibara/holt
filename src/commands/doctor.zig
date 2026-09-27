@@ -626,8 +626,8 @@ test "run: local clones without an origin pass the local-origin check and are no
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expect(std.mem.indexOf(u8, got.out, "no local repos with an origin: PASS") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "note: 2 local repo(s) have no remote") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "/local/claimed (member of acme/proj)\n") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "/local/scratch\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, std.fs.path.sep_str ++ "claimed (member of acme/proj)\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, std.fs.path.sep_str ++ "scratch\n") != null);
 }
 
 test "run: remoteless local clones alone never fail doctor" {
