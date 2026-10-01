@@ -109,8 +109,9 @@ pub fn parse(url: []const u8) Url {
 
 /// The path `url` names when git reads it as a local path: the rest of a
 /// `file://` URL, or text that is neither `<scheme>://` nor `<t>::` and has
-/// no `:` before its first `/` (on Windows, `\` too, and a drive letter's
-/// `:` is part of the path); null for any other URL.
+/// no `:` before its first `/` (on Windows, `\` too); on Windows, also text
+/// starting with a drive prefix whose rest is a valid Windows path
+/// (`validWindowsPath`); null for any other URL.
 pub fn localPath(url: []const u8) ?[]const u8 {
     if (prefixEnd(url, "::") != null) return null;
     if (std.mem.startsWith(u8, url, "file://")) return url[7..];
@@ -118,8 +119,42 @@ pub fn localPath(url: []const u8) ?[]const u8 {
     const colon = std.mem.indexOfScalar(u8, url, ':') orelse return url;
     const slash = std.mem.indexOfAny(u8, url, if (builtin.os.tag == .windows) "/\\" else "/") orelse url.len;
     if (colon > slash) return url;
-    if (builtin.os.tag == .windows and colon == 1 and std.ascii.isAlphabetic(url[0])) return url;
+    if (builtin.os.tag == .windows) if (drivePrefixEnd(url)) |end| if (validWindowsPath(url[end..])) return url;
     return null;
+}
+
+/// The length of the drive prefix git's `has_dos_drive_prefix` reads at
+/// the start of `path` on Windows: one ASCII character or one UTF-8
+/// sequence of up to four bytes, then `:`; null when there is none.
+fn drivePrefixEnd(path: []const u8) ?usize {
+    if (path.len == 0) return null;
+    var i: usize = 1;
+    if (path[0] & 0x80 != 0) {
+        while (i < 4 and i < path.len and path[i] & 0x80 != 0) i += 1;
+    }
+    return if (i < path.len and path[i] == ':') i + 1 else null;
+}
+
+/// git's `is_valid_win32_path` (core.protectNTFS, its default) for `path`
+/// after its drive prefix: false when a component holds `:`, `<`, `>`,
+/// `"`, `|`, `?`, `*` or a control character, ends in a space or a period
+/// (`.` and `..` excepted), or is a device name (`AUX`, `CON`, `CONIN$`,
+/// `CONOUT$`, `NUL`, `PRN`, `COM1` to `COM9`, `LPT1` to `LPT9`, in any
+/// case) followed by nothing, spaces, or an extension.
+fn validWindowsPath(path: []const u8) bool {
+    var it = std.mem.splitAny(u8, path, "/\\");
+    while (it.next()) |comp| {
+        for (comp) |c| if (c < 0x20 or std.mem.indexOfScalar(u8, ":<>\"|?*", c) != null) return false;
+        if (comp.len > 0 and (comp[comp.len - 1] == ' ' or comp[comp.len - 1] == '.') and
+            !std.mem.eql(u8, comp, ".") and !std.mem.eql(u8, comp, "..")) return false;
+        const stem = std.mem.trimEnd(u8, comp[0 .. std.mem.indexOfScalar(u8, comp, '.') orelse comp.len], " ");
+        for ([_][]const u8{ "AUX", "CON", "CONIN$", "CONOUT$", "NUL", "PRN" }) |d| {
+            if (std.ascii.eqlIgnoreCase(stem, d)) return false;
+        }
+        if (stem.len == 4 and (std.ascii.startsWithIgnoreCase(stem, "COM") or std.ascii.startsWithIgnoreCase(stem, "LPT")) and
+            stem[3] >= '1' and stem[3] <= '9') return false;
+    }
+    return true;
 }
 
 fn scpColon(url: []const u8) ?usize {
@@ -406,4 +441,22 @@ test "parse: bounded adversarial inputs preserve slice bounds" {
         _ = hostIsLocal(raw, "machine.example");
     }
     try std.testing.expect(started.durationTo(std.Io.Clock.awake.now(std.testing.io)).nanoseconds < 5 * std.time.ns_per_s);
+}
+
+test "drivePrefixEnd and validWindowsPath: a drive path is local on Windows only when the rest is a valid Windows path" {
+    try std.testing.expectEqual(@as(?usize, 2), drivePrefixEnd("C:\\repo"));
+    try std.testing.expectEqual(@as(?usize, 2), drivePrefixEnd("1:repo"));
+    try std.testing.expectEqual(@as(?usize, 3), drivePrefixEnd("\u{e4}:repo"));
+    try std.testing.expectEqual(@as(?usize, null), drivePrefixEnd("host:repo"));
+    try std.testing.expectEqual(@as(?usize, null), drivePrefixEnd(""));
+    for ([_][]const u8{ "\\repo", "/a/b.git", "../repo", "./x/.", "", "cond\\x", "COM0", "auxiliary" }) |p| {
+        try std.testing.expect(validWindowsPath(p));
+    }
+    for ([_][]const u8{ "pw@h:p", "a<b", "a|b", "a?b", "a*b", "a\"b", "x\x01", "repo.", "repo ", "...", "CON", "nul.txt", "aux \\x", "Com1", "lpt9.log", "CONOUT$" }) |p| {
+        try std.testing.expect(!validWindowsPath(p));
+    }
+    if (builtin.os.tag == .windows) {
+        try std.testing.expect(localPath("u:pw@h:p") == null);
+        try std.testing.expectEqualStrings("h:repo", localPath("h:repo").?);
+    }
 }
