@@ -73,6 +73,14 @@ pub fn forwardSlashed(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     return out;
 }
 
+/// `path` as git prints it, with each `/` made `\` on Windows, where git
+/// prints `/` though the platform separator is `\`. Always an owned copy.
+pub fn nativeSlashed(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    const out = try alloc.dupe(u8, path);
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, out, '/', '\\');
+    return out;
+}
+
 /// Creates `dir_path` and any missing parents; succeeds if it already
 /// exists as a directory.
 pub fn ensureDir(dir_path: []const u8) !void {

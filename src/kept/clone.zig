@@ -692,7 +692,8 @@ pub fn negation(alloc: std.mem.Allocator, c: Clone, rel: []const u8) !?Negation 
     const pattern = spec[next + 1 ..];
     if (pattern.len == 0 or pattern[0] != '!') return null;
     const src = spec[0..colon];
-    const source = if (std.fs.path.isAbsolute(src)) src else try std.fs.path.join(alloc, &.{ c.worktree, src });
+    const native_src = try fsutil.nativeSlashed(alloc, src);
+    const source = if (std.fs.path.isAbsolute(native_src)) native_src else try std.fs.path.join(alloc, &.{ c.worktree, native_src });
     const line = spec[colon + 1 .. next];
     const exclude = try block.excludePath(alloc, c.common_dir);
     if (std.mem.eql(u8, try fsutil.realPathOrSelf(alloc, source), try fsutil.realPathOrSelf(alloc, exclude))) {

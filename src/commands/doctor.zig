@@ -386,7 +386,7 @@ fn renderKept(ctx: *app.Ctx, ws: *const workspace.Workspace, r: *const doctor_ke
         const cmd = if (rel.clone) |c|
             try std.fmt.allocPrint(a, "run: holt unkeep --purge {s} --yes", .{try place(ctx, c, rel.rel)})
         else blk: {
-            const at = try std.fs.path.join(a, &.{ ws.cfg.code_root, rel.key });
+            const at = try fsutil.joinSlashy(a, ws.cfg.code_root, rel.key);
             const purge = try std.fmt.allocPrint(a, "holt unkeep --purge {s} --yes", .{try place(ctx, at, rel.rel)});
             if (rel.origin) |o| break :blk try std.fmt.allocPrint(a, "run: holt repo get {s} && {s}", .{ try ui.printable(a, try ui.shellQuote(a, o)), purge });
             break :blk try std.fmt.allocPrint(a, "with its clone back at {s}, run: {s}", .{ try util.q(ctx, at), purge });

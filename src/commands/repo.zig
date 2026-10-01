@@ -914,8 +914,10 @@ fn holtWorktree(ctx: *app.Ctx, clone_path: []const u8, member: ?project_mod.Proj
     const alloc = ctx.alloc;
     const m = member orelse return null;
     const dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
-    const branch = for ([_][]const u8{ dir, try fsutil.realPathOrSelf(alloc, dir) }) |d| {
-        if (path.len > d.len + 1 and fsutil.pathIsInside(path, d)) break path[d.len + 1 ..];
+    const at = try fsutil.normalizeTarget(alloc, path);
+    const branch = for ([_][]const u8{ dir, try fsutil.realPathOrSelf(alloc, dir) }) |raw| {
+        const d = try fsutil.normalizeTarget(alloc, raw);
+        if (at.len > d.len + 1 and fsutil.pathIsInside(at, d)) break at[d.len + 1 ..];
     } else return null;
     const rel = try alloc.dupe(u8, branch);
     if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');

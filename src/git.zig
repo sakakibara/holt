@@ -261,8 +261,8 @@ pub fn inspectable(alloc: std.mem.Allocator, repo: []const u8) !bool {
 /// directory, `git rev-parse --git-dir`, is not its common directory,
 /// `--git-common-dir`), that repository's main working tree as `git
 /// worktree list` names it first (the repository itself for a bare one),
-/// or its common directory when git lists none; null for any other
-/// `repo`, and when git cannot read it.
+/// or its common directory when git lists none, with native separators;
+/// null for any other `repo`, and when git cannot read it.
 pub fn linkedMain(alloc: std.mem.Allocator, repo: []const u8) !?[]const u8 {
     const dirs = try runInRepo(alloc, &.{ "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir" }, repo);
     defer alloc.free(dirs.stdout);
@@ -281,9 +281,9 @@ pub fn linkedMain(alloc: std.mem.Allocator, repo: []const u8) !?[]const u8 {
     defer alloc.free(listed.stderr);
     if (listed.status == 0) {
         const first = std.mem.trimEnd(u8, std.mem.sliceTo(listed.stdout, '\n'), "\r");
-        if (std.mem.startsWith(u8, first, "worktree ")) return try alloc.dupe(u8, first["worktree ".len..]);
+        if (std.mem.startsWith(u8, first, "worktree ")) return try fsutil.nativeSlashed(alloc, first["worktree ".len..]);
     }
-    return try alloc.dupe(u8, common_dir);
+    return try fsutil.nativeSlashed(alloc, common_dir);
 }
 
 /// True iff `repo` is a fully-populated clone: it has a commit reachable from
