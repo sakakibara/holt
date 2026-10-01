@@ -119,16 +119,28 @@ pub fn markElsewhere(dir: []const u8) !void {
 /// `git init --bare` plus one commit pushed from a throwaway clone, so the
 /// bare repo has a real `main` branch that later `makeWorkClone` calls track
 /// automatically; it stands for another machine's repository
-/// (`markElsewhere`). Caller owns the returned path.
+/// (`markElsewhere`). The first call in a process builds it with git; later
+/// calls write the same files, so every such repository a process makes
+/// holds the same commit. Caller owns the returned path.
 pub fn makeBareRepo(sb: *Sandbox, name: []const u8) ![]u8 {
     const bare_path = try sb.joinRoot(name);
     errdefer sb.alloc.free(bare_path);
 
-    try runGit(sb, null, &.{ "init", "--bare", bare_path });
-    try markElsewhere(bare_path);
-
     const seed_name = try sb.nextWorkName("seed");
     defer sb.alloc.free(seed_name);
+    if (bare_template) |template| {
+        try template.write(bare_path);
+    } else {
+        try buildBareRepo(sb, bare_path, seed_name);
+        bare_template = try .read(bare_path);
+    }
+    try markElsewhere(bare_path);
+    return bare_path;
+}
+
+fn buildBareRepo(sb: *Sandbox, bare_path: []const u8, seed_name: []const u8) !void {
+    try runGit(sb, null, &.{ "init", "--bare", bare_path });
+
     const seed_path = try sb.joinRoot(seed_name);
     defer sb.alloc.free(seed_path);
 
@@ -143,9 +155,60 @@ pub fn makeBareRepo(sb: *Sandbox, name: []const u8) ![]u8 {
     try runGit(sb, seed_path, &.{ "add", "README" });
     try runGit(sb, seed_path, &.{ "commit", "-m", "initial commit" });
     try runGit(sb, seed_path, &.{ "push", "origin", "main" });
-
-    return bare_path;
 }
+
+/// The repository the first `makeBareRepo` of this process built.
+var bare_template: ?Tree = null;
+
+/// A directory's subdirectories and files, held in memory.
+const Tree = struct {
+    dirs: []const []const u8,
+    files: []const File,
+
+    const File = struct { path: []const u8, data: []const u8, executable: bool };
+
+    /// Reads the tree at `root`, held for the life of the process.
+    fn read(root: []const u8) !Tree {
+        const alloc = std.heap.page_allocator;
+        const io = fsutil.io();
+        var dir = try std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
+        defer dir.close(io);
+        var walker = try dir.walk(alloc);
+        defer walker.deinit();
+        var dirs: std.ArrayList([]const u8) = .empty;
+        var files: std.ArrayList(File) = .empty;
+        while (try walker.next(io)) |e| {
+            const path = try alloc.dupe(u8, e.path);
+            switch (e.kind) {
+                .directory => try dirs.append(alloc, path),
+                .file => {
+                    const st = try dir.statFile(io, path, .{});
+                    try files.append(alloc, .{
+                        .path = path,
+                        .data = try dir.readFileAlloc(io, path, alloc, .unlimited),
+                        .executable = std.Io.File.Permissions.has_executable_bit and st.permissions.toMode() & 0o100 != 0,
+                    });
+                },
+                else => return error.UnexpectedEntry,
+            }
+        }
+        return .{ .dirs = dirs.items, .files = files.items };
+    }
+
+    /// Writes the tree at `root`, creating it and any missing parent.
+    fn write(t: Tree, root: []const u8) !void {
+        const io = fsutil.io();
+        try fsutil.ensureDir(root);
+        var dir = try std.Io.Dir.cwd().openDir(io, root, .{});
+        defer dir.close(io);
+        for (t.dirs) |d| try dir.createDir(io, d, .default_dir);
+        for (t.files) |f| try dir.writeFile(io, .{
+            .sub_path = f.path,
+            .data = f.data,
+            .flags = .{ .permissions = if (f.executable) .executable_file else .default_file },
+        });
+    }
+};
 
 /// Fresh `git clone` of `bare_path` into an auto-named directory inside the
 /// sandbox. Caller owns the returned path.
