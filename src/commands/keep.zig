@@ -2161,7 +2161,7 @@ test "keep: a file inside a kept directory whose link is gone here is not alread
     defer f.deinit();
     try f.write("notes/one.md", "1");
     _ = try f.run(&.{"notes"});
-    try std.Io.Dir.cwd().deleteFile(fsutil.io(), try f.path("notes"));
+    try fsutil.removePath(try f.path("notes"));
     try f.write("notes/new.md", "only here");
 
     const got = try f.run(&.{"notes/new.md"});

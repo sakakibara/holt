@@ -1565,7 +1565,7 @@ test "keepPath: a directory whose kept copy came from another machine merges: mi
     try testing.expectEqualStrings("only on b", try ma.read("notes/y"));
     try testing.expectEqual(@as(usize, 0), (try mb.reconcile()).unsettledCount());
 
-    try std.Io.Dir.cwd().deleteFile(io(), try mb.path("notes"));
+    try fsutil.removePath(try mb.path("notes"));
     try mb.write("notes/x", "changed on b");
     try mb.write("notes/z", "new");
     var differs: []const []const u8 = &.{};

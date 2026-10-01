@@ -7419,6 +7419,8 @@ test "gitRisks: on POSIX, a drive-letter URL is an scp-like host, asked as one, 
 }
 
 test "gitRisks: a push URL git reads as a local path never counts, even with :// inside its path" {
+    // Windows cannot name a directory `d:`, which the path needs.
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();

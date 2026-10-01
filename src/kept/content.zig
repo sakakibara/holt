@@ -1005,6 +1005,7 @@ pub fn readSmall(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 const Fixture = @import("harness.zig").Fixture;
+const testutil = @import("../testutil.zig");
 
 test "entryAt: absent, file, dir, symlink, and a path under a file" {
     var f = try Fixture.init();
@@ -1045,7 +1046,7 @@ test "sameFile: one object under two names, never through a link, never when abs
     const a = f.alloc();
     const one = try f.write("one", "x");
     const other = try f.write("other", "x");
-    try std.Io.Dir.cwd().hardLink(one, std.Io.Dir.cwd(), try f.path("hard"), io(), .{});
+    try testutil.hardLink(a, one, try f.path("hard"));
     try createLink(one, try f.path("soft"), .file);
     try testing.expect(try sameFile(a, one, try f.path("hard")));
     try testing.expect(!try sameFile(a, one, other));
@@ -1172,15 +1173,17 @@ test "retargetLink: the link ends pointing at the new target, and a link that ch
     var f = try Fixture.init();
     defer f.deinit();
     const a = f.alloc();
+    // Windows reads a link's target back with its own separator.
+    const sep = std.fs.path.sep_str;
 
     const l = try f.path("l");
     const t = try f.path(".holt-tmp-l");
-    try createLink("/old", l, .file);
-    try testing.expectError(error.LinkChanged, retargetLink(a, "/new", l, t, .file, "/other"));
-    try testing.expectEqualStrings("/old", (try readLink(a, l)).?);
+    try createLink(sep ++ "old", l, .file);
+    try testing.expectError(error.LinkChanged, retargetLink(a, sep ++ "new", l, t, .file, sep ++ "other"));
+    try testing.expectEqualStrings(sep ++ "old", (try readLink(a, l)).?);
     try testing.expectEqual(Entry.absent, try entryAt(t));
-    try retargetLink(a, "/new", l, t, .file, "/old");
-    try testing.expectEqualStrings("/new", (try readLink(a, l)).?);
+    try retargetLink(a, sep ++ "new", l, t, .file, sep ++ "old");
+    try testing.expectEqualStrings(sep ++ "new", (try readLink(a, l)).?);
     try testing.expectEqual(Entry.absent, try entryAt(t));
 }
 
@@ -1207,14 +1210,16 @@ test "removeLinkIf: removes the link only while it still names the target" {
     var f = try Fixture.init();
     defer f.deinit();
     const a = f.alloc();
+    // Windows reads a link's target back with its own separator.
+    const sep = std.fs.path.sep_str;
     const l = try f.path("l");
-    try createLink("/one", l, .file);
-    try testing.expect(!try removeLinkIf(a, l, "/two"));
+    try createLink(sep ++ "one", l, .file);
+    try testing.expect(!try removeLinkIf(a, l, sep ++ "two"));
     try testing.expectEqual(Entry.symlink, try entryAt(l));
-    try testing.expect(try removeLinkIf(a, l, "/one"));
+    try testing.expect(try removeLinkIf(a, l, sep ++ "one"));
     try testing.expectEqual(Entry.absent, try entryAt(l));
     _ = try f.write("l", "a file");
-    try testing.expect(!try removeLinkIf(a, l, "/one"));
+    try testing.expect(!try removeLinkIf(a, l, sep ++ "one"));
     try testing.expectEqual(Entry.file, try entryAt(l));
 }
 

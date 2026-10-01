@@ -1224,8 +1224,8 @@ test "tracked: a path equal under case folding or normalization is tracked when 
 
     const sensitive = try @import("harness.zig").caseSensitive(a, work);
     const fold = try content.probeFolding(a, work);
-    for (rels[0..3], got[0..3]) |rel, t| {
-        try testing.expectEqual(!sensitive, try t.isTracked(a, work, rel, fold));
+    for (rels[0..3], got[0..3], [_]bool{ !sensitive, fold.norm, !sensitive }) |rel, t, same| {
+        try testing.expectEqual(same, try t.isTracked(a, work, rel, fold));
     }
     if (!sensitive) return;
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, "readme" }), .data = "a different file" });
@@ -1245,7 +1245,7 @@ test "Tracked.isTracked: where the filesystem folds names, another spelling coun
     try fsutil.removePath(here);
     const there = try f.write("B", "there");
     try testing.expect(!try t.isTracked(a, f.root, "a", .all));
-    try std.Io.Dir.cwd().hardLink(there, std.Io.Dir.cwd(), here, fsutil.io(), .{});
+    try testutil.hardLink(a, there, here);
     try testing.expect(try t.isTracked(a, f.root, "a", .all));
     try fsutil.removePath(here);
     _ = try f.write("a", "a separate file");
@@ -1585,9 +1585,9 @@ test "blockHides leaves no file behind when git fails, and clearStaleExcludes re
         "state/exclude-00000000000000ff",
     };
     for (kept ++ removed) |rel| _ = try f.write(rel, "/x\n");
-    try std.Io.Dir.cwd().setTimestamps(fsutil.io(), try f.path(busy), .{ .modify_timestamp = .{ .new = .{ .nanoseconds = now - 2 * std.time.ns_per_min } } });
+    try testutil.setModified(a, try f.path(busy), now - 2 * std.time.ns_per_min);
     for (removed[1..]) |rel| {
-        try std.Io.Dir.cwd().setTimestamps(fsutil.io(), try f.path(rel), .{ .modify_timestamp = .{ .new = .{ .nanoseconds = now - 2 * std.time.ns_per_day } } });
+        try testutil.setModified(a, try f.path(rel), now - 2 * std.time.ns_per_day);
     }
     try clearStaleExcludes(a, dir, mine, host, now);
     for (kept) |rel| try testing.expectEqual(content.Entry.file, try content.entryAt(try f.path(rel)));

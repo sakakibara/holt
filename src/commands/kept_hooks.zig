@@ -939,8 +939,9 @@ pub const TestBed = struct {
     }
 };
 
-/// Test-only: every file under `root` with its bytes, and every link with
-/// its target, skipping `skip` (a path under `root`).
+/// Test-only: every file under `root` with its bytes (its size alone while
+/// another handle holds it locked on Windows), and every link with its
+/// target, skipping `skip` (a path under `root`).
 pub fn snapshot(a: std.mem.Allocator, root: []const u8, skip: ?[]const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var d = std.Io.Dir.cwd().openDir(fsutil.io(), root, .{ .iterate = true }) catch return out.items;
@@ -952,7 +953,11 @@ pub fn snapshot(a: std.mem.Allocator, root: []const u8, skip: ?[]const u8) ![]co
         const full = try std.fs.path.join(a, &.{ root, e.path });
         if (skip) |s| if (fsutil.pathIsInside(full, s)) continue;
         const line = switch (e.kind) {
-            .file => try std.fmt.allocPrint(a, "f {s} {s}", .{ e.path, &(try kept.content.hashFile(a, full)) }),
+            .file => if (kept.content.hashFile(a, full)) |h| try std.fmt.allocPrint(a, "f {s} {s}", .{ e.path, &h }) else |err| switch (err) {
+                // Windows refuses to read a file another handle holds locked.
+                error.LockViolation => try std.fmt.allocPrint(a, "f {s} locked, {d} bytes", .{ e.path, (try std.Io.Dir.cwd().statFile(fsutil.io(), full, .{})).size }),
+                else => return err,
+            },
             .sym_link => try std.fmt.allocPrint(a, "l {s} {s}", .{ e.path, (try kept.content.readLink(a, full)) orelse "" }),
             .directory => try std.fmt.allocPrint(a, "d {s}", .{e.path}),
             else => try std.fmt.allocPrint(a, "o {s}", .{e.path}),

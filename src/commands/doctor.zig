@@ -1269,7 +1269,7 @@ test "run: every working tree is judged: a linked tree's missing link and hidden
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
 
-    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees/feat", .{w.clone});
+    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees{c}feat", .{ w.clone, std.fs.path.sep });
     try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -1281,7 +1281,7 @@ test "run: every working tree is judged: a linked tree's missing link and hidden
     try testing.expect(has(hidden.out, try std.fmt.allocPrint(arena, "  {s}: local copy differs from the kept copy", .{lq})));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, hidden.out, lq) - 2);
 
-    const moved = try std.fmt.allocPrint(arena, "{s}@worktrees/moved", .{w.clone});
+    const moved = try std.fmt.allocPrint(arena, "{s}@worktrees{c}moved", .{ w.clone, std.fs.path.sep });
     try std.Io.Dir.cwd().rename(linked, std.Io.Dir.cwd(), moved, fsutil.io());
     const gone = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), gone.code);
@@ -1406,6 +1406,8 @@ test "run: what folders gather on their own is never unknown in kept/, iCloud's 
     const kept_dir = try layout.keptDir(arena);
     for ([_][]const u8{ kept_dir, try std.fs.path.join(arena, &.{ kept_dir, "holt-test.invalid" }), key_dir, try layout.asideDir(arena) }) |d| {
         for ([_][]const u8{ ".DS_Store", "Icon\r", "desktop.ini", "Thumbs.db", ".directory" }) |n| {
+            // Windows cannot name a file with a control character.
+            if (builtin.os.tag == .windows and std.mem.indexOfScalar(u8, n, '\r') != null) continue;
             try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ d, n }), .data = "x" });
         }
         try fsutil.ensureDir(try std.fs.path.join(arena, &.{ d, "@eaDir", "x" }));
@@ -1418,7 +1420,8 @@ test "run: what folders gather on their own is never unknown in kept/, iCloud's 
 
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ kept_dir, "..holt-skip.icloud" }), .data = "x" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, "..holt-paths.icloud" }), .data = "x" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, "bad\x1b[31mname" }), .data = "x" });
+    const control_names = builtin.os.tag != .windows;
+    if (control_names) try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, "bad\x1b[31mname" }), .data = "x" });
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     for ([_][]const u8{ try std.fs.path.join(arena, &.{ kept_dir, ".holt-skip" }), try std.fs.path.join(arena, &.{ key_dir, ".holt-paths" }) }) |p| {
@@ -1426,7 +1429,7 @@ test "run: what folders gather on their own is never unknown in kept/, iCloud's 
     }
     try testing.expect(!has(got.out, ".icloud"));
     try testing.expect(!has(got.out, "\x1b"));
-    try testing.expect(has(got.out, "bad\\x1b[31mname': unknown file in the kept store"));
+    if (control_names) try testing.expect(has(got.out, "bad\\x1b[31mname': unknown file in the kept store"));
 }
 
 test "run: doctor writes nothing in holt's machine-local state, leaves no scratch, and names this machine only once its id exists" {

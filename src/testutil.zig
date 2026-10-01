@@ -380,9 +380,47 @@ pub fn ageAsideEntries(alloc: std.mem.Allocator, synced_root: []const u8) !void 
         const old = try std.mem.concat(alloc, u8, &.{ "20000101", n[8..] });
         const to = try std.fs.path.join(alloc, &.{ dir, old });
         try std.Io.Dir.cwd().rename(try std.fs.path.join(alloc, &.{ dir, n }), std.Io.Dir.cwd(), to, fsutil.io());
-        try std.Io.Dir.cwd().setTimestamps(fsutil.io(), to, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = 946684800 * std.time.ns_per_s } } });
+        try setModified(alloc, to, 946684800 * std.time.ns_per_s);
     }
 }
+
+/// Sets the modification time of the file or directory at `path` to `ns`
+/// nanoseconds since the epoch, a final link followed. Zig 0.16 cannot set
+/// a path's times on Windows, so there the path is opened for writing its
+/// attributes, a directory as well as a file, and the time set through
+/// that handle.
+pub fn setModified(alloc: std.mem.Allocator, path: []const u8, ns: i96) !void {
+    if (builtin.os.tag != .windows) {
+        return std.Io.Dir.cwd().setTimestamps(fsutil.io(), path, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = ns } } });
+    }
+    const w = try std.unicode.wtf8ToWtf16LeAllocZ(alloc, path);
+    defer alloc.free(w);
+    const file_write_attributes: u32 = 0x100;
+    const share_all: u32 = 0x7;
+    const open_existing: u32 = 3;
+    const backup_semantics: u32 = 0x02000000;
+    const h = CreateFileW(w.ptr, file_write_attributes, share_all, null, open_existing, backup_semantics, null);
+    if (h == std.os.windows.INVALID_HANDLE_VALUE) return error.Unexpected;
+    defer std.os.windows.CloseHandle(h);
+    const file: std.Io.File = .{ .handle = h, .flags = .{ .nonblocking = false } };
+    try file.setTimestamps(fsutil.io(), .{ .modify_timestamp = .{ .new = .{ .nanoseconds = ns } } });
+}
+
+/// Makes `new` a hard link to the file `existing`. Zig 0.16 cannot make
+/// one on Windows, so there it is made with `CreateHardLinkW`.
+pub fn hardLink(alloc: std.mem.Allocator, existing: []const u8, new: []const u8) !void {
+    if (builtin.os.tag != .windows) {
+        return std.Io.Dir.cwd().hardLink(existing, std.Io.Dir.cwd(), new, fsutil.io(), .{});
+    }
+    const e = try std.unicode.wtf8ToWtf16LeAllocZ(alloc, existing);
+    defer alloc.free(e);
+    const n = try std.unicode.wtf8ToWtf16LeAllocZ(alloc, new);
+    defer alloc.free(n);
+    if (!CreateHardLinkW(n.ptr, e.ptr, null).toBool()) return error.Unexpected;
+}
+
+extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: u32, share: u32, security: ?*anyopaque, disposition: u32, flags: u32, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
+extern "kernel32" fn CreateHardLinkW(new: [*:0]const u16, existing: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) std.os.windows.BOOL;
 
 /// Points holt's machine-local state (`$XDG_STATE_HOME`) at `<root>/state`,
 /// so a command that records this machine's id or locks a kept-files key

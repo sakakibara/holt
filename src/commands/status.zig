@@ -1936,7 +1936,7 @@ test "run: a clone status cannot judge is named in the JSON, and one with a work
     var w = try kept_cmd.TestWorld.init(arena, &sb, true);
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
-    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees/feat", .{w.clone});
+    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees{c}feat", .{ w.clone, std.fs.path.sep });
     try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked);
 

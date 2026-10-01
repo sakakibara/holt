@@ -10,6 +10,7 @@
 //! acts on it. Nothing here prints.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const fsutil = @import("../fsutil.zig");
 const paths = @import("paths.zig");
 const content = @import("content.zig");
@@ -1206,7 +1207,7 @@ test "takeLocal: a directory replaces the kept files it holds and keeps the kept
     try m.write("notes/only-kept.md", "kept only");
     try m.write("notes/sub", "kept file where local has a directory");
     _ = try m.keep("notes");
-    try std.Io.Dir.cwd().deleteFile(io(), try m.path("notes"));
+    try fsutil.removePath(try m.path("notes"));
     try m.write("notes/a.md", "new a");
     try m.write("notes/local.md", "local only");
     try m.write("notes/sub/inner.md", "inner");
@@ -1280,7 +1281,7 @@ test "takeLocal interrupted at every point: content stays in place, in kept, or 
         try m.write("d/a", "old a");
         try m.write("d/k", "kept only");
         _ = try m.keep("d");
-        try std.Io.Dir.cwd().deleteFile(io(), try m.path("d"));
+        try fsutil.removePath(try m.path("d"));
         try m.write("d/a", "new a");
 
         var idx = try indexOf(m);
@@ -1411,6 +1412,9 @@ test "takeAside interrupted: reconcile reports the take, and rerunning finishes 
     const a = arena_state.allocator();
     defer interrupt.at = null;
     for ([_]interrupt.Point{ .take_pending, .stage_copied, .replace_aside, .replace_swapped, .take_facts }) |point| {
+        // Windows has no exchange rename, so a file replaces a file in one
+        // rename, before that point.
+        if (builtin.os.tag == .windows and point == .replace_swapped) continue;
         var sb = try testutil.Sandbox.init(testing.allocator);
         defer sb.deinit();
         var w = try World.init(a, &sb, 1);

@@ -4780,7 +4780,7 @@ test "remove --clone: a worktree record git does not list, holding no gitdir or 
         try testing.expect(fsutil.exists(set.clone));
         try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ set.record, "MERGE_AUTOSTASH" })));
         try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ set.record, "HEAD" })));
-        const ls = try @import("../proc.zig").runEnv(arena, &.{ "sh", "-c", try std.fmt.allocPrint(arena, "ls -d {s}", .{try ui.quotePath(arena, app.envOf_current(), set.record)}) }, null, &sb.git_env.map);
+        const ls = try @import("../proc.zig").runEnv(arena, &.{ "sh", "-c", "ls -d \"$1\"", "sh", set.record }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), ls.status);
     };
 }

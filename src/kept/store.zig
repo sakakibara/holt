@@ -5,6 +5,7 @@
 //! allocator, meant to be a per-command arena.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const json = @import("json");
 const fsutil = @import("../fsutil.zig");
 const paths = @import("paths.zig");
@@ -1208,6 +1209,8 @@ test "unknownFiles: what folders gather on their own, a directory holding only t
     _ = try f.write("kept/github.com/acme/widget/.holt-kept.json", "{\"version\": 1}");
     _ = try f.write("kept/github.com/acme/widget/.clasp.json", "{}");
     for ([_][]const u8{ ".DS_Store", "Icon\r", "desktop.ini", "Thumbs.db", ".directory", "@eaDir/x", ".Trash-1000/y", "android/.DS_Store", "..holt-paths.icloud" }) |n| {
+        // Windows cannot name a file with a control character.
+        if (builtin.os.tag == .windows and std.mem.indexOfScalar(u8, n, '\r') != null) continue;
         _ = try f.write(try std.fs.path.join(a, &.{ "kept/github.com/acme/widget", n }), "x");
     }
     _ = try f.write("kept/github.com/acme/widget/@kept/notes", "n");

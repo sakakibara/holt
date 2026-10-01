@@ -2,6 +2,7 @@
 //! machines sharing one synced root.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const fsutil = @import("../fsutil.zig");
 const git = @import("../git.zig");
 const testutil = @import("../testutil.zig");
@@ -332,7 +333,9 @@ test "a kept copy that is a symlink or of the wrong kind, and a link holt did no
     try fsutil.ensureDir(try m.keptPath("kind"));
     try fsutil.removePath(try m.path("kind"));
     try fsutil.removePath(try m.path("foreign"));
-    try content.createLink("/somewhere/else", try m.path("foreign"), .file);
+    // Windows reads a link's target back with its own separator.
+    const elsewhere = std.fs.path.sep_str ++ "somewhere" ++ std.fs.path.sep_str ++ "else";
+    try content.createLink(elsewhere, try m.path("foreign"), .file);
 
     const r = try m.reconcile();
     const sym = try expectItem(r, "sym", .kept_not_regular);
@@ -341,8 +344,8 @@ test "a kept copy that is a symlink or of the wrong kind, and a link holt did no
     try testing.expect((try expectItem(r, "kind", .kind_mismatch)).unsettled);
     try testing.expectEqual(content.Entry.absent, try m.entry("kind"));
     const foreign = try expectItem(r, "foreign", .foreign_link);
-    try testing.expectEqualStrings("/somewhere/else", foreign.detail.?);
-    try testing.expectEqualStrings("/somewhere/else", (try content.readLink(a, try m.path("foreign"))).?);
+    try testing.expectEqualStrings(elsewhere, foreign.detail.?);
+    try testing.expectEqualStrings(elsewhere, (try content.readLink(a, try m.path("foreign"))).?);
 }
 
 test "released: every machine turns its link into a regular copy, the kept content stays, and the line goes once no link is left" {
@@ -817,7 +820,7 @@ test "a link of holt's shape into a folder the store never lived at is the user'
 
     try m.write("cfg", "kept");
     _ = try m.keep("cfg");
-    const mine = try std.fs.path.join(a, &.{ sb.root, "notes", "kept", key, "cfg" });
+    const mine = try std.fs.path.join(a, &.{ try fsutil.joinSlashy(a, try std.fs.path.join(a, &.{ sb.root, "notes", "kept" }), key), "cfg" });
     try fsutil.ensureDir(std.fs.path.dirname(mine).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = mine, .data = "mine" });
     try fsutil.removePath(try m.path("cfg"));
@@ -1023,7 +1026,9 @@ test "released: an online-only kept copy is never copied, a gone target is taken
     }
     try std.Io.Dir.cwd().deleteFile(io(), try m.keptPath("moved"));
     try fsutil.removePath(try m.path("theirs"));
-    try content.createLink("/not/holts", try m.path("theirs"), .file);
+    // Windows reads a link's target back with its own separator.
+    const not_holts = std.fs.path.sep_str ++ "not" ++ std.fs.path.sep_str ++ "holts";
+    try content.createLink(not_holts, try m.path("theirs"), .file);
 
     const r = try harness.reconcileIn(moved, m.clone, .apply);
     _ = try expectItem(r, "cloud", .online_only);
@@ -1033,7 +1038,7 @@ test "released: an online-only kept copy is never copied, a gone target is taken
     try testing.expectEqualStrings("current", try m.read("moved"));
     const foreign = try expectItem(r, "theirs", .foreign_link);
     try testing.expect(foreign.unsettled);
-    try testing.expectEqualStrings("/not/holts", (try content.readLink(a, try m.path("theirs"))).?);
+    try testing.expectEqualStrings(not_holts, (try content.readLink(a, try m.path("theirs"))).?);
 }
 
 test "without symlink privilege: keep moves nothing, and reconcile leaves content where it is" {
@@ -1394,15 +1399,19 @@ test "a retarget or an aside interrupted inside reconcile is finished by the nex
     _ = try m.keep("differs");
     const moved = try switchedBackend(m, "new-backend", true);
 
-    interrupt.at = .retarget_created;
-    _ = try expectItem(try harness.reconcileIn(moved, m.clone, .apply), "moving", .failed);
-    interrupt.at = null;
-    try testing.expectEqual(content.Entry.symlink, try m.entry(try paths.tempRel(a, "moving")));
-    const r = try harness.reconcileIn(moved, m.clone, .apply);
-    try testing.expect((try expectItem(r, "moving", .retargeted)).done);
-    try testing.expectEqual(content.Entry.absent, try m.entry(try paths.tempRel(a, "moving")));
-    try testing.expectEqualStrings(try moved.layout.copyPath(a, key, "moving"), (try content.readLink(a, try m.path("moving"))).?);
-    try testing.expect(!paths.contains((try block.read(a, (try clone.inspect(a, m.clone, m.ctx.code_root)).common_dir)).temps, try paths.tempRel(a, "moving")));
+    // Windows retargets a link by removing and recreating it, with no
+    // temporary link to stop at.
+    if (builtin.os.tag != .windows) {
+        interrupt.at = .retarget_created;
+        _ = try expectItem(try harness.reconcileIn(moved, m.clone, .apply), "moving", .failed);
+        interrupt.at = null;
+        try testing.expectEqual(content.Entry.symlink, try m.entry(try paths.tempRel(a, "moving")));
+        const r = try harness.reconcileIn(moved, m.clone, .apply);
+        try testing.expect((try expectItem(r, "moving", .retargeted)).done);
+        try testing.expectEqual(content.Entry.absent, try m.entry(try paths.tempRel(a, "moving")));
+        try testing.expectEqualStrings(try moved.layout.copyPath(a, key, "moving"), (try content.readLink(a, try m.path("moving"))).?);
+        try testing.expect(!paths.contains((try block.read(a, (try clone.inspect(a, m.clone, m.ctx.code_root)).common_dir)).temps, try paths.tempRel(a, "moving")));
+    }
 
     try m.saveByRename("differs", "local edit");
     interrupt.at = .aside_copied;
