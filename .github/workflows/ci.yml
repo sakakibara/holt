@@ -122,6 +122,38 @@ jobs:
         shell: bash
         run: zig build test --summary all
 
+  # Runs the suite under git 2.32, the oldest git kept files support
+  # (alpine 3.14 ships 2.32.x), as a non-root user so permission checks hold.
+  test-git-min:
+    name: test (git 2.32)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: install zig
+        shell: bash
+        run: |
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/zig"
+          curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
+          echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - uses: actions/cache@v5
+        with:
+          path: .zig-cache
+          key: zig-cache-git-min-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            zig-cache-git-min-${{ env.ZIG_VERSION }}-
+      - name: build the test binary
+        run: zig build test-bin -Dtarget=x86_64-linux-musl
+      - name: run it with git 2.32
+        run: |
+          docker run --rm -v "$PWD/zig-out/bin:/t:ro" alpine:3.14 sh -euc '
+            apk add --no-cache git curl tar >/dev/null
+            git --version
+            adduser -D u
+            su u -c "cd /home/u && HOME=/home/u /t/test"
+          '
+
   # install.ps1 can't run end-to-end without a published Windows release, so
   # parse-check it on every push instead.
   install-script:

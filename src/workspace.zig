@@ -3,6 +3,7 @@
 //! back to one of them.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Env = @import("env").Env;
 const config = @import("config.zig");
 const marker = @import("marker.zig");
@@ -41,6 +42,18 @@ pub const FindResult = union(enum) {
     ambiguous: []Project,
 };
 
+/// Where `Workspace.list` writes its warnings under test, in place of the
+/// test runner's stderr; null drops them.
+pub var warnings_for_test: ?*std.Io.Writer = null;
+
+fn warn(comptime fmt: []const u8, args: anytype) void {
+    if (builtin.is_test) {
+        if (warnings_for_test) |w| w.print(fmt, args) catch {};
+        return;
+    }
+    std.debug.print(fmt, args);
+}
+
 pub const Workspace = struct {
     cfg: config.Config,
     /// The environment `cfg` was resolved in - carried so a path this
@@ -69,8 +82,8 @@ pub const Workspace = struct {
         var projects: std.ArrayList(Project) = .empty;
         for (entries) |entry| switch (entry) {
             .ok => |p| try projects.append(alloc, p),
-            .failed => |f| std.debug.print("warning: skipping unparseable marker at {s}: {s}\n", .{ try fsutil.contractTilde(alloc, self.env, f.path), f.message }),
-            .evicted => |e| std.debug.print("warning: {s}/{s} marker is evicted from local storage; open its folder to download it\n", .{ e.org, e.name }),
+            .failed => |f| warn("warning: skipping unparseable marker at {s}: {s}\n", .{ try fsutil.contractTilde(alloc, self.env, f.path), f.message }),
+            .evicted => |e| warn("warning: {s}/{s} marker is evicted from local storage; open its folder to download it\n", .{ e.org, e.name }),
         };
 
         const items = try projects.toOwnedSlice(alloc);
@@ -514,10 +527,18 @@ test "list: a broken marker warns and is skipped, others still listed" {
     const broken_marker = try std.fs.path.join(arena, &.{ broken_dir, marker.marker_basename });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = broken_marker, .data = "not json" });
 
-    const got = try ws.list(arena);
+    const stderr_path = try std.fs.path.join(arena, &.{ root, "stderr" });
+    const cap: ?testutil.StderrCapture = if (builtin.os.tag != .windows) try testutil.StderrCapture.begin(stderr_path) else null;
+    var warned: std.Io.Writer.Allocating = .init(arena);
+    warnings_for_test = &warned.writer;
+    const got = ws.list(arena);
+    warnings_for_test = null;
+    if (cap) |c| c.end();
 
-    try testing.expectEqual(@as(usize, 1), got.len);
-    try testing.expectEqualStrings("good", got[0].name);
+    try testing.expectEqual(@as(usize, 1), (try got).len);
+    try testing.expectEqualStrings("good", (try got)[0].name);
+    if (cap != null) try testing.expectEqualStrings("", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), stderr_path, arena, .limited(1 << 16)));
+    try testing.expect(std.mem.indexOf(u8, warned.written(), "warning: skipping unparseable marker at ") != null);
 }
 
 test "find: exact org/name match" {

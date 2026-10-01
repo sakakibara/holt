@@ -28,8 +28,20 @@ pub const Handle = struct {
 /// processes resolving the same project derive the same lock file, so their
 /// critical sections run one at a time.
 pub fn acquire(alloc: std.mem.Allocator, env: Env, content_path: []const u8) !Handle {
-    const lock_path = try lockPath(alloc, env, content_path);
-    const file = try std.Io.Dir.createFileAbsolute(fsutil.io(), lock_path, .{ .truncate = false, .lock = .exclusive });
+    return acquireIn(alloc, try std.fs.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), "holt-locks" }), content_path);
+}
+
+/// Blocks until it holds the exclusive lock that `name` maps to in the
+/// local directory `dir`, created if absent. Two processes passing the same
+/// `dir` and `name` take turns.
+pub fn acquireIn(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) !Handle {
+    return acquireAt(try lockPathIn(alloc, dir, name));
+}
+
+/// Blocks until it holds the exclusive lock on the file at the absolute
+/// `path`, created if absent in a directory that must exist.
+pub fn acquireAt(path: []const u8) !Handle {
+    const file = try std.Io.Dir.createFileAbsolute(fsutil.io(), path, .{ .truncate = false, .lock = .exclusive });
     return .{ .file = file };
 }
 
@@ -37,11 +49,18 @@ pub fn acquire(alloc: std.mem.Allocator, env: Env, content_path: []const u8) !Ha
 /// that is never part of a synced tree, so lock files are never cloud-synced.
 /// The lock dir is created if absent. Exposed for tests.
 fn lockPath(alloc: std.mem.Allocator, env: Env, content_path: []const u8) ![]const u8 {
-    const base = try fsutil.tempDir(alloc, env);
-    const dir = try std.fs.path.join(alloc, &.{ base, "holt-locks" });
-    try fsutil.ensureDir(dir);
+    return lockPathIn(alloc, try std.fs.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), "holt-locks" }), content_path);
+}
 
-    const key = std.hash.Wyhash.hash(0, content_path);
+/// `<dir>/holt-<hash of name>.lock`, creating `dir` if absent.
+pub fn lockPathIn(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ![]const u8 {
+    try fsutil.ensureDir(dir);
+    return lockFileIn(alloc, dir, name);
+}
+
+/// `<dir>/holt-<hash of name>.lock`, creating nothing.
+pub fn lockFileIn(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ![]const u8 {
+    const key = std.hash.Wyhash.hash(0, name);
     const filename = try std.fmt.allocPrint(alloc, "holt-{x}.lock", .{key});
     return std.fs.path.join(alloc, &.{ dir, filename });
 }

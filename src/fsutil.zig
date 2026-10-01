@@ -192,12 +192,13 @@ pub fn pathIsInside(child: []const u8, parent: []const u8) bool {
 /// Resolves `path` to its canonical, symlink-free absolute form, so a
 /// containment check downstream sees the physical location rather than a
 /// lexical alias. A root that doesn't exist yet (fresh machine, not yet
-/// initialized) has nothing to resolve, so falls back to the input as-is.
+/// initialized), or lies under something that is not a directory, has
+/// nothing to resolve, so falls back to the input as-is.
 /// Caller owns the returned memory.
 pub fn realPathOrSelf(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = std.Io.Dir.realPathFileAbsolute(io(), path, &buf) catch |err| switch (err) {
-        error.FileNotFound => return alloc.dupe(u8, path),
+        error.FileNotFound, error.NotDir => return alloc.dupe(u8, path),
         // Windows opens `path` through a non-directory handle here, which NT
         // refuses for a directory. A plain directory (no reparse point of its
         // own) resolves fine through a directory handle instead
@@ -764,7 +765,7 @@ test "linkState: missing, regular file, symlink" {
     }
 }
 
-test "realPathOrSelf: resolves a symlink to its physical target, passes through a nonexistent path unchanged" {
+test "realPathOrSelf: resolves a symlink to its physical target, passes through a nonexistent path, or one under a file, unchanged" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -788,6 +789,13 @@ test "realPathOrSelf: resolves a symlink to its physical target, passes through 
     const fallback = try realPathOrSelf(testing.allocator, missing);
     defer testing.allocator.free(fallback);
     try testing.expectEqualStrings(missing, fallback);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "file", .data = "x" });
+    const under = try std.fs.path.join(testing.allocator, &.{ root, "file", "below" });
+    defer testing.allocator.free(under);
+    const kept_as_is = try realPathOrSelf(testing.allocator, under);
+    defer testing.allocator.free(kept_as_is);
+    try testing.expectEqualStrings(under, kept_as_is);
 }
 
 test "rmdirIfEmpty: removes an empty dir, leaves a non-empty one, no-ops on a missing one" {

@@ -17,6 +17,7 @@ const project = @import("project.zig");
 const workspace = @import("workspace.zig");
 const identity = @import("identity.zig");
 const app = @import("app.zig");
+const kept = @import("kept.zig");
 const testing = std.testing;
 
 const identity_flags = [_][]const u8{
@@ -102,14 +103,29 @@ pub fn runGit(sb: *Sandbox, cwd: ?[]const u8, args: []const []const u8) !void {
     }
 }
 
+/// The file marking a directory whose repositories, at it or below it,
+/// stand for another machine's: the deleters and `doctor --retire` count a
+/// remote there as a copy (`deleter.onThisMachine`), as they count no
+/// other on a local path.
+pub const elsewhere_mark = "holt-test-elsewhere";
+
+/// Marks `dir` with `elsewhere_mark`.
+pub fn markElsewhere(dir: []const u8) !void {
+    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), dir, .{});
+    defer d.close(fsutil.io());
+    try d.writeFile(fsutil.io(), .{ .sub_path = elsewhere_mark, .data = "" });
+}
+
 /// `git init --bare` plus one commit pushed from a throwaway clone, so the
 /// bare repo has a real `main` branch that later `makeWorkClone` calls track
-/// automatically. Caller owns the returned path.
+/// automatically; it stands for another machine's repository
+/// (`markElsewhere`). Caller owns the returned path.
 pub fn makeBareRepo(sb: *Sandbox, name: []const u8) ![]u8 {
     const bare_path = try sb.joinRoot(name);
     errdefer sb.alloc.free(bare_path);
 
     try runGit(sb, null, &.{ "init", "--bare", bare_path });
+    try markElsewhere(bare_path);
 
     const seed_name = try sb.nextWorkName("seed");
     defer sb.alloc.free(seed_name);
@@ -347,6 +363,34 @@ pub const EnvScope = struct {
     }
 };
 
+/// Renames every aside entry under `synced_root` to a stamp dated
+/// 2000-01-01 and dates its directory's modification time, which stands
+/// for its arrival, to that day, so `--prune-aside` without names judges
+/// it old enough (`kept.ops.young_days`); the rest of each name stays.
+pub fn ageAsideEntries(alloc: std.mem.Allocator, synced_root: []const u8) !void {
+    const dir = try std.fs.path.join(alloc, &.{ synced_root, "kept", ".holt-aside" });
+    var names: std.ArrayList([]const u8) = .empty;
+    {
+        var d = try std.Io.Dir.cwd().openDir(fsutil.io(), dir, .{ .iterate = true });
+        defer d.close(fsutil.io());
+        var it = d.iterate();
+        while (try it.next(fsutil.io())) |e| if (e.kind == .directory and kept.ops.stampTime(e.name) != null) try names.append(alloc, try alloc.dupe(u8, e.name));
+    }
+    for (names.items) |n| {
+        const old = try std.mem.concat(alloc, u8, &.{ "20000101", n[8..] });
+        const to = try std.fs.path.join(alloc, &.{ dir, old });
+        try std.Io.Dir.cwd().rename(try std.fs.path.join(alloc, &.{ dir, n }), std.Io.Dir.cwd(), to, fsutil.io());
+        try std.Io.Dir.cwd().setTimestamps(fsutil.io(), to, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = 946684800 * std.time.ns_per_s } } });
+    }
+}
+
+/// Points holt's machine-local state (`$XDG_STATE_HOME`) at `<root>/state`,
+/// so a command that records this machine's id or locks a kept-files key
+/// writes inside the sandbox rather than the developer's own state.
+pub fn stateScope(alloc: std.mem.Allocator, root: []const u8) !EnvScope {
+    return EnvScope.install(alloc, &.{.{ "XDG_STATE_HOME", try std.fs.path.join(alloc, &.{ root, "state" }) }});
+}
+
 /// Edits the environment of the process running the test.
 ///
 /// Reserved for what a CHILD inherits. What holt itself reads goes through
@@ -431,6 +475,39 @@ pub fn gitInsteadOf(alloc: std.mem.Allocator, gitconfig_path: []const u8, pairs:
     return EnvOverride.install(alloc, "GIT_CONFIG_GLOBAL", gitconfig_path);
 }
 
+/// Makes each of `urls` fail to clone without reaching the network: a
+/// `GIT_CONFIG_GLOBAL` at `<dir>/unreachable.gitconfig` rewrites it to a
+/// path under `dir` that does not exist.
+pub fn gitUnreachable(alloc: std.mem.Allocator, dir: []const u8, urls: []const []const u8) !EnvOverride {
+    var pairs: std.ArrayList(GitInsteadOfPair) = .empty;
+    for (urls) |u| try pairs.append(alloc, .{ .url = u, .bare = try std.fs.path.join(alloc, &.{ dir, "absent.git" }) });
+    return gitInsteadOf(alloc, try std.fs.path.join(alloc, &.{ dir, "unreachable.gitconfig" }), pairs.items);
+}
+
+/// Points this process's stderr at a new file at `path` until `end`, so a
+/// test can read what was written there. POSIX only.
+pub const StderrCapture = struct {
+    saved: std.posix.fd_t,
+
+    pub fn begin(path: []const u8) !StderrCapture {
+        const f = try std.Io.Dir.cwd().createFile(fsutil.io(), path, .{});
+        defer f.close(fsutil.io());
+        const saved = try sysFd(std.posix.system.dup(std.posix.STDERR_FILENO));
+        _ = try sysFd(std.posix.system.dup2(f.handle, std.posix.STDERR_FILENO));
+        return .{ .saved = saved };
+    }
+
+    fn sysFd(rc: anytype) !std.posix.fd_t {
+        if (std.posix.errno(rc) != .SUCCESS) return error.DupFailed;
+        return @intCast(rc);
+    }
+
+    pub fn end(self: StderrCapture) void {
+        _ = std.posix.system.dup2(self.saved, std.posix.STDERR_FILENO);
+        _ = std.posix.system.close(self.saved);
+    }
+};
+
 pub const FakeEditorOpts = struct {
     /// Positional args ($1, $2, ...) to record, one per line.
     args: u8 = 1,
@@ -485,6 +562,16 @@ pub fn writeFakeEditor(alloc: std.mem.Allocator, dir: []const u8, marker_path: [
     return script_path;
 }
 
+/// Writes `data` to `path` as a file its owner can execute; on Windows,
+/// where no file has an executable bit, as a plain file.
+pub fn writeExecutable(path: []const u8, data: []const u8) !void {
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
+        .sub_path = path,
+        .data = data,
+        .flags = .{ .permissions = .executable_file },
+    });
+}
+
 pub const RunResult = struct { code: u8, out: []const u8, err: []const u8 };
 
 /// Builds a cli-zig `Ctx` around `argv` and `ws` (null for a command that
@@ -494,10 +581,12 @@ pub const RunResult = struct { code: u8, out: []const u8, err: []const u8 };
 pub fn runCmd(alloc: std.mem.Allocator, run_fn: *const fn (ctx: *app.Ctx) anyerror!u8, ws: ?workspace.Workspace, argv: []const []const u8) !RunResult {
     var out: std.Io.Writer.Allocating = .init(alloc);
     var err_w: std.Io.Writer.Allocating = .init(alloc);
+    var notice: kept.RetiredNotice = .{};
+    var ask_run: @import("commands/deleter.zig").AskRun = .{};
     var ctx: app.Ctx = .{
         .alloc = alloc,
         .io = testing.io,
-        .context = if (ws) |w| .{ .ws = w, .color = false, .env = app.envOf_current() } else null,
+        .context = if (ws) |w| .{ .ws = w, .color = false, .env = app.envOf_current(), .retired_notice = &notice, .ask_run = &ask_run } else null,
         .out = &out.writer,
         .err = &err_w.writer,
         .argv = argv,
@@ -505,3 +594,67 @@ pub fn runCmd(alloc: std.mem.Allocator, run_fn: *const fn (ctx: *app.Ctx) anyerr
     const code = try run_fn(&ctx);
     return .{ .code = code, .out = out.written(), .err = err_w.written() };
 }
+
+/// A listener on 127.0.0.1 that answers every connection with `response`
+/// once the client has sent a blank line and `delay_ms` more have passed,
+/// then closes it, and counts the connections it accepted, until `stop`.
+/// Keep it at a stable address while it runs.
+pub const LoopbackStub = struct {
+    server: std.Io.net.Server,
+    response: []const u8,
+    delay_ms: i64 = 0,
+    accepted: std.atomic.Value(u32) = .init(0),
+    stopping: std.atomic.Value(bool) = .init(false),
+    thread: ?std.Thread = null,
+
+    pub fn start(self: *LoopbackStub, response: []const u8) !void {
+        return self.startDelayed(response, 0);
+    }
+
+    pub fn startDelayed(self: *LoopbackStub, response: []const u8, delay_ms: i64) !void {
+        const addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+        self.* = .{ .server = try addr.listen(fsutil.io(), .{ .reuse_address = true }), .response = response, .delay_ms = delay_ms };
+        self.thread = try std.Thread.spawn(.{}, serve, .{self});
+    }
+
+    pub fn port(self: *const LoopbackStub) u16 {
+        return self.server.socket.address.getPort();
+    }
+
+    /// The connections accepted so far.
+    pub fn count(self: *const LoopbackStub) u32 {
+        return self.accepted.load(.acquire);
+    }
+
+    /// Ends the listener: one last connection wakes its accept.
+    pub fn stop(self: *LoopbackStub) void {
+        const io = fsutil.io();
+        self.stopping.store(true, .release);
+        if (self.thread) |t| {
+            const addr = std.Io.net.IpAddress.parse("127.0.0.1", self.port()) catch unreachable;
+            if (addr.connect(io, .{ .mode = .stream })) |s| s.close(io) else |_| {}
+            t.join();
+        }
+        self.server.deinit(io);
+    }
+
+    fn serve(self: *LoopbackStub) void {
+        const io = fsutil.io();
+        while (true) {
+            const stream = self.server.accept(io) catch return;
+            defer stream.close(io);
+            if (self.stopping.load(.acquire)) return;
+            _ = self.accepted.fetchAdd(1, .acq_rel);
+            var in_buf: [4096]u8 = undefined;
+            var reader = stream.reader(io, &in_buf);
+            while (reader.interface.takeDelimiterInclusive('\n')) |line| {
+                if (std.mem.eql(u8, std.mem.trimEnd(u8, line, "\r\n"), "")) break;
+            } else |_| continue;
+            if (self.delay_ms > 0) std.Io.sleep(io, .fromMilliseconds(self.delay_ms), .awake) catch {};
+            var out_buf: [512]u8 = undefined;
+            var writer = stream.writer(io, &out_buf);
+            writer.interface.writeAll(self.response) catch continue;
+            writer.interface.flush() catch continue;
+        }
+    }
+};

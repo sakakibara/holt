@@ -4,6 +4,7 @@
 //! git configuration and credentials.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const fsutil = @import("fsutil.zig");
 const diagnostic = @import("diag.zig");
 const proc = @import("proc.zig");
@@ -11,17 +12,36 @@ const testing = std.testing;
 
 pub const RunResult = proc.RunResult;
 
-/// Spawn `git` as an ordinary subprocess. A `FileNotFound` from the spawn
-/// itself means the `git` binary is not on PATH; it is mapped to the distinct
-/// `GitNotFound` so callers (and dispatch's catch-all) can report "git is not
-/// installed" instead of a bare `internal error: FileNotFound`. Every git
-/// invocation in this file - and every direct `git.run` caller elsewhere -
-/// goes through these two, so the mapping lives in one place.
+/// Spawn `git` as an ordinary subprocess, in the process's environment with
+/// GIT_OPTIONAL_LOCKS=0, so a command that only reads (`status`, say) never
+/// writes the repository's index to refresh it. A `FileNotFound` from the
+/// spawn itself means the `git` binary is not on PATH; it is mapped to the
+/// distinct `GitNotFound` so callers (and dispatch's catch-all) can report
+/// "git is not installed" instead of a bare `internal error: FileNotFound`.
+/// Every git invocation in this file - and every direct `git.run` caller
+/// elsewhere - goes through these two, so the mapping lives in one place.
 pub fn run(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8) !proc.RunResult {
-    return proc.run(alloc, argv, cwd) catch |err| switch (err) {
-        error.FileNotFound => error.GitNotFound,
-        else => err,
-    };
+    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
+    var map = try std.process.Environ.createMap(real_env, alloc);
+    defer map.deinit();
+    try map.put("GIT_OPTIONAL_LOCKS", "0");
+    return runEnv(alloc, argv, cwd, &map);
+}
+
+/// `run` for a command that only reads: GIT_NO_LAZY_FETCH=1 too, so a
+/// missing object is never fetched from a promisor remote (git 2.44 and
+/// newer honor it; older ones ignore it), GIT_NO_REPLACE_OBJECTS=1, so
+/// each object is read as stored, and GIT_TERMINAL_PROMPT=0, so a fetch an
+/// older git makes for a missing object never waits on a prompt.
+fn runRead(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8) !proc.RunResult {
+    const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
+    var map = try std.process.Environ.createMap(real_env, alloc);
+    defer map.deinit();
+    try map.put("GIT_OPTIONAL_LOCKS", "0");
+    try map.put("GIT_NO_LAZY_FETCH", "1");
+    try map.put("GIT_NO_REPLACE_OBJECTS", "1");
+    try map.put("GIT_TERMINAL_PROMPT", "0");
+    return runEnv(alloc, argv, cwd, &map);
 }
 
 pub fn runEnv(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8, environ_map: ?*const std.process.Environ.Map) !proc.RunResult {
@@ -100,14 +120,15 @@ pub fn worktreeAdd(alloc: std.mem.Allocator, repo: []const u8, path: []const u8,
     if (std.fs.path.dirname(path)) |parent| try fsutil.ensureDir(parent);
     // git's worktree admin links are recorded and matched on '/' even on
     // Windows; a native `\`-path here can fail to match on a later
-    // `worktree remove`/`repair`, so forward-slash it before handing it off.
+    // `worktree remove`, so forward-slash it before handing it off.
     const git_path = try fsutil.forwardSlashed(alloc, path);
     defer alloc.free(git_path);
     // `worktree.useRelativePaths` (git 2.48+) records the worktree's admin
     // links relative to the clone, so moving the clone and its sibling
     // `@worktrees` dir together (see common.moveClone) keeps them working with
-    // no repair. Older git silently ignores the unknown config and records
-    // absolute paths, which moveClone then repairs - so this degrades cleanly.
+    // nothing rewritten. Older git silently ignores the unknown config and
+    // records absolute paths, which moveClone then relinks one worktree at a
+    // time - so this degrades cleanly.
     const res = try run(alloc, &.{ "git", "-C", repo, "-c", "worktree.useRelativePaths=true", "worktree", "add", "--", git_path, branch }, null);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
@@ -122,7 +143,7 @@ pub fn worktreeAdd(alloc: std.mem.Allocator, repo: []const u8, path: []const u8,
 
 /// `git -C repo worktree list` output (caller owns the returned bytes).
 pub fn worktreeList(alloc: std.mem.Allocator, repo: []const u8) ![]u8 {
-    const res = try run(alloc, &.{ "git", "-C", repo, "worktree", "list" }, null);
+    const res = try runRead(alloc, &.{ "git", "-C", repo, "worktree", "list" }, null);
     defer alloc.free(res.stderr);
     if (res.status != 0) {
         alloc.free(res.stdout);
@@ -131,12 +152,15 @@ pub fn worktreeList(alloc: std.mem.Allocator, repo: []const u8) ![]u8 {
     return res.stdout;
 }
 
-/// `git -C repo worktree remove <path>`. git refuses a dirty worktree without
-/// --force, which is deliberately not passed: `diag` carries that refusal.
-pub fn worktreeRemove(alloc: std.mem.Allocator, repo: []const u8, path: []const u8, diag: ?*diagnostic.Diagnostic) !void {
+/// `git -C repo worktree remove [--force] <path>`. Without `force` git
+/// refuses a dirty worktree, and `diag` carries that refusal.
+pub fn worktreeRemove(alloc: std.mem.Allocator, repo: []const u8, path: []const u8, force: bool, diag: ?*diagnostic.Diagnostic) !void {
     const git_path = try fsutil.forwardSlashed(alloc, path);
     defer alloc.free(git_path);
-    const res = try run(alloc, &.{ "git", "-C", repo, "worktree", "remove", git_path }, null);
+    const res = if (force)
+        try run(alloc, &.{ "git", "-C", repo, "worktree", "remove", "--force", git_path }, null)
+    else
+        try run(alloc, &.{ "git", "-C", repo, "worktree", "remove", git_path }, null);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) {
@@ -148,34 +172,11 @@ pub fn worktreeRemove(alloc: std.mem.Allocator, repo: []const u8, path: []const 
     }
 }
 
-/// `git -C repo worktree repair <path>...`: reestablish the admin links after
-/// a clone and its worktrees were moved on disk (each `path` is a worktree's
-/// new location). Best-effort - repair fixes what it can and a partial failure
-/// still leaves the repo usable, so a nonzero exit is not propagated.
-pub fn worktreeRepair(alloc: std.mem.Allocator, repo: []const u8, paths: []const []const u8) !void {
-    if (paths.len == 0) return;
-    var argv: std.ArrayList([]const u8) = .empty;
-    defer argv.deinit(alloc);
-    try argv.appendSlice(alloc, &.{ "git", "-C", repo, "worktree", "repair" });
-    const fixed_len = argv.items.len;
-    defer for (argv.items[fixed_len..]) |p| alloc.free(p);
-    for (paths) |p| {
-        const slashed = try fsutil.forwardSlashed(alloc, p);
-        argv.append(alloc, slashed) catch |err| {
-            alloc.free(slashed);
-            return err;
-        };
-    }
-    const res = run(alloc, argv.items, null) catch return;
-    alloc.free(res.stdout);
-    alloc.free(res.stderr);
-}
-
 /// Count of worktrees attached to `repo`, main working tree included, so a
 /// result > 1 means extra linked worktrees exist (each may hold uncommitted
 /// work). Uses the stable `--porcelain` format, one `worktree ` line each.
 pub fn worktreeCount(alloc: std.mem.Allocator, repo: []const u8) !usize {
-    const res = try run(alloc, &.{ "git", "-C", repo, "worktree", "list", "--porcelain" }, null);
+    const res = try runRead(alloc, &.{ "git", "-C", repo, "worktree", "list", "--porcelain" }, null);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) return error.WorktreeListFailed;
@@ -187,15 +188,51 @@ pub fn worktreeCount(alloc: std.mem.Allocator, repo: []const u8) !usize {
     return n;
 }
 
+/// Whether `git -C repo worktree list --porcelain` records the working tree
+/// at `path` as locked, both paths compared as real paths.
+/// `WorktreeListFailed` when git cannot list them.
+pub fn worktreeLocked(alloc: std.mem.Allocator, repo: []const u8, path: []const u8) !bool {
+    const res = try runRead(alloc, &.{ "git", "-C", repo, "worktree", "list", "--porcelain" }, null);
+    defer alloc.free(res.stdout);
+    defer alloc.free(res.stderr);
+    if (res.status != 0) return error.WorktreeListFailed;
+    const want = try fsutil.realPathOrSelf(alloc, path);
+    defer alloc.free(want);
+    var here = false;
+    var it = std.mem.splitScalar(u8, res.stdout, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (std.mem.startsWith(u8, line, "worktree ")) {
+            const got = try fsutil.realPathOrSelf(alloc, line["worktree ".len..]);
+            defer alloc.free(got);
+            here = std.mem.eql(u8, got, want);
+        } else if (here and (std.mem.eql(u8, line, "locked") or std.mem.startsWith(u8, line, "locked "))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// A process-environment map with GIT_CEILING_DIRECTORIES pinned to `repo`'s
 /// parent, so a git command run in `repo` is judged on its own merits and
-/// never walks up to resolve an ancestor repository above it. Caller owns the
+/// never walks up to resolve an ancestor repository above it, and
+/// GIT_OPTIONAL_LOCKS=0, so a command that only reads (`status`, say) never
+/// writes the repository's index to refresh it, GIT_NO_LAZY_FETCH=1, so it
+/// never fetches a missing object from a promisor remote (git 2.44 and
+/// newer honor it; older ones ignore it), GIT_NO_REPLACE_OBJECTS=1, so
+/// it reads each object as stored, never one a replace ref stands in for
+/// it, and GIT_TERMINAL_PROMPT=0, so it never waits on a prompt, a fetch
+/// an older git makes for a missing object included. Caller owns the
 /// returned map and must deinit it.
 fn ceilingEnviron(alloc: std.mem.Allocator, repo: []const u8) !std.process.Environ.Map {
     const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
     var map = try std.process.Environ.createMap(real_env, alloc);
     errdefer map.deinit();
     try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
+    try map.put("GIT_OPTIONAL_LOCKS", "0");
+    try map.put("GIT_NO_LAZY_FETCH", "1");
+    try map.put("GIT_NO_REPLACE_OBJECTS", "1");
+    try map.put("GIT_TERMINAL_PROMPT", "0");
     return map;
 }
 
@@ -218,6 +255,35 @@ pub fn inspectable(alloc: std.mem.Allocator, repo: []const u8) !bool {
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     return res.status == 0;
+}
+
+/// When `repo` is a linked working tree of another repository (its git
+/// directory, `git rev-parse --git-dir`, is not its common directory,
+/// `--git-common-dir`), that repository's main working tree as `git
+/// worktree list` names it first (the repository itself for a bare one),
+/// or its common directory when git lists none; null for any other
+/// `repo`, and when git cannot read it.
+pub fn linkedMain(alloc: std.mem.Allocator, repo: []const u8) !?[]const u8 {
+    const dirs = try runInRepo(alloc, &.{ "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir" }, repo);
+    defer alloc.free(dirs.stdout);
+    defer alloc.free(dirs.stderr);
+    if (dirs.status != 0) return null;
+    var it = std.mem.splitScalar(u8, std.mem.trim(u8, dirs.stdout, " \t\r\n"), '\n');
+    const git_dir = std.mem.trimEnd(u8, it.next() orelse return null, "\r");
+    const common_dir = std.mem.trimEnd(u8, it.next() orelse return null, "\r");
+    const g = try fsutil.realPathOrSelf(alloc, git_dir);
+    defer alloc.free(g);
+    const c = try fsutil.realPathOrSelf(alloc, common_dir);
+    defer alloc.free(c);
+    if (std.mem.eql(u8, g, c)) return null;
+    const listed = try runInRepo(alloc, &.{ "worktree", "list", "--porcelain" }, repo);
+    defer alloc.free(listed.stdout);
+    defer alloc.free(listed.stderr);
+    if (listed.status == 0) {
+        const first = std.mem.trimEnd(u8, std.mem.sliceTo(listed.stdout, '\n'), "\r");
+        if (std.mem.startsWith(u8, first, "worktree ")) return try alloc.dupe(u8, first["worktree ".len..]);
+    }
+    return try alloc.dupe(u8, common_dir);
 }
 
 /// True iff `repo` is a fully-populated clone: it has a commit reachable from
@@ -256,10 +322,141 @@ pub fn runInRepo(alloc: std.mem.Allocator, args: []const []const u8, repo: []con
     return runEnv(alloc, argv.items, null, &map);
 }
 
+/// The variables that point git at a repository, working tree, index,
+/// object store, or ref namespace other than the one it finds from its
+/// working directory, that add configuration a parent git passed down
+/// (`git -c`, `--config-env`), or that change how every pathspec matches.
+/// A git hook runs with some of them set.
+const scoped_out = [_][]const u8{
+    "GIT_DIR",              "GIT_WORK_TREE",        "GIT_INDEX_FILE",        "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE",        "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_GLOB_PATHSPECS",   "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",   "GIT_LITERAL_PATHSPECS",
+};
+
+/// The prefixes of the numbered `GIT_CONFIG_COUNT` entries.
+const scoped_out_prefixes = [_][]const u8{ "GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_" };
+
+/// `runInRepo` with `scoped_out` and every `scoped_out_prefixes` variable
+/// removed from git's environment, so the command reads `repo`'s own
+/// repository and index, and matches as the user's own git does, even when
+/// holt runs from inside a git hook. The user's configuration files apply
+/// as usual.
+pub fn runInRepoScoped(alloc: std.mem.Allocator, args: []const []const u8, repo: []const u8) !proc.RunResult {
+    return runInRepoScopedWith(alloc, args, repo, .{});
+}
+
+pub const ScopedOptions = struct {
+    /// Variables set in git's environment on top of the scoped one.
+    set: []const [2][]const u8 = &.{},
+    /// A file git reads as its standard input; the null device when null.
+    stdin_path: ?[]const u8 = null,
+    /// What git reads as its standard input, through a pipe; not with
+    /// `stdin_path`.
+    stdin_data: ?[]const u8 = null,
+    /// How long git may run before it is killed (`proc.runEnvLimited`);
+    /// unlimited when null. Not with `stdin_path` or `stdin_data`.
+    limit: ?std.Io.Duration = null,
+    /// With `limit`, the line written once git has run that long.
+    notice: ?proc.Notice = null,
+};
+
+/// `runInRepoScoped` with `opts.set` added to git's environment, when
+/// `opts.stdin_path` or `opts.stdin_data` is set, that file or data as
+/// git's standard input, and, when
+/// `opts.limit` is set, git killed once it has passed.
+pub fn runInRepoScopedWith(alloc: std.mem.Allocator, args: []const []const u8, repo: []const u8, opts: ScopedOptions) !proc.RunResult {
+    var map = try scopedEnviron(alloc, repo);
+    defer map.deinit();
+    return runInMap(alloc, args, repo, &map, opts);
+}
+
+/// What a command the delete gate runs does (`runGateWith`).
+pub const Gate = enum {
+    /// Reads the repository: no transport may run, whatever the user's
+    /// configuration allows (`GIT_ALLOW_PROTOCOL` names none), so no read
+    /// of a missing object reaches a promisor remote.
+    read,
+    /// Asks a remote what it holds, under the user's own protocol
+    /// configuration: an inherited `GIT_ALLOW_PROTOCOL` is removed.
+    query,
+};
+
+/// `runInRepoScopedWith` in the environment of a command the delete gate
+/// runs: no prompt git or ssh could raise for a password or a host key
+/// (`GIT_ASKPASS` empty, `SSH_ASKPASS` unset, `SSH_ASKPASS_REQUIRE=never`),
+/// no tracing (`GIT_TRACE*` unset), git's messages in English
+/// (`LC_ALL=C`), so they can be matched, and the transport policy of
+/// `gate`. Other callers of `runInRepoScopedWith` keep the user's settings
+/// of these.
+pub fn runGateWith(alloc: std.mem.Allocator, args: []const []const u8, repo: []const u8, gate: Gate, opts: ScopedOptions) !proc.RunResult {
+    var map = try scopedEnviron(alloc, repo);
+    defer map.deinit();
+    var i: usize = 0;
+    while (i < map.count()) {
+        const name = map.keys()[i];
+        if (if (builtin.os.tag == .windows) std.ascii.startsWithIgnoreCase(name, "GIT_TRACE") else std.mem.startsWith(u8, name, "GIT_TRACE")) {
+            _ = map.orderedRemove(name);
+        } else i += 1;
+    }
+    try map.put("GIT_ASKPASS", "");
+    _ = map.orderedRemove("SSH_ASKPASS");
+    try map.put("SSH_ASKPASS_REQUIRE", "never");
+    try map.put("LC_ALL", "C");
+    switch (gate) {
+        .read => try map.put("GIT_ALLOW_PROTOCOL", "holt_none"),
+        .query => _ = map.orderedRemove("GIT_ALLOW_PROTOCOL"),
+    }
+    return runInMap(alloc, args, repo, &map, opts);
+}
+
+/// `ceilingEnviron` without `scoped_out` and every `scoped_out_prefixes`
+/// variable.
+fn scopedEnviron(alloc: std.mem.Allocator, repo: []const u8) !std.process.Environ.Map {
+    var map = try ceilingEnviron(alloc, repo);
+    errdefer map.deinit();
+    for (scoped_out) |name| _ = map.swapRemove(name);
+    var i: usize = 0;
+    while (i < map.count()) {
+        const name = map.keys()[i];
+        const numbered = for (scoped_out_prefixes) |prefix| {
+            if (if (builtin.os.tag == .windows) std.ascii.startsWithIgnoreCase(name, prefix) else std.mem.startsWith(u8, name, prefix)) break true;
+        } else false;
+        if (numbered) {
+            _ = map.orderedRemove(name);
+        } else i += 1;
+    }
+    return map;
+}
+
+/// Runs `git -C <repo> <args>` in `map` with `opts.set` added, as
+/// `runInRepoScopedWith` describes.
+fn runInMap(alloc: std.mem.Allocator, args: []const []const u8, repo: []const u8, map: *std.process.Environ.Map, opts: ScopedOptions) !proc.RunResult {
+    for (opts.set) |kv| try map.put(kv[0], kv[1]);
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(alloc);
+    try argv.appendSlice(alloc, &.{ "git", "-C", repo });
+    try argv.appendSlice(alloc, args);
+
+    if (opts.stdin_path) |p| return proc.runEnvInput(alloc, argv.items, null, map, p) catch |err| switch (err) {
+        error.FileNotFound => error.GitNotFound,
+        else => err,
+    };
+    if (opts.stdin_data) |d| return proc.runEnvData(alloc, argv.items, null, map, d) catch |err| switch (err) {
+        error.FileNotFound => error.GitNotFound,
+        else => err,
+    };
+    if (opts.limit) |limit| return proc.runEnvLimited(alloc, argv.items, null, map, limit, opts.notice) catch |err| switch (err) {
+        error.FileNotFound => error.GitNotFound,
+        else => err,
+    };
+    return runEnv(alloc, argv.items, null, map);
+}
+
 /// The `origin` remote URL, or null if it is unset. Caller owns the returned
 /// memory.
 pub fn remoteUrl(alloc: std.mem.Allocator, repo: []const u8) !?[]u8 {
-    const res = try run(alloc, &.{ "git", "config", "--get", "remote.origin.url" }, repo);
+    const res = try runRead(alloc, &.{ "git", "config", "--get", "remote.origin.url" }, repo);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) return null;
@@ -269,17 +466,19 @@ pub fn remoteUrl(alloc: std.mem.Allocator, repo: []const u8) !?[]u8 {
     return try alloc.dupe(u8, trimmed);
 }
 
-/// True if `git status --porcelain` reports anything, tracked or not.
+/// True if `git status --porcelain` reports anything, tracked or not,
+/// whatever `status.showUntrackedFiles` and each submodule's `ignore` say,
+/// or if git cannot tell.
 pub fn isDirty(alloc: std.mem.Allocator, repo: []const u8) !bool {
-    const res = try run(alloc, &.{ "git", "status", "--porcelain" }, repo);
+    const res = try runRead(alloc, &.{ "git", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none" }, repo);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
-    return res.stdout.len != 0;
+    return res.status != 0 or res.stdout.len != 0;
 }
 
 /// True if the repo has any stash entries.
 pub fn hasStashes(alloc: std.mem.Allocator, repo: []const u8) !bool {
-    const res = try run(alloc, &.{ "git", "stash", "list" }, repo);
+    const res = try runRead(alloc, &.{ "git", "stash", "list" }, repo);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     return res.stdout.len != 0;
@@ -289,7 +488,7 @@ pub fn hasStashes(alloc: std.mem.Allocator, repo: []const u8) !bool {
 /// HEAD and a branch with no tracking configured, since `@{upstream}` fails
 /// to resolve in either case.
 pub fn unpushed(alloc: std.mem.Allocator, repo: []const u8) !Unpushed {
-    const res = try run(alloc, &.{ "git", "rev-list", "@{upstream}..HEAD" }, repo);
+    const res = try runRead(alloc, &.{ "git", "rev-list", "@{upstream}..HEAD" }, repo);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) return .no_upstream;
@@ -299,7 +498,7 @@ pub fn unpushed(alloc: std.mem.Allocator, repo: []const u8) !Unpushed {
 /// The current branch name, or null on a detached HEAD. Caller owns the
 /// returned memory.
 pub fn currentBranch(alloc: std.mem.Allocator, repo: []const u8) !?[]u8 {
-    const res = try run(alloc, &.{ "git", "rev-parse", "--abbrev-ref", "HEAD" }, repo);
+    const res = try runRead(alloc, &.{ "git", "rev-parse", "--abbrev-ref", "HEAD" }, repo);
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) return null;
@@ -325,14 +524,20 @@ pub fn repoStatus(alloc: std.mem.Allocator, repo: []const u8) !RepoStatus {
     defer alloc.free(res.stdout);
     defer alloc.free(res.stderr);
     if (res.status != 0) return error.NotInspectable;
+    return parseStatusV2(alloc, res.stdout);
+}
 
+/// `repoStatus`'s reading of `git status --porcelain=v2 --branch` output.
+/// Header lines and ignored entries (`!`, which only `--ignored` lists)
+/// never make the tree dirty; every other entry does.
+fn parseStatusV2(alloc: std.mem.Allocator, out: []const u8) !RepoStatus {
     var branch: ?[]u8 = null;
     var dirty = false;
     var unpushed_state: Unpushed = .no_upstream;
 
     var unborn = false;
 
-    var it = std.mem.splitScalar(u8, res.stdout, '\n');
+    var it = std.mem.splitScalar(u8, out, '\n');
     while (it.next()) |line| {
         if (std.mem.startsWith(u8, line, "# branch.oid ")) {
             const oid = line["# branch.oid ".len..];
@@ -345,7 +550,7 @@ pub fn repoStatus(alloc: std.mem.Allocator, repo: []const u8) !RepoStatus {
             const ahead_str = rest[1 .. std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len];
             const ahead = std.fmt.parseInt(u64, ahead_str, 10) catch 0;
             unpushed_state = if (ahead > 0) .ahead else .clean;
-        } else if (!std.mem.startsWith(u8, line, "# ") and line.len > 0) {
+        } else if (!std.mem.startsWith(u8, line, "# ") and line.len > 0 and line[0] != '!') {
             dirty = true;
         }
     }
@@ -363,6 +568,15 @@ pub fn repoStatus(alloc: std.mem.Allocator, repo: []const u8) !RepoStatus {
 }
 
 const testutil = @import("testutil.zig");
+
+test "parseStatusV2: an ignored entry is not dirty; an untracked one is" {
+    const clean = try parseStatusV2(testing.allocator, "# branch.oid abc\n# branch.head main\n! .env\n! node_modules/\n");
+    defer if (clean.branch) |b| testing.allocator.free(b);
+    try testing.expect(!clean.dirty);
+    const dirty = try parseStatusV2(testing.allocator, "# branch.head main\n! .env\n? notes.txt\n");
+    defer if (dirty.branch) |b| testing.allocator.free(b);
+    try testing.expect(dirty.dirty);
+}
 
 test "clone: populates dest from a makeBareRepo bare, checked out on main" {
     var sb = try testutil.Sandbox.init(testing.allocator);
@@ -390,7 +604,11 @@ test "clone: on failure, sets the diagnostic to a message containing the url" {
     defer testing.allocator.free(dest);
 
     var cd: diagnostic.Diagnostic = .{};
-    const url = "git://127.0.0.1:1/acme/widget";
+    const url = "https://holt-test.invalid/acme/widget";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const override = try testutil.gitUnreachable(arena_state.allocator(), sb.root, &.{url});
+    defer override.restore();
     try testing.expectError(error.GitCloneFailed, clone(testing.allocator, url, dest, &cd));
     defer testing.allocator.free(cd.message);
     try testing.expect(std.mem.indexOf(u8, cd.message, url) != null);
@@ -602,6 +820,44 @@ test "isDirty: false on a fresh clone, true once an untracked file appears" {
     try testing.expect(try isDirty(testing.allocator, work));
 }
 
+test "isDirty: an untracked file counts even when status.showUntrackedFiles is no" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    try testutil.runGit(&sb, work, &.{ "config", "status.showUntrackedFiles", "no" });
+    var work_dir = try std.Io.Dir.cwd().openDir(fsutil.io(), work, .{});
+    defer work_dir.close(fsutil.io());
+    try work_dir.writeFile(fsutil.io(), .{ .sub_path = "untracked.txt", .data = "hi\n" });
+
+    try testing.expect(try isDirty(testing.allocator, work));
+}
+
+test "worktreeLocked: true only for the working tree git records as locked" {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const wt = try std.fs.path.join(arena, &.{ sb.root, "wt" });
+    const git_wt = try fsutil.forwardSlashed(arena, wt);
+    try testutil.runGit(&sb, work, &.{ "worktree", "add", "-q", "-b", "feature", git_wt });
+
+    try testing.expect(!(try worktreeLocked(testing.allocator, work, wt)));
+    try testutil.runGit(&sb, work, &.{ "worktree", "lock", "--reason", "on a removable disk", git_wt });
+    try testing.expect(try worktreeLocked(testing.allocator, work, wt));
+    try testing.expect(!(try worktreeLocked(testing.allocator, work, work)));
+}
+
 test "unpushed: clean on a fresh clone, ahead after a local commit, no_upstream on an untracked branch" {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
@@ -792,4 +1048,78 @@ test "repoStatus: errors on a corrupted .git, so the caller can map it to unread
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
 
     try testing.expectError(error.NotInspectable, repoStatus(testing.allocator, work));
+}
+
+test "runInRepoScoped: git sees no variable that points it at another repository, adds configuration, or changes how pathspecs match" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+    try testutil.runGit(&sb, work, &.{ "config", "alias.holt-env", "!env" });
+
+    const set = [_][2][]const u8{
+        .{ "GIT_DIR", "/elsewhere/.git" },
+        .{ "GIT_CONFIG_PARAMETERS", "'core.worktree'='/elsewhere'" },
+        .{ "GIT_CONFIG_COUNT", "2" },
+        .{ "GIT_CONFIG_KEY_0", "core.worktree" },
+        .{ "GIT_CONFIG_VALUE_0", "/elsewhere" },
+        .{ "GIT_CONFIG_KEY_1", "core.ignorecase" },
+        .{ "GIT_CONFIG_VALUE_1", "true" },
+        .{ "GIT_GLOB_PATHSPECS", "1" },
+        .{ "GIT_NOGLOB_PATHSPECS", "1" },
+        .{ "GIT_ICASE_PATHSPECS", "1" },
+        .{ "GIT_LITERAL_PATHSPECS", "1" },
+    };
+    var overrides: [set.len]testutil.EnvOverride = undefined;
+    for (set, &overrides) |p, *o| o.* = try testutil.EnvOverride.install(a, p[0], p[1]);
+    defer {
+        var i = overrides.len;
+        while (i > 0) {
+            i -= 1;
+            overrides[i].restore();
+        }
+    }
+
+    const res = try runInRepoScoped(a, &.{ "-c", "alias.holt-env=!env", "holt-env" }, work);
+    try testing.expectEqual(@as(u8, 0), res.status);
+    var it = std.mem.splitScalar(u8, res.stdout, '\n');
+    while (it.next()) |line| {
+        for (set) |p| {
+            if (std.mem.eql(u8, p[0], "GIT_CONFIG_PARAMETERS")) {
+                if (std.mem.startsWith(u8, line, "GIT_CONFIG_PARAMETERS=")) try testing.expect(std.mem.indexOf(u8, line, "elsewhere") == null);
+                continue;
+            }
+            try testing.expect(!(std.mem.startsWith(u8, line, p[0]) and line.len > p[0].len and line[p[0].len] == '='));
+        }
+    }
+}
+
+test "the git commands holt runs only to read never fetch a missing object, read each object as stored, and never prompt: GIT_NO_LAZY_FETCH, GIT_NO_REPLACE_OBJECTS, and GIT_TERMINAL_PROMPT=0 are set" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const work = try testutil.makeWorkClone(&sb, bare);
+    defer testing.allocator.free(work);
+
+    const env_alias: []const []const u8 = &.{ "-c", "alias.holt-env=!env", "holt-env" };
+    const runs = [_]proc.RunResult{
+        try runInRepoScoped(a, env_alias, work),
+        try runInRepo(a, env_alias, work),
+        try runRead(a, try std.mem.concat(a, []const u8, &.{ &.{ "git", "-C", work }, env_alias }), null),
+    };
+    for (runs) |res| {
+        try testing.expectEqual(@as(u8, 0), res.status);
+        for ([_][]const u8{ "GIT_NO_LAZY_FETCH=1\n", "GIT_NO_REPLACE_OBJECTS=1\n", "GIT_TERMINAL_PROMPT=0\n" }) |line| {
+            try testing.expect(std.mem.indexOf(u8, res.stdout, try std.mem.concat(a, u8, &.{ "\n", line })) != null or std.mem.startsWith(u8, res.stdout, line));
+        }
+    }
 }

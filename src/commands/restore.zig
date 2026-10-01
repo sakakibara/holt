@@ -1,6 +1,7 @@
 //! `holt restore [<project>]`: clones every member repo missing from
-//! `code_root` and rebuilds hubs. With no argument, every project is
-//! restored; with one, only that project.
+//! `code_root`, rebuilds hubs, and links kept files. With no argument, every
+//! project is restored and every clone in the code tree has its kept files
+//! linked; with one, only that project and its member clones.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -13,6 +14,7 @@ const identity = @import("../identity.zig");
 const fsutil = @import("../fsutil.zig");
 const parallel = @import("../parallel.zig");
 const diagnostic = @import("../diag.zig");
+const kept_hooks = @import("kept_hooks.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
@@ -28,8 +30,10 @@ pub const command = app.command(Spec, .{
     .group = .maintain,
     .needs_context = true,
     .details =
-    \\Clones every member repo missing from the code tree and rebuilds hubs.
-    \\With no argument, every project; with one, just that project.
+    \\Clones every member repo missing from the code tree, rebuilds hubs, and
+    \\links kept files. With no argument, every project, and the kept files of
+    \\every clone in the code tree; with one, just that project and its member
+    \\clones. Exits 1 when a clone fails or a kept file is not linked.
     \\
     \\Example:
     \\  holt restore
@@ -50,7 +54,51 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         break :blk try ctx.alloc.dupe(project_mod.Project, &.{p});
     } else try ws.list(ctx.alloc);
 
-    return runProjects(ctx, targets, a.jobs);
+    const cloned = try runProjects(ctx, targets, a.jobs);
+    const kept_bad = try restoreKept(ctx, if (a.project == null) null else targets, a.jobs);
+    return if (cloned != 0 or kept_bad) 1 else 0;
+}
+
+/// Links the kept files of every clone in the code tree (`only` null), or
+/// of the member clones of `only`, and prints `linked N kept files in M
+/// repos`, with 0 when `kept/` is not ready, but for a `kept/` that may
+/// still be downloading (`kept_hooks.absentLine`). With every clone, auto
+/// patterns are kept, the candidates line printed, and each key with kept
+/// files, no clone here, and no marker naming it gets its settling
+/// commands. True when an unsettled state remains, `kept/` cannot be
+/// read, or it is under the synced root holt's links point into instead
+/// of this one.
+fn restoreKept(ctx: *app.Ctx, only: ?[]const project_mod.Project, jobs: ?usize) !bool {
+    const ws = ctx.context.?.ws;
+    const alloc = ctx.alloc;
+    var clones: std.ArrayList([]const u8) = .empty;
+    if (only) |projects| {
+        for (projects) |p| for (p.marker.entries) |*e| {
+            const src = e.source orelse continue;
+            const path = try src.id().clonePath(alloc, ws.cfg.code_root);
+            if (!fsutil.exists(path)) continue;
+            for (clones.items) |c| {
+                if (std.mem.eql(u8, c, path)) break;
+            } else try clones.append(alloc, path);
+        };
+    } else try clones.appendSlice(alloc, try ws.listClones(alloc));
+
+    const st = try kept_hooks.storeState(ctx, clones.items);
+    if (st != .ready) {
+        try kept_hooks.printStore(ctx, ctx.out, st, clones.items);
+        if (st != .elsewhere and !(st == .absent and kept_hooks.holdsProjects(ctx))) try ctx.out.writeAll("linked 0 kept files in 0 repos\n");
+        return st == .unreadable or st == .elsewhere;
+    }
+    const targets = try alloc.alloc(kept_hooks.Target, clones.items.len);
+    for (clones.items, targets) |c, *t| t.* = .{ .path = c };
+    const s = try kept_hooks.run(ctx, ctx.out, targets, .{ .candidates = if (only == null) .auto else .none, .jobs = jobs });
+    const n = s.linked + s.retargeted;
+    try ctx.out.print("linked {d} kept {s} in {d} {s}\n", .{ n, if (n == 1) "file" else "files", s.linked_repos, if (s.linked_repos == 1) "repo" else "repos" });
+    if (only == null) {
+        try kept_hooks.printOrphanKeys(ctx, ctx.out, s.keys);
+        try kept_hooks.printCandidates(ctx.out, s);
+    }
+    return s.unsettled > 0;
 }
 
 /// One missing clone to fetch. Many markers can reference the same repo (the
@@ -240,7 +288,7 @@ test "run: with no project argument, reports and continues past an unreachable r
 
     const ws = try testutil.testWorkspace(arena, sb.root);
     const url_good = "https://holt-test.invalid/acme/repogood";
-    const url_bad = "git://127.0.0.1:1/acme/repobad";
+    const url_bad = "https://holt-test.invalid/acme/repobad";
 
     var repos_bad: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     try repos_bad.put(arena, "repobad", url_bad);
@@ -254,6 +302,7 @@ test "run: with no project argument, reports and continues past an unreachable r
     const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{
         .{ .url = url_good, .bare = bare_good },
+        .{ .url = url_bad, .bare = try std.fs.path.join(arena, &.{ sb.root, "absent.git" }) },
     });
     defer override.restore();
 
@@ -482,4 +531,149 @@ test "run: a bare project argument re-clones that project only, it does not unar
     try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
     // The archive path is `project unarchive`'s job now.
     try testing.expect(std.mem.indexOf(u8, got.err, "no archived project") == null);
+}
+
+const kept_test = @import("kept_hooks.zig");
+const kept = @import("../kept.zig");
+
+test "run: bare restore links every clone's kept files and names each kept repo with no clone here" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.TestBed.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const key = "github.com/acme/widget";
+    const widget = try bed.clone(key);
+    try bed.write(widget, "notes.txt", "notes");
+    try bed.keep(widget, "notes.txt");
+    try bed.remove(widget, "notes.txt");
+
+    const gone = try bed.clone("holt-test.invalid/acme/gone");
+    try testutil.runGit(&sb, gone, &.{ "remote", "set-url", "origin", "https://holt-test.invalid/acme/gone" });
+    try bed.write(gone, "a.txt", "a");
+    try bed.keep(gone, "a.txt");
+    const scratch = try bed.clone("local/scratch");
+    try testutil.runGit(&sb, scratch, &.{ "remote", "remove", "origin" });
+    try bed.write(scratch, "b.txt", "b");
+    try bed.keep(scratch, "b.txt");
+    const archived = try bed.clone("holt-test.invalid/acme/old");
+    try bed.write(archived, "c.txt", "c");
+    try bed.keep(archived, "c.txt");
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "old", "https://holt-test.invalid/acme/old");
+    try testutil.writeMarker(arena, try bed.ws.archiveRoot(arena), "acme", "past", repos, .empty);
+    for ([_][]const u8{ gone, scratch, archived }) |p| try std.Io.Dir.cwd().deleteTree(fsutil.io(), p);
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(try bed.linked(widget, key, "notes.txt"));
+    try testing.expect(std.mem.indexOf(u8, got.out, "linked 1 kept file in 1 repo\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "kept/holt-test.invalid/acme/gone has no clone here - run: holt repo get 'https://holt-test.invalid/acme/gone'\n  or, if the repo is no longer wanted, run: holt unkeep --repo holt-test.invalid/acme/gone\n") != null);
+    const dest = try bed.shown(try std.fs.path.join(arena, &.{ bed.ws.cfg.code_root, "local", "scratch" }));
+    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "kept/local/scratch has no clone here and no remote: copy the clone to {s}, then run: holt repo adopt {s}\n  or, if the repo is no longer wanted, run: holt unkeep --repo local/scratch\n", .{ dest, dest })) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "acme/old") == null);
+}
+
+test "run: restore <project> links the kept files of its member clones, including ones already there" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.TestBed.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const key = "holt-test.invalid/acme/widget";
+    const widget = try bed.clone(key);
+    const other = try bed.clone("holt-test.invalid/acme/other");
+    for ([_][]const u8{ widget, other }) |c| {
+        try bed.write(c, "notes.txt", "notes");
+        try bed.keep(c, "notes.txt");
+        try bed.remove(c, "notes.txt");
+    }
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "linked 1 kept file in 1 repo\n") != null);
+    try testing.expect(try bed.linked(widget, key, "notes.txt"));
+    try testing.expect(!try bed.linked(other, "holt-test.invalid/acme/other", "notes.txt"));
+    try testing.expect(std.mem.indexOf(u8, got.out, "has no clone here") == null);
+
+    try bed.remove(widget, "notes.txt");
+    try bed.write(widget, "notes.txt", "edited");
+    const differs = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 1), differs.code);
+    try testing.expect(std.mem.indexOf(u8, differs.out, "local copy differs") != null);
+    try testing.expectEqualStrings("edited", try bed.read(widget, "notes.txt"));
+}
+
+test "run: restore without kept/ in a synced folder holding projects says kept/ may still be downloading, and prints no link count" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.TestBed.init(arena, &sb, "");
+    defer bed.deinit();
+    const widget = try bed.clone("github.com/acme/widget");
+    try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
+    try bed.write(widget, ".git/info/exclude", "/secret.txt\n");
+    try bed.write(widget, "secret.txt", "only here");
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "no kept/ here yet: if another machine keeps files, wait for your cloud client to download it, then run holt sync; otherwise run holt keep --review --all\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, kept_test.not_set_up) == null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "linked 0 kept files") == null);
+}
+
+test "run: restore without kept/ prints the first-use line only while a clone holds a file not kept, and links nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.TestBed.init(arena, &sb, "");
+    defer bed.deinit();
+    const widget = try bed.clone("github.com/acme/widget");
+
+    const none = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(u8, 0), none.code);
+    try testing.expect(std.mem.indexOf(u8, none.out, kept_test.not_set_up) == null);
+
+    try bed.write(widget, ".git/info/exclude", "/secret.txt\n");
+    try bed.write(widget, "secret.txt", "only here");
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, kept_test.not_set_up) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "linked 0 kept files in 0 repos\n") != null);
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept" })));
+}
+
+test "run: a clone whose kept files cannot be linked is reported, never named as a kept repo with no clone here" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.TestBed.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const key = "holt-test.invalid/acme/broken";
+    const broken = try bed.clone(key);
+    try bed.write(broken, "a.txt", "a");
+    try bed.keep(broken, "a.txt");
+    try bed.write(broken, ".git/HEAD", "not a ref");
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "not linked: {s}: ", .{try bed.shown(broken)})) != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "has no clone here") == null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "linked 0 kept files in 0 repos\n") != null);
 }

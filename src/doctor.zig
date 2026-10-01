@@ -1,5 +1,5 @@
 //! Enforces the workspace invariants and reports drift:
-//!   D1 - no symlink anywhere under the synced projects/archive trees
+//!   D1 - no symlink anywhere under the synced projects/archive/kept trees
 //!        (or the whole synced root with `full`).
 //!   D2 - `code_root` is not inside `synced_root`, and no clone (`.git` dir)
 //!        lives under `<synced>/projects`.
@@ -197,8 +197,8 @@ fn scanNoFollow(alloc: std.mem.Allocator, root_path: []const u8, offenders: *std
     }
 }
 
-/// D1: no symlink under `<synced>/projects` or `<synced>/archive`; `full`
-/// widens the scan to the whole synced root.
+/// D1: no symlink under `<synced>/projects`, `<synced>/archive`, or
+/// `<synced>/kept`; `full` widens the scan to the whole synced root.
 pub fn checkD1(alloc: std.mem.Allocator, ws: *const Workspace, full: bool) ![][]u8 {
     var offenders: std.ArrayList([]u8) = .empty;
     if (full) {
@@ -206,6 +206,7 @@ pub fn checkD1(alloc: std.mem.Allocator, ws: *const Workspace, full: bool) ![][]
     } else {
         try scanNoFollow(alloc, try ws.projectsRoot(alloc), &offenders);
         try scanNoFollow(alloc, try ws.archiveRoot(alloc), &offenders);
+        try scanNoFollow(alloc, try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "kept" }), &offenders);
     }
     return offenders.toOwnedSlice(alloc);
 }
@@ -404,7 +405,7 @@ fn findShadows(alloc: std.mem.Allocator, active: []const NameDir, archived: []co
 /// `.Trash-1000`) or an `@`-prefixed sync/NAS metadata dir (Synology's
 /// `@eaDir`). These land inside a synced tree as legitimate system state, so
 /// flagging them as "leftover content with no marker" is a false alarm.
-fn isSystemDir(name: []const u8) bool {
+pub fn isSystemDir(name: []const u8) bool {
     return name.len > 0 and (name[0] == '.' or name[0] == '@');
 }
 
@@ -745,7 +746,25 @@ test "checkD1: a planted symlink under projects is caught, one under archive too
     try testing.expectEqual(@as(usize, 2), offenders.len);
 }
 
-test "checkD1: default scope misses a symlink outside projects/archive, --full catches it" {
+test "checkD1: the default scope covers kept/" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const key_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "kept", "github.com", "acme", "w" });
+    try fsutil.ensureDir(key_dir);
+    try fsutil.replaceSymlink("/nonexistent", try std.fs.path.join(arena, &.{ key_dir, ".clasp.json" }));
+
+    const offenders = try checkD1(arena, &ws, false);
+    try testing.expectEqual(@as(usize, 1), offenders.len);
+}
+
+test "checkD1: default scope misses a symlink outside projects/archive/kept, --full catches it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

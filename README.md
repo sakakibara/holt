@@ -14,7 +14,11 @@ repos), its cloud-synced docs/assets/links, and a single view over both.
 - **Shell-native.** `h`/`hi` navigation plus dynamic tab-completion for fish,
   zsh, bash, and PowerShell.
 - **Safe by construction.** Atomic marker/config writes, per-project locking,
-  and clones that are never deleted except by an explicit, safety-gated prune.
+  and clones that are never deleted except by an explicit, safety-gated
+  command.
+- **Local files that follow the repo.** Untracked and ignored files a clone
+  needs, like `.clasp.json`, are [kept](#kept-files) in the synced folder and
+  linked into the clone on every machine.
 
 ## How it works: three trees
 
@@ -73,7 +77,643 @@ a single `code/<repo>@worktrees` link, so a project opened at its hub root
 branch names (`feature/new-auth`) just nest, with no flattening. Navigate to
 one with `h <project>/<repo>@<branch>` (the branch tab-completes). `holt
 project archive --prune` never reclaims a clone that has worktrees, since they
-may hold uncommitted work.
+may hold uncommitted work. `repo adopt` and `repo promote` move the
+`@worktrees` dir with the clone, and refuse a linked worktree of another
+repository, naming `holt repo adopt <main clone>` instead. A worktree whose
+`.git` names the record where it was before the move has its `.git` written
+for that one worktree, checked with `git rev-parse --absolute-git-dir`; once
+git there finds the record, the record's `gitdir` is written as where the
+worktree is whenever it no longer leads there. A relative path (git 2.48 or newer) is read as git
+wrote it, a worktree's `.git` against where the worktree was before the move
+and a record's `gitdir` against where the record was, each against the real
+path of its directory, so a worktree holt made in the `@worktrees` dir moves
+along untouched, and one elsewhere, or left behind, is relinked. Another
+repository's worktree at a stale record's path is left as it is. When the
+`@worktrees` dir cannot be moved, each worktree is relinked where it is, those
+in that dir included, and the dir that was not moved is named.
+
+## Kept files
+
+A fresh clone has only what git carries, so the untracked and ignored files a
+repo needs locally - `.clasp.json`, `.claude/settings.local.json`, a local
+config - stay behind on the old machine. `holt keep` moves such a file into the
+synced folder and leaves a symlink in its place, so it follows the repo to
+every machine:
+
+```
+<synced>/kept/<host>/<owner>/<repo>/<path>    the kept copy (kept/local/<name> for a repo with no remote)
+~/Code/<host>/<owner>/<repo>/<path>          symlink to the kept copy
+```
+
+Kept files belong to the repo, not a project: every project listing the repo,
+and every worktree of its clone, links the same copies. A kept directory is
+linked whole, so files created in it are kept too; a kept file is linked alone.
+Edits through a link land in the synced folder directly. holt lists each kept
+path in a block of the clone's `.git/info/exclude`, so git never sees the
+links. A link is holt's only when it points into `kept/` under the synced
+folder, or under one the store has lived at (each recorded in
+`kept/.holt-roots/`); any other link, whatever its target's shape, is yours.
+Before holt replaces or removes anything, it copies it to an aside entry under
+`kept/.holt-aside/` and verifies the copy.
+
+### Choosing what to keep
+
+A candidate is a file git ignores that is not kept, skipped, or identical to
+its kept copy, in a clone or one of its initialized submodules. (A file git
+shows as untracked is a change `holt status` reports, not a candidate, and an
+ignored directory holding only directories that hold nothing is none either.)
+`holt keep --review` asks about each candidate. For a file in a clone: keep,
+keep everywhere, skip, skip everywhere, or quit, or only skip or quit when its
+name holds a control character. With `--all`, first, for a pattern files in
+several repos share: keep everywhere, skip everywhere, review each, or quit.
+The first prompt, when it is one of these, also offers never ask again, which
+turns kept files off. For content holt's block hides that holt holds nowhere
+else: take local, take kept, or quit. For a file inside a submodule: skip,
+skip everywhere, or quit. For an entry at a hub root: keep, skip everywhere,
+or quit. A name holding a line break is left as it is, or at a hub root
+offered keep or quit. Keep everywhere also adds the name to the auto patterns,
+and never ask again creates `<synced>/.holt-kept-off`. Without a terminal,
+`--review` prints each candidate with the command that keeps it (`holt keep
+--yes <path>` while `kept/` is absent and the synced folder holds projects)
+and exits 1.
+
+The first `holt keep` or review answer that writes creates `kept/`, asking
+first when the synced folder already holds projects, since another machine's
+`kept/` may still be downloading. It seeds two gitignore-syntax lists, yours to
+edit; holt never writes them again, and a list you delete stays deleted:
+
+- `kept/.holt-skip` - never offered: regenerable content such as
+  `node_modules/`, `.venv/`, `dist/`, `build/`, `target/`, `*.log`, and
+  `.DS_Store`. `kept/<host>/<owner>/<repo>/.holt-skip` adds patterns for one
+  repo.
+- `kept/.holt-auto` - kept without asking (seeded with `.clasp.json`) by
+  `sync`, bare `restore`, `--review`, and the deleters, each printing `kept
+  automatically: <path> (matches '<pattern>')`. Only an ignored path no machine
+  has kept yet, of at most 10 MiB and outside submodules, is kept this way.
+  Skip wins over auto.
+
+Lines the review adds go to one-line files under `.holt-skip.d/` and
+`.holt-auto.d/` beside each list.
+
+### Keep commands
+
+```sh
+holt keep .clasp.json .superpowers          # keep a file and a directory (asks above 10 MiB unless --yes)
+holt keep --review                          # review the clone here (or a hub root and its clones)
+holt keep --review --all                    # review every clone and hub root
+holt keep --take-local .env                 # the local copy differs: make it the kept copy
+holt keep --take-kept .env                  # the local copy differs: set it aside, link the kept copy
+holt keep --take-aside <entry>              # make an aside entry the kept copy of its path
+holt keep --prune-aside --older-than 30     # remove aside entries nothing still needs (asks unless --yes)
+holt keep --from github.com/acme/old-name   # copy the kept files a renamed repo left under its old key
+holt unkeep .env                            # stop keeping: the link becomes a regular copy
+holt unkeep --purge .env --yes              # remove a released path's kept copy (it stays in aside)
+holt unkeep --repo github.com/acme/gone     # release every kept path of a repo
+```
+
+A path directly at a hub root is kept as before: it moves into the project's
+synced content, and cannot be unkept. `keep` refuses a tracked path, a
+directory holding tracked files (naming the untracked ones to keep instead), a
+symlink holt did not make, a path inside a submodule or nested repository, a
+path another machine kept whose kept copy has not arrived yet, and a path a
+negated `.gitignore` line (`!<pattern>`) un-ignores: git reads holt's block
+below every `.gitignore`, so it would see the link. The refusal names the line
+as `<file>:<line>:<pattern>`; remove or narrow it, then keep the path.
+
+`--take-aside` settles a path two machines kept with different content: both
+versions are in aside, and the report names each entry. `--prune-aside`
+removes the aside entries nothing still needs. It spares an entry whose stamp
+or arrival here (its directory's modification time) is less than 30 days old,
+one that is not here whole (its manifest is missing or unreadable, or its
+content does not match it or cannot be read), which may still be arriving, one
+an unsettled kept path names, one `--take-kept` filled in the last 30 days, and
+a side of a path two machines kept with different content, saying why, with
+the command that removes it anyway. Naming entries (`holt keep --prune-aside
+<entry>...`) removes those alone, spared or not, but a side two machines kept
+and one with no manifest written in the last day; a named entry a purge names,
+or whose manifest says a purge set it aside, needs `--yes`, since another
+machine may still restore from it. `doctor` counts the entries that can be
+removed without reading their content, checking only that each file an entry
+records is there. `--from` refuses unless the clone shares the old key's
+root commit, and leaves the old key in place until `holt unkeep --repo`
+releases it. A clone's root commits are read as git stores them, replace refs
+left out, so a replace ref never changes the key a clone resolves to.
+
+`unkeep` releases a path: its link becomes a regular copy here now and on
+every other machine at its next `holt sync`. If an auto pattern names the
+path, `unkeep` also adds a skip line so it is not kept again. The kept copy
+stays until `--purge`, which without `--yes` lists the machines that kept the
+path and refuses; when another machine kept it, purge once each has run `holt
+sync`, since a machine that has not still links the copy. There, the next
+`holt sync` replaces the link with a verified copy of the purge's aside entry,
+naming the entry. Until that entry has arrived whole, the link stays and is
+reported as not arrived yet; an entry that is here but does not hold a whole
+copy leaves the link too, reported for you to look at. Pruning the entry
+records it pruned first, in a file of its own (`kept/.holt-pruned/<entry>`),
+and only then does sync remove a link that points at nothing. `--repo` takes the key as `holt list --repos` prints it.
+
+### Other commands
+
+- `holt sync` links every clone's kept files in each of its working trees,
+  keeps what the auto patterns name, prints one line per action and per path
+  it could not settle (each with the command that settles it), counts the
+  candidates (`N files not kept in M repos - run: holt keep --review --all`),
+  and exits 1 while a kept file is not linked. `--dry-run` writes nothing,
+  and names each path an auto pattern would keep (`would keep automatically:
+  <path> (matches '<pattern>')`) apart from the files not kept.
+- A working tree the clone records that cannot be read is named with commands
+  reaching that one worktree or its record: for one whose directory is gone,
+  the `mkdir -p`, `printf`, and `git checkout-index` bringing it back from its
+  record, or, when a weighing of that record as the deleters weigh it finds
+  nothing at risk, `git -C <clone> worktree remove <worktree>` removing it;
+  while it holds what no remote has, staged changes, or an operation in
+  progress, `holt worktree <project>/<repo> <branch> -r` for one `holt
+  worktree` made, which weighs it again, and for any other the lines naming
+  what removing it destroys, never a removal. One in a state holt does not
+  change, as `holt worktree --help` lists them (a path more than one record
+  names, a `.git` that is gone, cannot be read, leads nowhere, or leads to
+  another git directory, a path that is not a directory or a symlink to
+  nothing), is named with `<worktree>: <what git and holt see>; holt does not
+  change it: resolve it with git (git -C <clone> worktree list), then run
+  again`, and no command. A worktree moved with plain `mv` is named so too,
+  where it is now; a copy of a worktree, which shares its record, with no
+  command. A record whose `gitdir` cannot be read, and, in `sync`, one `git
+  worktree add` left half made, which `git worktree list` leaves out, are
+  named with `<record>: <what git and holt see>; holt does not change it:
+  resolve it with git (the record is <record>), then run again`.
+- `holt restore` links the kept files of the clones it restores and prints
+  `linked N kept files in M repos`. Bare, it covers every clone in the code
+  tree, keeps what the auto patterns name, and names each repo with kept files
+  but no clone here, with the `holt repo get` that brings it back or the `holt
+  unkeep --repo` that gives it up.
+- `holt repo get`, `repo adopt`, `repo promote`, and `holt worktree` (create)
+  link the repo's kept files; `adopt` and `promote` first move them to the new
+  key.
+- `holt status` shows each repo's kept paths that are not linked, the paths an
+  auto pattern names that git does not ignore (naming the negated `.gitignore`
+  line that un-ignores one, which keeping it could not get past), how many
+  files are not kept, and, on lines of their own, how many the auto patterns
+  name (`N will be kept automatically by holt sync`) and how many purged paths
+  the next sync restores from aside (`N purged paths not restored yet`); `holt info` lists
+  each repo's kept paths and their state.
+- `holt doctor` checks `kept files linked`, `kept store valid`, and `tracked
+  kept path` (a kept path the upstream default branch tracks), scans `kept/`
+  for symlinks, and notes candidates, aside size, released paths whose kept
+  copy remains, and old keys a clone here shares history with. `doctor --fix`
+  repairs links only.
+- Until `kept/` exists, while a clone holds a file not kept, `status`, `sync`,
+  and `restore` print `kept files are not set up - run: holt keep --review
+  --all`; when the synced folder already holds projects, where another
+  machine's `kept/` may still be downloading, they print `no kept/ here yet:
+  if another machine keeps files, wait for <backend> to download it, then run
+  holt sync; otherwise run holt keep --review --all`, and `restore` prints no
+  link count. After a backend switch that left `kept/` behind, they and
+  `doctor` print only `kept/ is at <old>: copy it to <new>`, and `sync` and
+  `restore` exit 1; `keep`, `unkeep`, `doctor --retire`, and the deleters
+  refuse with that line.
+
+### Deleting clones and worktrees
+
+`holt repo remove --clone`, `holt worktree -r`, and `holt project archive
+--prune` refuse while the tree holds files not kept, nested repositories,
+unsettled kept files, uncommitted changes, or git state no remote holds:
+stashes, and any ref (a branch, tag, notes ref, remote-tracking ref,
+`refs/prefetch` ref, or other local ref), per-worktree ref of a linked working
+tree, or HEAD naming a commit or other object no remote holds, in the clone
+and its submodules, those not checked out included. They also refuse while a
+git directory they delete has an operation in progress, which holds what no
+ref does (a paused `rebase --autostash` keeps the change only in its
+autostash): `<op> in progress in <tree>; finish it or abort it (run: git -C
+<tree> <op> --continue, or git -C <tree> <op> --abort)` for a merge, rebase,
+`am`, cherry-pick, or revert, and `git -C <tree> bisect reset` for a bisect.
+One in a submodule git directory whose working tree (its `core.worktree`) is
+gone is named first with the `mkdir -p`, `printf`, and `git checkout-index`
+bringing that tree back from its git directory, and one in a submodule git
+directory that names no working tree, where git can neither finish nor abort
+it, only with `--force`, which deletes it, never with `git --work-tree` at the
+git directory. One in a submodule git directory whose `core.worktree` names
+something that is not a directory, a symlink to nothing, a path under
+something that is not a directory, or a path that cannot be read refuses the
+delete, even with `--force`, as `<module>: a submodule git directory with a
+<op> in progress, whose core.worktree names <tree>, <what is seen>; holt does
+not change it: resolve it with git (git config --file <module>/config
+core.worktree), then run again`, with no command bringing the
+tree back, and `doctor --retire` fails on it with that line. Each other
+refusal names the command that settles it. A branch whose
+commit a remote holds never refuses, whatever its upstream, in `archive
+--prune` too, which weighs each clone as the other deleters do. `worktree -r`
+refuses, even with `--force`, a path no worktree record of the clone names
+(`<path> is not a working tree of <clone>`), before it names or sets anything
+aside. It also refuses, even with `--force`, before anything is weighed, set
+aside, or written, a worktree in a state holt does not change (see Limits): a
+path more than one worktree record names, as a copied record leaves, where
+`git worktree remove` may reach any of them; a directory whose `.git` is gone,
+does not read as a link, names a git directory that is not there, or leads to
+another git directory than its record, as another repository's working tree at
+its path does; a path holding something that is not a directory, or a
+symlink to nothing; and a path under something that is not a directory, as a
+file where a parent directory was leaves it, where no directory can be made.
+Each is named as `<worktree>: <what git and holt see>;
+holt does not change it: resolve it with git (git -C <clone> worktree list),
+then run again`, with no command writing a `.git` or a record, removing a
+record, or stashing. A symlink at the path is followed first, and a relative
+`.git` is read against the real path of its directory. It looks for these
+states again once the worktree is weighed, before anything is set aside, so a
+record that comes to name the path meanwhile is refused with nothing set
+aside. It weighs only that
+working tree's HEAD and per-worktree refs, and every ref that survives the
+removal counts as holding what it names. For a worktree whose directory is
+gone, it weighs what removing the record deletes through the record alone,
+under the clone's lock: its HEAD and per-worktree refs, any operation in
+progress there (an `am` keeps its unapplied patches in `rebase-apply/`),
+staged changes only the record's index holds (`staged changes only
+<worktree>'s record holds`), and the refs, HEAD, stashes, and operations in
+progress of each submodule git directory under the record's `modules/`. It
+refuses to remove the record with the lines `repo remove --clone` gives for
+them, or, when any of them changes before the removal, with `changed while it
+was being weighed`; `--force` names each as deleted. A worktree whose
+directory is gone and whose record holds an operation in progress or staged
+changes is named first with `mkdir -p <worktree> && printf 'gitdir: %s\n'
+<record> > <worktree>/.git && git -C <worktree> checkout-index -a`, which
+brings it back from its record so the commands finishing, aborting, or
+stashing them run there. No holt command runs or names `git worktree repair`
+or `git worktree prune`, which act on every record of the clone: `repair`
+rewrites the links of every worktree the clone records, another repository's
+working tree at a stale record's path included, and `prune` removes every
+record whose directory is gone. On Windows, hints are printed for PowerShell 7
+(`&&` joins their commands), a path that needs quoting single-quoted with each
+quote PowerShell reads in it, `'` and U+2018 to U+201B, doubled: each that
+writes a file uses `New-Item -ItemType Directory -Force` and `Set-Content
+-NoNewline`, writing the same bytes, and each `rm -rf <path>` is `Remove-Item
+-Recurse -Force -LiteralPath <path>`, which also removes the hidden and
+read-only files a git directory holds. Elsewhere a directory is removed with
+`rm -rf`, since a git directory's packs are read-only and `rm -r` asks about
+each on a terminal. `repo remove --clone` refuses, even with `--force`, while
+the clone has a linked worktree, weighing each first as `worktree -r` weighs
+it. One in a state holt does not change is not weighed, and is named once for
+its path as `worktree -r` names it. One whose HEAD or per-worktree refs hold a
+commit no remote and no other ref holds is named with its line and the command
+keeping the commit on a `holt-kept/` branch or ref, and one with an operation
+in progress with the commands finishing or aborting it, after the command
+bringing it back when it is gone; one that is there and holds nested
+repositories or files not kept, which a removal deletes, with `nested
+repository <path> (run: holt repo adopt <path>)` for each nested repository,
+and a `not kept: <file>` line for each file and `holt keep --review
+<worktree>`. A line that names how to delete anyway names the command removing
+that worktree with `--force`. None of them is named with a removal. Only a
+worktree holding nothing is named with the command removing it: `holt worktree
+<project>/<repo> <branch> -r` for one `holt worktree` made, when `-p
+<project>` names its project, else `git -C <clone> worktree remove
+<worktree>`, which for one whose directory is gone removes that one record. A
+locked one is named with `git -C <clone> worktree unlock <worktree> && `
+before that command, and a dirty one as `commit or discard the changes in
+<worktree>, then (run: ...)`.
+
+What a remote holds is what its URLs on another machine report now. The
+deleters ask them with `git ls-remote`: first the push URLs of each remote a
+ref at risk would be pushed to (`git remote get-url --push --all`, with
+`pushInsteadOf` and `insteadOf` applied as a push applies them), then, while
+something is not held, the push URLs of the other remotes and every fetch URL,
+and stop once everything is held. No remote is asked when nothing weighed is
+at risk, as when the refs that survive `worktree -r` hold all it weighs. A
+commit is held when git confirms it is a commit here and it is, or is
+contained in, an object an answer lists; any other object only when an answer
+lists it. Grafts and replace refs are not followed and no missing object is
+fetched. The clone's own refs, remote-tracking refs included, reflogs,
+`FETCH_HEAD`, and other working trees' HEADs are never evidence.
+
+Only a URL of ssh (`ssh://`, `git+ssh://`, `ssh+git://`, or scp-like
+`host:path`), `git://`, `http://`, or `https://` on another machine counts. A
+local path, a `file://` URL, a bundle, a `<transport>::` URL, any other
+scheme, and every URL of a remote with `remote.<n>.vcs` set hold nothing and
+are never asked. A host is this machine when it is empty or holds `%`, is a
+loopback or unspecified address (`127.0.0.0/8`, `::1`, `0.0.0.0`, `::`), is
+`localhost` or ends in `.localhost`, or is this machine's host name, its first
+label, or that label with `.local`. A URL whose host or userinfo git and curl
+can read two ways (a `%` in the authority, a host starting with `-`, a `[` in
+the authority that does not open the host, an `@`, `?`, or `#` that splits it
+differently) never counts. On Windows a drive-letter path is a local path;
+elsewhere git reads `C:/x` as the ssh host `C`.
+
+Each ref at risk is hinted to its target: the first of `branch.<b>.pushRemote`,
+`remote.pushDefault`, the branch's upstream remote, `origin`, and the first
+remote `git remote` lists that is a push target, one whose push URLs git can
+read and all count, with neither `remote.<n>.vcs` nor `remote.<n>.mirror`
+set. The hint is `git -C <P> push --recurse-submodules=no -- <target>
+<src>:<dst>`, naming the full source ref, or the object id of a HEAD or a
+per-worktree ref, and the full destination. A branch keeps its own name when
+the target names a default branch (the `HEAD` its listing shows) other than
+it, and either lists no such branch and no ref that conflicts with it,
+compared ignoring case, or lists it at a commit here that the branch
+contains; a ref outside `refs/heads` and `refs/tags` keeps its name only in
+that last case. Otherwise, and for every tag, the destination is the first
+free of `refs/heads/holt-kept/<name>`, `...-2`, `...-3`, ..., then
+`refs/heads/holt-kept-2/<name>`, ..., or the same under `refs/tags/holt-kept/`
+for an object that is not a commit, an annotated tag included; a HEAD goes to
+`holt-kept/head-<first 12 hex digits>`, a per-worktree ref to
+`holt-kept/<worktree>/<ref>`. The refs of one remote under `refs/remotes/<r>/`
+and `refs/prefetch/remotes/<r>/` share one line and one push. For `worktree
+-r`, a HEAD at risk is kept instead by `git -C <P> branch holt-kept/head-<c12>
+<commit>` and a per-worktree ref by `git -C <P> update-ref
+refs/holt-kept/<worktree>/<ref> <oid>`, which survive the removal.
+
+A push URL of the target that does not answer holds nothing, and the refs it
+leaves not confirmed held share its line, which names why as holt names it
+(`host not found`, `connection refused`, `connection reset`, `timed out`,
+`host key not verified`, `repository not found`, `authentication failed`, `the
+server redirects it elsewhere`, `git's protocol policy forbids it`, `no answer
+in 30 seconds`, `an insteadOf rule rewrites it again, to <url>`, or `git
+ls-remote failed (exit <n>)`; git's own error is never printed, since it may
+hold part of a password), then the way out: reconnect and run again; verify
+the host key of `<host>` and run again, when ssh could not verify it (`archive
+--prune`, whose project is archived, names `reconnect, then delete it with:
+holt repo remove <key> --clone` and `verify the host key of <host>, then
+...`); for a lasting failure, remove that URL when the target's other push
+URLs all answered, else replace this push URL (`git config --local --add
+remote.<n>.pushurl <url>`, after removing the `pushurl` value it came from);
+or `--force` deletes them. `archive --prune`, which takes no `--force`, names
+`holt repo remove <key> --clone --force` there instead. The push URLs of one
+remote on one host and port (with its transport) that did not answer for the
+same kind of reason, holding back the same refs, share one line naming each of
+them, and every host they name. Other URLs that did not answer are noted
+beside such a line. When every line of a refusal of `repo remove --clone` or
+`worktree -r` names `--force`, no closing line repeats it. Git state holt
+could not read is named with `--force` as its only way out. A value is removed
+from each file that holds it: `git -C <P> config --local --fixed-value
+--unset-all <key> <value>`, `--worktree` for the clone's `config.worktree`, or
+`git config --file <file>` for an included, global, or system file, noting
+that the global or system file changes every repository and the system file
+may need an administrator (sudo). A URL is printed without its userinfo,
+query, and fragment, so a password or token in it never shows; a command
+removing such a value matches it with a regular expression that keeps no part
+of them, or opens the file in an editor (`git config --edit`) naming the key,
+when that expression would match another value too or the value holds a
+control character.
+
+When no remote is a push target, one line names the refs at risk and why each
+remote counts as no copy: it is on this machine, has its push URLs on this
+machine, has an empty or no URL, is reached through a transport holt never
+asks, has push destinations holt cannot verify, is configured to mirror, has a
+URL holt cannot read safely, or git cannot read its URLs. It gives one
+command, that of the first remote, `origin` first, whose reason has one:
+removing its `pushurl` values on this machine, adding a `pushurl` where a
+`pushInsteadOf` rule sends pushes here, removing its empty values (`git config
+--unset-all <key> '^$'`), or setting a `url`, each removal followed by a
+`pushurl` add unless the push URLs it leaves all count and answered; else `git
+-C <P> remote add <name> <url>`, `<name>` being `origin` or the first free
+`holt-kept` name. `<url>` stands for a URL on another machine, which the line
+says.
+
+Each weighing asks each URL once for each repository, however many of its
+remotes name it: another repository's configuration (its ssh command, a
+rewrite rule, a relative path) may send the same URL elsewhere. The deleters
+weigh before their prompt, and again, with fresh answers, after it only when
+it waited on a person at a terminal, so what changed on a remote meanwhile
+counts; with `--yes`, or with no terminal, the delete takes what the remotes
+said before. `archive --prune` weighs each clone once before its prompt and
+once after it only when it prompted there, and `worktree -r` weighs once.
+`repo remove --clone` and `worktree -r` on a terminal announce a URL's first
+query in the command as `asking <remote> at <url>...`; otherwise, a query that
+has run 5 seconds prints `waiting for <host>...`. git runs with no terminal
+prompt, tells credential helpers not to prompt, follows no redirect, and,
+unless `GIT_SSH_COMMAND`, `GIT_SSH`, or `core.sshCommand` names the ssh
+command, uses `ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no`;
+each query runs in a session of its own and is stopped after 30 seconds, and
+when SIGINT, SIGTERM, or SIGHUP ends holt, the queries it runs are stopped
+with it. Once a URL on a host (with its transport and port) fails for a reason
+of the host's (not found, connection refused or reset, timed out, no answer,
+host key not verified), or its failures there have taken 30 seconds together,
+no other URL there is asked for the rest of the command, and after `host not
+found` no URL on that host: each is named as `not asked: <host> did not answer
+earlier in this run`, or `not asked: the host key of <host> was not verified
+earlier in this run`, while URLs on other hosts are still asked. `archive
+--prune` names such clones once, after the last one: `<host> did not answer,
+so <N> clones were not asked and not pruned: <keys>; reconnect, then delete
+each with: holt repo remove <key> --clone`, or `the host key of <host> was not
+verified, so ...; verify the host key of <host>, then ...`; `doctor --retire`
+does too, ending `and run again`.
+
+Without `--force`, just before deleting, the deleters read every ref and HEAD
+again, and the list of git directories, and refuse if anything changed since
+the weighing: `<P> changed while it was being weighed ...; the clone was kept;
+run the command again` (`the worktree was kept` for `worktree -r`). When the
+run had already set content aside, or recorded and removed holt's links, that
+line, and every other line saying the delete stopped, names each with where
+its entry holds it (`; set aside: <path> (kept/.holt-aside/<stamp>), ...`),
+and none says `nothing was deleted`; `archive
+--prune` prints it as a `not pruned` line ending `delete it with: holt repo
+remove <key> --clone`. A delete that fails partway says `part of it may
+already be gone`.
+
+When the gates refuse, on a terminal without `--yes` or `--force`, the
+deleters first offer the review. `archive --prune` keeps such a clone and
+prints `not pruned <repo>: <reason>; once settled, delete it with: holt repo
+remove <key> --clone`, or, when several gates keep it, each reason on a line
+of its own before that follow-up; a clone git cannot read is named as such,
+with the `holt repo remove <key> --clone --force` that deletes it. `repo
+remove -p <project> --clone` unlinks the member only once the delete succeeds,
+so a refused or failed delete leaves it in the project. While a submodule has
+a linked working tree, which the delete would leave without its repository,
+they refuse even with `--force`, naming it, with `git -C <worktree> worktree
+remove <worktree>`, or, for one whose directory is gone, `git --git-dir
+<module> worktree remove <worktree>` (with `--work-tree <module>` when the
+submodule's own working tree is gone too), or, for one in a state holt does
+not change, as `worktree -r` names it, with `git --git-dir <module> worktree
+list`.
+
+`--force` on `repo remove --clone` and `worktree -r` deletes anyway, first
+setting aside every file not kept, uncommitted change (a symlink by its
+target, and a staged version the working tree no longer holds under the
+entry's `index/`), and unsettled content, and recording each link it removes,
+holt's included, by its target; nested repositories, commits no remote has,
+and operations in progress, with the autostash one holds, are deleted, each
+named. Even with `--force`, nothing is deleted if setting aside fails, if the
+clone has kept-file links while `kept/` cannot be read, or if the tree holds a
+mount point of another filesystem anywhere below it, nested repositories and
+`.git` included. A refusal after some content was already set aside says the
+clone or worktree was kept and names each entry: `the worktree was kept; set
+aside: <path> (kept/.holt-aside/<stamp>), ...`. Kept copies stay in `kept/`;
+`repo remove --clone` ends by naming `holt unkeep --repo <key>`. Until `kept/`
+exists there is nowhere to set files aside, so `--force` deletes them, naming
+each.
+
+### Retiring a machine
+
+Before wiping a machine, run:
+
+```sh
+holt doctor --retire          # changes nothing; fails on what exists only here, each with its command
+holt keep --retire-machine    # last, once doctor --retire passes
+```
+
+`doctor --retire` fails on files not kept, nested repositories, unsettled kept
+files, uncommitted changes, stash entries, and the git state no remote holds
+that the deleters refuse on, weighed as they weigh it, with the same lines and
+commands (in submodules and their linked working trees too, those not checked
+out included, and every working tree's HEAD and per-worktree refs); on an
+operation in progress in any git directory it weighs, and on staged changes
+only the record of a worktree that is gone holds, with the lines the deleters
+give; on each working tree git cannot list, with commands reaching that
+worktree or its record alone, a worktree that is gone named on that line only;
+on each remote whose push URLs are all on this machine that no
+such line names, once, with the command replacing its URLs (each value removed
+from the file holding it, then `git config --local remote.<n>.url <url>`) or
+its push URLs; on files in the code tree outside every clone; and on loose
+entries in hubs, naming each place once. It asks remotes as the deleters do,
+each URL once for each clone, and prints no `asking` line; each host a skip
+kept from being asked is named once, with the clones it held back, ending `and
+run again`. Git state it cannot read is named with its way out: make it
+readable, or delete the clone with `holt repo remove <key> --clone --force`. It
+lists state holt never keeps (git hooks, extra git config sections,
+`info/exclude` lines outside holt's block, holt's own config) and every machine
+with kept files, by id, host, and the UTC date of its newest record. It cannot
+see uploads the cloud client has not finished, so check that the client shows
+none pending. On a machine with no kept-file records, it ends by saying there
+is nothing to retire, as `keep --retire-machine` says there. A date read from
+the store is shown with `\xHH` for a control character, and a newest record
+whose time cannot be read as `unknown`.
+
+A path another machine kept, whose kept copy has not arrived here, blocks
+`keep`, `--take-local`, and `unkeep` until it arrives; what a retired machine
+had kept when it was retired never does. `sync`, `status`, and `doctor` report
+it as `kept on <host> (machine <id>), not here yet`: waiting for the backend
+and then `holt sync` is the normal fix; if it will never arrive, run `holt
+unkeep <path>` on that machine, or, if that machine is gone, `holt keep
+--retire-machine <id>` here, with an id `doctor --retire` lists; an id no
+machine has kept files from is refused. Where a local copy of the path is
+here, it is then reported as a kept copy missing, and `holt keep --take-local
+<path>`, or `holt keep <path>`, makes that copy the kept one: a retired
+machine's records never make the path a conflict between two machines. Where
+none is, it is reported as `kept copy gone, and only a retired machine kept
+it`, and `holt unkeep <path>` gives it up; when an aside entry holds the
+content that machine kept, `holt keep --take-aside <entry>` is named first to
+take it back.
+
+A retirement covers only the machine's records at that moment. A retired
+machine still in use (or one retired by a wrong id) blocks again for what it
+keeps after: each command that records a kept change there warns once that
+its new kept changes count again, and `doctor --retire` lists it as `retired
+<date> UTC, active again`. Retiring it again covers its records then, and `holt
+keep --unretire-machine [<machine-id>]` removes the retirement. holt prints
+every date as a UTC date, `YYYY-MM-DD UTC`. On a machine already
+retired, `doctor --retire` says so, naming the host and machine that retired it
+when another did, instead of naming `--retire-machine` again.
+
+### Limits
+
+- A checkout git records nowhere (one made with `--separate-git-dir` into the
+  clone's git directory, or a copy of a working tree) is protected only when
+  holt runs inside it.
+- holt leaves these worktree states to be resolved by hand with git, and
+  changes none of them, with or without `--force`: a path more than one
+  worktree record names, as a copied record leaves; a worktree whose `.git` is
+  gone, cannot be read, does not read as a link, names a git directory that
+  is not there, or leads to another git directory than its record, as another
+  repository's working tree at its path does; a path holding something
+  that is not a directory, or a symlink to nothing; and a path under
+  something that is not a directory. `worktree -r` and `repo
+  remove --clone` refuse each, and `doctor --retire`, `status`, `sync`, and
+  `doctor` name each, with what git and holt see there and `git -C <clone>
+  worktree list`, weighing nothing in it. So is a worktree record git does not
+  list, whose `gitdir` cannot be read or is missing, as `git worktree add`
+  leaves one half made, named with the record's path in place of `git
+  worktree list`, which does not show it: `repo remove --clone` and `project
+  archive --prune` refuse its clone, and `doctor --retire` names it; `status`,
+  `sync`, and `doctor` name one whose `gitdir` cannot be read, and `sync` a
+  half-made one. So is a submodule git directory with an operation in
+  progress whose `core.worktree` names something that is not a directory, a
+  symlink to nothing, a path under something that is not a directory, or a
+  path that cannot be read, named with `git config
+  --file <module>/config core.worktree`. The only worktree writes holt makes
+  are the relinks after `repo adopt` or `repo promote` moves a clone, and `git
+  worktree remove` of a worktree whose `.git` leads back to its one record, or
+  whose directory is gone, once weighing finds nothing at risk or `--force` is
+  given.
+- A tool that saves a kept file by writing a new file and renaming it over the
+  link breaks the link. The next reconciling command (`sync`, `restore`, ...)
+  sets the new content aside and reports that the local copy differs; it stays
+  unkept until `holt keep --take-local`, and until that reconcile it exists
+  only in the clone, where `git clean -fdx` can delete it.
+- `rm -rf dir/` with a trailing slash on a kept directory follows the link and
+  deletes the kept directory's contents on every machine; `rm dir` removes
+  only the link. Deleting a kept file through its link also deletes it
+  everywhere. Recovery is the backend's trash or version history.
+- Sandboxes, containers, and tools that cannot follow a link out of the clone
+  (a Docker build context, a sandbox that mounts only the working directory)
+  cannot read kept files: mount or allow `<synced>/kept`.
+- Kept files need git 2.32 or newer; with an older git, every kept operation
+  refuses.
+- Edits through links on two machines at once are the backend's
+  last-writer-wins, as with docs.
+- A file created since the last reconciling command is not kept yet, even if an
+  auto pattern names it. A `restore` that runs before the backend has
+  downloaded `kept/` links nothing; run `holt sync` once it has.
+- Content identical to its kept copy is not set aside; if the kept copy later
+  changes, another working tree's copy of the old version is its only copy
+  until the next reconcile sets it aside.
+- Files inside a submodule cannot be kept, only skipped.
+- A backend that drops file modes can drop a kept file's executable bit; holt
+  reports `executable bit not kept` when the store refuses one. An online-only
+  cloud file cannot be linked or compared until it is downloaded.
+- The deleters (`repo remove --clone`, `worktree -r`, `archive --prune`) and
+  `doctor --retire` never fetch: a commit a remote holds only below a tip this
+  clone has not fetched counts as not held until `git fetch` brings the tip.
+- Only ssh, `git://`, `http://`, and `https://` URLs count: a remote helper
+  (a `<transport>::` URL, `remote.<n>.vcs`), a local path, a bundle, and any
+  other transport never do. Remotes defined in `.git/remotes` or
+  `.git/branches` never count either.
+- Loopback and unspecified addresses, `localhost`, an empty host, a host
+  holding `%`, and this machine's own names are this machine, so a tunnel
+  (`ssh://localhost:<port>`) to a real server does not count. A name that
+  reaches this machine only through DNS, `/etc/hosts`, or an ssh `Host` alias
+  counts as another machine; holt reads no ssh configuration.
+- This machine's own non-loopback addresses count as another machine: a URL
+  naming this machine by its LAN IP (`ssh://192.168.1.10/...`) counts as a
+  copy.
+- A URL holt cannot read safely (a `%` in its authority, an `@` in its path,
+  as in `.../repo@v2.git`) never counts until it is edited.
+- A file created in a worktree after the deleters last weigh its files and
+  before the delete is not seen, and is deleted with it: what they read again
+  right before the delete is git state only.
+- Reflogs are weighed nowhere. Commits and objects only a reflog,
+  `FETCH_HEAD`, or `ORIG_HEAD` names, or nothing names, are not weighed and
+  are deleted with the clone, and those only a worktree record's own reflogs
+  (its `HEAD`'s) name are deleted with that record, when `worktree -r` removes
+  it; those only an operation in progress holds (`MERGE_HEAD`,
+  `CHERRY_PICK_HEAD`, an autostash) refuse the delete as that operation does.
+  Another repository that uses the clone as its alternate (`clone --shared`,
+  `--reference`) loses its objects. Custom hooks and local git config are
+  deleted too; the deleters name them.
+- Refs a server hides are not seen, and a server's rules (protected branches,
+  `receive.denyCreate`, a non-bare target with the branch checked out in one
+  of its worktrees) can refuse a hinted push. A server that lists objects it
+  lacks makes a commit look held. What a hint pushes stays on the target;
+  holt never removes it.
+- A server that redirects is not followed: its URL fails with `the server
+  redirects it elsewhere`.
+- When authentication fails, git tells the credential helpers to erase the
+  credential they gave.
+- A URL an `insteadOf` rule rewrites again, when no configured value of the
+  remote reaches it, cannot be asked, so the delete refuses until the rule or
+  the URL changes.
+- With an ssh command the user names, a query may wait for input; it is
+  stopped after 30 seconds, a URL that answers only after that counts as not
+  asked, and no other URL on its host is asked for the rest of the command.
+  Prompts raised outside the query's session (gpg-agent's pinentry, a
+  confirm-style ssh agent) can still appear, and the query waits for them
+  until it is stopped. On Windows a query has no session of its own, and a
+  helper it starts can outlive the stop. On macOS a query outlives a SIGKILL
+  of holt until it ends by itself, and so can a query holt is just starting
+  when SIGINT, SIGTERM, or SIGHUP is delivered to another of holt's threads:
+  holt starts queries from one thread and holds the signals off only there
+  until the query is recorded.
+- A partial clone whose refs name objects its promisor remote still holds
+  cannot be read without fetching them, so its git state is unreadable and
+  only `--force` deletes it.
+- A process working inside the clone can write after the deleters read it
+  again, until the delete ends, and a push elsewhere after the last query is
+  not seen.
+- On Windows, links need Developer Mode.
 
 ## Install
 
@@ -245,23 +885,33 @@ list, or `holt <command> --help` for one command's usage.
 | `holt project new <org>/<name>` | Create a project (it has no repos yet; attach one with `holt repo get`) |
 | `holt project rename <old> <new-org>/<new-name>` | Rename a project, moving its content and rebuilding its hub |
 | `holt org rename <old-org> <new-org> [--yes]` | Rename an org, moving every project in it |
-| `holt project archive <project> [--prune] [--yes]` | Move a project's content to `archive/` and drop its hub; `--prune` also reclaims member clones that are clean, synced, and unused by any active project |
+| `holt project archive <project> [--prune] [--yes]` | Move a project's content to `archive/` and drop its hub; `--prune` also reclaims member clones that are clean, synced, unused by any active project, and pass the [delete gates](#deleting-clones-and-worktrees) |
 | `holt project unarchive <project>` | Move an archived project back into `projects/` and rebuild its hub |
-| `holt restore [<project>] [-j N]` | Clone every missing repo (in parallel, deduped by clone) and rebuild hubs, for one project or the whole workspace |
+| `holt restore [<project>] [-j N]` | Clone every missing repo (in parallel, deduped by clone), rebuild hubs, and link kept files, for one project or the whole workspace; with no project, also names each kept repo with no clone here |
 | `holt project remove <project> [--yes]` | Remove a project's content and hub (clones kept); type `org/name` to confirm unless `--yes` |
-| `holt keep <path>` | Promote a loose file at the hub root into the project's synced content, leaving a symlink |
+| `holt keep <path>...` | Keep what does not sync: an entry directly at a hub root moves into the project's synced content, leaving a symlink; a file or directory inside a clone or linked worktree moves into `<synced_root>/kept/<host>/<owner>/<repo>/` and is linked from the clone on every machine (see [Kept files](#kept-files)) |
+| `holt keep --review [<path>] [--all]` | Ask about each file not kept in a clone, a hub root and its member clones, or with `--all` every clone and hub root |
+| `holt keep --take-local <path>` / `--take-kept <path>` | Settle a kept path whose local copy differs: make the local copy the kept copy, or set it aside and link the kept copy |
+| `holt keep --take-aside <entry>` | Make an aside entry the kept copy of its path |
+| `holt keep --prune-aside [--older-than <days>] [<entry>...] [--yes]` | Remove the aside entries older than 30 days nothing still needs, or the entries named; asks unless `--yes` |
+| `holt keep --from <old key> [<path>]` | Copy the kept files a renamed or transferred repo left under its old key into the clone's key |
+| `holt keep --retire-machine [<machine-id>]` | Record this machine, or one that is gone, as retired (see [Retiring a machine](#retiring-a-machine)) |
+| `holt keep --unretire-machine [<machine-id>]` | Remove a machine's retirement (see [Retiring a machine](#retiring-a-machine)) |
+| `holt unkeep <path>...` | Stop keeping a clone's paths: each link becomes a regular copy on every machine; the kept copy stays |
+| `holt unkeep --purge <path> [--yes]` | Remove a released path's kept copy into an aside entry; without `--yes`, lists the machines that kept it and refuses |
+| `holt unkeep --repo <key>` | Release every kept path of a repo |
 | `holt backup <project>` | Tar a project's content dir into synced `backups/` |
-| `holt info <project> [--json]` | Show a project's paths and member repos |
+| `holt info <project> [--json]` | Show a project's paths, member repos, and each repo's kept files with their state |
 
 **Repos**
 
 | Command | Description |
 | --- | --- |
 | `holt repo new <spec> [-p <project>]` | Create a git repo from scratch, standalone or as a project member |
-| `holt repo get <url> [-p <project>] [--update]` | Clone a repo into the code tree, standalone or as a project member (`url` accepts `owner/repo` or `host/owner/repo` shorthand) |
-| `holt repo adopt <path> [-p <project>] [--force]` | Register an existing clone, moving it to its identity path, standalone or as a project member |
-| `holt repo remove <repo> [-p <project>] [--clone] [--yes] [--force]` | Unlink a repo from a project, or delete its checkout with `--clone` (refuses while another project still references it or a worktree exists; `--force` only overrides dirty, stashed, or unpushed state; the delete is confirmed unless `--yes`) |
-| `holt repo promote <repo> [--dry-run] [--yes] [--force]` | Move a local repo to its real remote identity once it has an origin (previews and confirms unless `--yes`/`--force`) |
+| `holt repo get <url> [-p <project>] [--update]` | Clone a repo into the code tree, standalone or as a project member, and link its kept files (`url` accepts `owner/repo` or `host/owner/repo` shorthand) |
+| `holt repo adopt <path> [-p <project>] [--force]` | Register an existing clone, moving it and its kept files to its identity path, standalone or as a project member |
+| `holt repo remove <repo> [-p <project>] [--clone] [--yes] [--force]` | Unlink a repo from a project, or delete its checkout with `--clone` (refuses while another project still references it or a worktree exists, and on the [delete gates](#deleting-clones-and-worktrees) unless `--force`, which sets what it can aside first; the delete is confirmed unless `--yes`) |
+| `holt repo promote <repo> [--dry-run] [--yes] [--force]` | Move a local repo and its kept files to its real remote identity once it has an origin (previews and confirms unless `--yes`/`--force`) |
 | `holt repo alias <repo> [<name>] -p <project>` | Name the hub link a repo browses under |
 
 **Navigate & inspect**
@@ -270,18 +920,19 @@ list, or `holt <command> --help` for one command's usage.
 | --- | --- |
 | `holt path [<project>\|<project>/<repo>] \| --root <code\|hub\|synced>` | Print the filesystem path for a project, a project/repo, or a configured root |
 | `holt list [--paths] [--repos] [--org <org>] [--json]` | List every project in the workspace, or with `--repos` every clone in the code tree by its key |
-| `holt status [<project>] [--dirty] [--org <org>] [--json]` | Show git status across a project's (or every project's) member repos |
+| `holt status [<project>] [--dirty] [--org <org>] [--json]` | Show git status across a project's (or every project's) member repos, their kept paths that are not linked, and how many files are not kept |
 | `holt recent [-n N] [--org <org>] [--json]` | List projects ordered by their most recent commit |
 | `holt edit <project>` or `holt edit <project>/<repo>` | Open a project's docs in `$EDITOR`, or a member repo's clone |
 | `holt run (<project>\|--org <org>\|--all) [--repo <name>] -- <cmd...>` | Run a command in each member repo's clone (deduped by real clone path) |
-| `holt worktree <project>/<repo> [<branch>] [--remove]` | Create, list, or remove a repo's git worktrees (extra branch checkouts of its one clone) |
+| `holt worktree <project>/<repo> [<branch>] [--remove [--force]]` | Create, list, or remove a repo's git worktrees (extra branch checkouts of its one clone); a new one gets links to the repo's kept files, and `--remove` refuses on the [delete gates](#deleting-clones-and-worktrees) unless `--force` |
 
 **Maintain**
 
 | Command | Description |
 | --- | --- |
-| `holt sync [--dry-run]` | Reconcile every project's hub with its marker |
-| `holt doctor [--fix] [--full] [-j N]` | Check the workspace for invariant violations and drift |
+| `holt sync [--dry-run]` | Reconcile every project's hub with its marker, and link the kept files of every clone and worktree (exits 1 while one is not linked) |
+| `holt doctor [--fix] [--full] [-j N]` | Check the workspace for invariant violations and drift, that kept files are linked, the kept store is valid, and no kept path is tracked upstream; notes files not kept. `--fix` repairs hub and kept-file links, never changing file content or deleting a clone |
+| `holt doctor --retire` | Report what exists only on this machine before wiping it; changes nothing (see [Retiring a machine](#retiring-a-machine)) |
 | `holt upgrade [<version>] [--yes]` | Install the latest holt release, or a specific `<version>` |
 
 ## Scripting
@@ -295,11 +946,20 @@ $ holt list --json
 [{"org":"acme","name":"widget","hub_path":"/Users/me/Projects/acme/widget","content_path":"/Users/me/Dropbox/workspace/projects/acme/widget","repos":["widget-repo"]}]
 
 $ holt status --json
-[{"project":"acme/widget","repos":[{"name":"widget-repo","state":"clean","branch":"main"}]}]
+[{"project":"acme/widget","repos":[{"name":"widget-repo","state":"clean","branch":"main","not_linked":[],"not_restored":[],"not_kept":0,"will_keep":0,"nested":0,"unlisted":0}],"local_only":[],"unjudged":[]}]
 ```
 
 `state` is one of `clean`, `dirty`, `unpushed`, `no-upstream`, `missing`, or
-`unreadable`.
+`unreadable`; kept files never change it. `not_linked` lists the repo's kept
+paths that are not linked (not tracked, and not holt's link to an existing
+kept copy), but for the purged paths the next `holt sync` restores from
+aside, which `not_restored` lists instead; `not_kept` counts its files that
+may exist only on this machine, `will_keep` the files an auto pattern names,
+which the next `holt sync` keeps, `nested` the nested repositories git's
+listing shows, and `unlisted` the working trees and submodules git could not
+list. Until `kept/` is set up, or when a repo cannot be judged, they are `[]`
+and `null`. `local_only` lists the hub root's loose entries, and `unjudged`
+the clones whose kept files could not be judged.
 
 Without `--json`, a few outputs are still a stable contract:
 

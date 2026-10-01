@@ -24,13 +24,16 @@
 //! under code_root (--clone). At least one of -p and --clone is required.
 //! --clone refuses while any active project still references the repo, naming
 //! them; refuses while a linked worktree exists (its objects live in the
-//! clone's .git, so --force does not override this); and refuses on dirty,
-//! stashed, or unpushed local state unless --force - the same `recover.check`
-//! gate `adopt` and `promote` apply. Once every gate passes it names the
-//! checkout and asks; only --yes skips that prompt, --force does not, since
-//! --force is what waived the recoverability gate. Without -p, <repo> is a
-//! code-tree key (as `holt list --repos` prints it); with -p it is the
-//! member's short name in that project's marker.
+//! clone's .git, so --force does not override this); and, unless --force,
+//! refuses on what the deleter weighs (`deleter`): uncommitted changes, git
+//! state no remote holds, files holt does not keep, nested repositories, and
+//! unsettled kept files; --force still sets aside all but the nested
+//! repositories first. Once every gate passes it names the checkout and asks;
+//! only --yes skips that prompt, --force does not, since --force is what
+//! waived the gates. With -p, the member is unlinked only once the delete has
+//! succeeded, so a refused or failed delete leaves it in the project.
+//! Without -p, <repo> is a code-tree key (as `holt list --repos` prints it);
+//! with -p it is the member's short name in that project's marker.
 //! `promote <repo> [--dry-run] [--yes] [--force]` moves a local repo
 //! (recorded in markers as `local:<repo>`) to its real remote identity, once
 //! its clone has grown an origin. The single most destructive operation in
@@ -59,8 +62,12 @@ const projectlock = @import("../projectlock.zig");
 const hub = @import("../hub.zig");
 const git = @import("../git.zig");
 const recover = @import("../recover.zig");
+const deleter = @import("deleter.zig");
+const keep_cmd = @import("keep.zig");
 const fsutil = @import("../fsutil.zig");
 const ui = @import("../ui.zig");
+const kept = @import("../kept.zig");
+const kept_hooks = @import("kept_hooks.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
@@ -212,7 +219,7 @@ pub const get_command = app.command(GetSpec, .{
     \\also recorded in that project's marker and linked into its hub. The
     \\clone path is the sole line on stdout, so `cd $(holt repo get <url>)`
     \\works. With --update, a present clone is fast-forwarded rather than
-    \\left as-is.
+    \\left as-is. The repo's kept files are linked into the clone.
     \\
     \\Example:
     \\  holt repo get https://github.com/acme/widget
@@ -319,6 +326,7 @@ fn runGet(ctx: *app.Ctx, a: cli.Args(GetSpec)) anyerror!u8 {
     } else {
         try ctx.err.print("already present\n", .{});
     }
+    try kept_hooks.hook(ctx, ctx.err, clone_path, .{ .path = clone_path });
     return 0;
 }
 
@@ -337,7 +345,12 @@ pub const adopt_command = app.command(AdoptSpec, .{
     .details =
     \\Moves the clone to <code_root>/<host>/<owner>/<repo> (or local/<name> when
     \\it has no origin) and, with -p, records it in that project's marker.
-    \\Refuses on dirty, stashed, or unpushed state unless --force.
+    \\Refuses on dirty, stashed, or unpushed state unless --force. Kept files
+    \\of a clone under the code tree move to the new identity first. Its
+    \\<clone>@worktrees dir moves with it; when that dir cannot be moved,
+    \\each worktree is relinked where it is and the dir is named. A linked
+    \\worktree of another repository is refused, naming the adopt of that
+    \\repository's main clone instead.
     \\
     \\Example:
     \\  holt repo adopt ~/src/widget -p acme/widget
@@ -400,6 +413,7 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
         try ctx.err.print("holt: {s} is not a readable git repository\n", .{try app.tilde(ctx, abs_path)});
         return 1;
     }
+    if (try refuseLinked(ctx, abs_path, project_query)) return 1;
 
     const origin = try git.remoteUrl(alloc, abs_path);
     const basename = basenameOf(abs_path);
@@ -444,6 +458,7 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
 
     var final_path: []const u8 = abs_path;
     var moved = false;
+    var status: u8 = 0;
 
     if (!try samePath(alloc, abs_path, clone_path)) {
         if (fsutil.exists(clone_path)) {
@@ -463,16 +478,24 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
             return 1;
         }
 
-        common.moveClone(ctx, abs_path, clone_path) catch return 1;
+        const kept_locks = (try kept_hooks.moveKept(ctx, ctx.err, try kept_hooks.keyOf(ctx, abs_path), try id.relPath(alloc), abs_path, try adoptCommand(ctx, abs_path, project_query))) orelse return 1;
+        common.moveClone(ctx, abs_path, clone_path) catch {
+            kept_locks.release();
+            return 1;
+        };
+        kept_locks.release();
         final_path = clone_path;
         moved = true;
+    } else if (!try kept_hooks.finishMoves(ctx, ctx.err, try id.relPath(alloc), abs_path, try adoptCommand(ctx, abs_path, project_query))) {
+        status = 1;
     }
 
     // Standalone: no marker, no hub. Print the clone path (cd-friendly), like `get`.
     if (project_query == null) {
         try ctx.out.print("{s}\n", .{final_path});
         try ctx.err.print("{s}\n", .{if (moved) "adopted (standalone)" else "already there"});
-        return 0;
+        try kept_hooks.hook(ctx, ctx.err, final_path, .{ .path = final_path });
+        return status;
     }
 
     // Project mode: record + reconcile, then report.
@@ -501,7 +524,26 @@ fn runAdopt(ctx: *app.Ctx, a: cli.Args(AdoptSpec)) anyerror!u8 {
     const rel = try id.relPath(alloc);
     try ctx.out.print("{s}\n", .{final_path});
     try ctx.err.print("adopted {s} -> {s}\n", .{ rel, try app.tilde(ctx, final_path) });
-    return 0;
+    try kept_hooks.hook(ctx, ctx.err, final_path, .{ .path = final_path });
+    return status;
+}
+
+/// Whether `path` is a linked worktree of another repository
+/// (`git.linkedMain`), which adopt and promote refuse, naming its main
+/// clone and the adopt of it, into `project` when given; moving the
+/// worktree would relink that repository's records.
+fn refuseLinked(ctx: *app.Ctx, path: []const u8, project: ?[]const u8) !bool {
+    const main = try git.linkedMain(ctx.alloc, path) orelse return false;
+    try ctx.err.print("holt: {s} is a linked worktree of the repository at {s}; adopt that clone instead (run: {s})\n", .{ try app.tilde(ctx, path), try app.tilde(ctx, main), try adoptCommand(ctx, main, project) });
+    return true;
+}
+
+/// The `repo adopt` command that adopts the clone at `path`, into
+/// `project` when given.
+fn adoptCommand(ctx: *app.Ctx, path: []const u8, project: ?[]const u8) ![]const u8 {
+    const p = try kept_hooks.quotedPath(ctx, path);
+    if (project) |q| return std.fmt.allocPrint(ctx.alloc, "holt repo adopt {s} -p {s}", .{ p, try ui.shellQuote(ctx.alloc, q) });
+    return std.fmt.allocPrint(ctx.alloc, "holt repo adopt {s}", .{p});
 }
 
 fn reportUnfinishedAdopt(ctx: *app.Ctx, org: []const u8, name: []const u8, clone_path: []const u8, err: anyerror) !void {
@@ -514,7 +556,7 @@ const RemoveSpec = struct {
     project: cli.Opt([]const u8, .{ .short = 'p', .value_name = "project", .complete = app.cat(.project), .help = "unlink the repo from this project" }),
     clone: cli.Flag(.{ .help = "also delete the checkout under code_root" }),
     yes: cli.Flag(.{ .short = 'y', .help = "skip the confirmation prompt --clone asks before deleting" }),
-    force: cli.Flag(.{ .short = 'f', .help = "delete the checkout even with unrecoverable local state" }),
+    force: cli.Flag(.{ .short = 'f', .help = "delete the checkout even with unrecoverable local state or files holt does not keep (those are set aside first)" }),
 };
 
 pub const remove_command = app.command(RemoveSpec, .{
@@ -526,9 +568,80 @@ pub const remove_command = app.command(RemoveSpec, .{
     .details =
     \\-p unlinks the repo from that project; the shared checkout stays. --clone
     \\additionally deletes the checkout, refusing while any active project
-    \\still references it, while a linked worktree exists (--force does not
-    \\override this), or on dirty, stashed, or unpushed state unless --force.
+    \\still references it, while a linked worktree exists, and, unless
+    \\--force, on dirty, stashed, or unpushed state, on a merge, rebase, am,
+    \\cherry-pick, revert, or bisect in progress, or while it holds files holt
+    \\does not keep, nested repositories, or unsettled kept files, naming the
+    \\command that settles each: for an operation in a submodule git
+    \\directory whose working tree is gone, first the commands bringing that
+    \\tree back, and for one in a git directory that names no working tree,
+    \\--force alone. One in a submodule git directory whose core.worktree
+    \\names something that is not a directory, a symlink to nothing, a path
+    \\under something that is not a directory, or what cannot be read
+    \\refuses, even with --force, naming what is seen
+    \\there and git config --file <module>/config core.worktree, to be
+    \\resolved with git first. On a terminal, without --yes or --force, it
+    \\first offers holt keep --review inline.
     \\At least one of -p and --clone is required.
+    \\
+    \\--force does not override a linked worktree. Each is weighed first, as
+    \\holt worktree -r weighs it: one whose HEAD or per-worktree refs hold a
+    \\commit neither a remote nor another ref holds is named with the
+    \\command keeping it on a holt-kept/ branch or ref, and one with an
+    \\operation in progress or staged changes only its record holds with the
+    \\commands finishing, aborting, or stashing them (for one that is gone,
+    \\after the command bringing it back from its record), one whose record
+    \\holds a submodule git directory with a commit or stash no remote has
+    \\with the command settling it, and one that is there holding nested
+    \\repositories with holt repo adopt for each, and files holt does not
+    \\keep with each of them and holt keep --review <worktree>; a line naming
+    \\how to delete anyway names that worktree's removal with --force. Only a
+    \\worktree holding nothing is named with the command removing it: holt
+    \\worktree ... -r for one holt worktree made, when -p names its project,
+    \\else git worktree remove <worktree>, which for one whose directory is
+    \\gone removes that one record; a locked one is unlocked first, and a
+    \\dirty one is committed or discarded first. A worktree in a state holt
+    \\does not change, as holt worktree --help lists them (a path more than
+    \\one record names, where git worktree remove may reach any of them, or
+    \\one whose .git is gone, leads nowhere, or leads to another git
+    \\directory than its record), and a worktree record git does not list
+    \\(one whose gitdir cannot be read or is missing), with or without
+    \\--force, is not weighed: it is named, once for each path, with what
+    \\git and holt see there and git -C <clone> worktree list, or, for a
+    \\record git does not list, the record's path, to be resolved with git
+    \\first. holt never names git
+    \\worktree repair or prune, which reach every worktree of the clone. On
+    \\Windows, hints are for PowerShell 7, and rm -rf <path> is Remove-Item
+    \\-Recurse -Force -LiteralPath <path>.
+    \\
+    \\A remote holds only what its ssh, git, http, and https URLs on another
+    \\machine list now (git ls-remote): the push URLs of each ref's target
+    \\first, then, while something is not held, its other URLs; none when
+    \\nothing weighed is at risk. Each URL is asked once for each repository
+    \\before the prompt, and again after it only when the prompt waited at a
+    \\terminal (not with --yes), in a session of its own, with no prompt, for
+    \\30 seconds at most, and stopped with holt when SIGINT, SIGTERM, or
+    \\SIGHUP ends it. On a terminal each URL is announced on stderr once; off
+    \\one, a query that has run 5 seconds says which host it waits for. Once
+    \\a URL on a host fails for a reason of the host's, no other URL on that
+    \\host is asked in the run; each is named not asked. A
+    \\local path, a remote helper, and a URL whose host is this machine never
+    \\count as a copy and are not asked. A URL that cannot be asked holds
+    \\nothing, and why is named by holt, never quoted from git. A hint pushes
+    \\a ref by its full name to a full destination, under holt-kept/ unless a
+    \\branch can keep its own name. URLs are shown without their userinfo,
+    \\query, and fragment, so no password or token is printed.
+    \\
+    \\--force waives the recoverability check and the kept-file checks: files
+    \\holt does not keep, uncommitted changes (a symlink by its target), and
+    \\unsettled content are still set aside in kept/ first; nested
+    \\repositories, commits no remote has, and operations in progress, with
+    \\the autostash one holds, are deleted, each named.
+    \\Nothing is deleted if setting aside fails, or if the clone has kept-file
+    \\links while kept/ cannot be reached; a refusal after something was
+    \\set aside says the clone was kept and names each, with where
+    \\kept/.holt-aside/ holds it. The clone's kept files stay in
+    \\kept/<key>/; holt unkeep --repo <key> releases them.
     \\
     \\--clone names the checkout and asks before deleting it. Only --yes skips
     \\that prompt; --force does not, since --force is what waived the
@@ -556,6 +669,7 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
     // deadlock against those commands.
     var content_lock: ?projectlock.Handle = null;
     defer if (content_lock) |l| l.release();
+    var member: ?project_mod.Project = null;
 
     if (a.project) |q| {
         var p = (try common.resolveOne(ctx, q)) orelse return 1;
@@ -589,12 +703,8 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
             return 1;
         }
 
-        _ = p.marker.remove(a.repo);
-        try marker.save(&p.marker, try p.markerPath(alloc));
-        _ = try hub.reconcile(alloc, &ws, &p, false);
-        try ctx.out.print("removed {s} from {s}/{s}\n", .{ a.repo, p.org, p.name });
-
         if (!a.clone) {
+            try unlinkMember(ctx, &p, a.repo);
             if (id) |i| {
                 const others = try ws.projectsUsing(alloc, i);
                 const cp = try i.clonePath(alloc, ws.cfg.code_root);
@@ -608,7 +718,12 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
             }
             return 0;
         }
+        member = p;
     }
+    // With -p, the member is unlinked only once the clone's delete has
+    // succeeded, so a refused or failed delete leaves it in the project.
+    const still: []const u8 = if (member) |m| try std.fmt.allocPrint(alloc, "nothing changed, {s} is still in {s}/{s}", .{ a.repo, m.org, m.name }) else "";
+    const unchanged: []const u8 = if (member != null) try std.mem.concat(alloc, u8, &.{ "; ", still }) else "";
 
     // --clone: only reached when a.clone is true (the usage check above
     // rejects neither -p nor --clone being given). `id` is set whenever -p
@@ -630,48 +745,75 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
     var clone_lock = try projectlock.acquire(alloc, app.envOf(ctx), clone_path);
     defer clone_lock.release();
 
-    const users = try ws.projectsUsing(alloc, target);
-    if (users.len > 0) {
+    var users: std.ArrayList([]const u8) = .empty;
+    for (try ws.projectsUsing(alloc, target)) |u| {
+        if (member) |m| if (std.mem.eql(u8, u.org, m.org) and std.mem.eql(u8, u.name, m.name)) continue;
+        try users.append(alloc, try u.qualified(alloc));
+    }
+    if (users.items.len > 0) {
         try ctx.err.print("holt: clone is still referenced by active project(s):", .{});
-        for (users) |u| try ctx.err.print(" {s}", .{try u.qualified(alloc)});
-        try ctx.err.writeAll("\n");
+        for (users.items) |u| try ctx.err.print(" {s}", .{u});
+        try ctx.err.print("{s}\n", .{unchanged});
         return 1;
     }
 
     if (!fsutil.exists(clone_path)) {
-        try ctx.err.print("holt: no clone at {s}\n", .{try app.tilde(ctx, clone_path)});
+        try ctx.err.print("holt: no clone at {s}{s}\n", .{ try app.tilde(ctx, clone_path), unchanged });
         return 1;
     }
 
-    // A worktree's objects and any unpushed commits live in the main clone's
-    // .git - recover.check below only inspects the main checkout and cannot
-    // see into a linked worktree, so deleting the clone out from under one
-    // destroys whatever it holds. Matches pruneClones' refusal (project.zig),
-    // which also accepts no override: --force bypasses recover.check's verdict
-    // on the main checkout, never this.
+    // Deleting the clone leaves each linked worktree without its repository,
+    // so it is refused, with no override, until each is removed. Each is
+    // weighed first, as worktree -r weighs it: one whose removal would lose
+    // something is not named with a removal until that is settled.
     //
     // Only a repo git can read is asked. A directory with no usable .git fails
-    // the listing for want of a repository, not for a worktree, and reporting
-    // that as a worktree would both misname the state and put it behind the
-    // one gate --force cannot lift; it is recover.check's `.unreadable`
-    // blocker, which --force does override. A readable repo whose listing
-    // still fails is unexplained, so that case keeps failing closed.
+    // the listing for want of a repository, not for a worktree; the deleter
+    // weighs it as git state it cannot read, which --force does override. A
+    // readable repo whose listing still fails is unexplained, so that case
+    // keeps failing closed.
     if (try git.inspectable(alloc, clone_path)) {
         const worktree_count = git.worktreeCount(alloc, clone_path) catch 2;
         if (worktree_count > 1) {
-            try ctx.err.print("holt: {s} has {d} other worktree(s); remove them first (git -C {s} worktree remove <path>):\n", .{ try app.tilde(ctx, clone_path), worktree_count - 1, try app.tilde(ctx, clone_path) });
-            if (git.worktreeList(alloc, clone_path) catch null) |listing| try ctx.err.writeAll(listing);
+            const cq = try ui.quotePath(alloc, app.envOf(ctx), clone_path);
+            const kctx = deleter.keptCtx(ctx) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => {
+                    try ctx.err.print("holt: {s}: this machine's id cannot be read or written ({s}); refusing to delete{s}\n", .{ try app.tilde(ctx, clone_path), @errorName(err), unchanged });
+                    return 1;
+                },
+            };
+            var index: kept.store.KeyIndex = .{ .keys = &.{}, .successors = .empty, .bad = &.{} };
+            if (try deleter.storeState(alloc, kctx.layout) == .ready) index = try kept.store.loadIndex(alloc, kctx.layout);
+            const linked = deleter.linkedTrees(try deleter.Asker.of(ctx), clone_path, .{ .kctx = kctx, .index = &index }) catch |err| switch (err) {
+                error.GitFailed => {
+                    try ctx.err.print("holt: {s} has linked worktrees git cannot list; remove them first (run: git -C {s} worktree list){s}\n", .{ try app.tilde(ctx, clone_path), cq, unchanged });
+                    return 1;
+                },
+                else => return err,
+            };
+            try ctx.err.print("holt: {s} has {d} other worktree(s); remove them first{s}:\n", .{ try app.tilde(ctx, clone_path), linked.len, unchanged });
+            for (linked) |w| try printLinked(ctx, clone_path, member, a.repo, w, linked);
             return 1;
         }
     }
 
-    if (!a.force) {
-        var verdict = try recover.check(alloc, clone_path);
-        if (!verdict.safe()) {
-            try ctx.err.print("holt: {s} has unrecoverable local state, refusing to delete (use --force to override):\n", .{try app.tilde(ctx, clone_path)});
-            try verdict.render(ctx.err);
+    var prepared = switch (try deleter.prepare(ctx, clone_path, .clone, .{ .review = keep_cmd.reviewHeld, .interactive = !a.yes and !a.force and ui.stdinIsTerminal() })) {
+        .refused => |why| {
+            try ctx.err.print("holt: {s}: {s}; refusing to delete{s}\n", .{ try app.tilde(ctx, clone_path), why, unchanged });
             return 1;
-        }
+        },
+        .ready => |p| p,
+    };
+    defer prepared.release();
+    const force_cmd = if (member) |m|
+        try std.fmt.allocPrint(alloc, "holt repo remove {s} -p {s} --clone --force", .{ try ui.shellQuote(alloc, a.repo), try ui.shellQuote(alloc, try m.qualified(alloc)) })
+    else
+        try std.fmt.allocPrint(alloc, "holt repo remove {s} --clone --force", .{try ui.shellQuote(alloc, try common.codeKey(alloc, ws.cfg.code_root, clone_path))});
+    if (prepared.found.blocked() and !a.force) {
+        try prepared.printBlocked(ctx, force_cmd);
+        if (member != null) try ctx.err.print("holt: {s}\n", .{still});
+        return 1;
     }
 
     // Asked last, once every gate has passed, so nobody confirms a delete the
@@ -685,18 +827,129 @@ fn runRemove(ctx: *app.Ctx, a: cli.Args(RemoveSpec)) anyerror!u8 {
             "it is clean and pushed, so it can be cloned again from its remote";
         const msg = try std.fmt.allocPrint(alloc, "delete the local checkout at {s}? {s}", .{ try app.tilde(ctx, clone_path), detail });
         if (!try ui.confirm(ctx.out, msg)) {
-            try ctx.out.writeAll("delete cancelled; clone kept\n");
+            try ctx.out.print("delete cancelled; clone kept{s}\n", .{unchanged});
             return 0;
         }
     }
 
-    try common.removeContent(ctx, clone_path);
+    switch (try prepared.clear(ctx, a.force, if (!a.yes and ui.stdinIsTerminal()) .fresh else .reuse)) {
+        .done => {},
+        .blocked => {
+            try prepared.printBlocked(ctx, force_cmd);
+            if (member != null) try ctx.err.print("holt: {s}\n", .{still});
+            return 1;
+        },
+        .failed => {
+            if (member != null) try ctx.err.print("holt: {s}\n", .{still});
+            return 1;
+        },
+    }
+    if (!try prepared.unchanged(ctx, a.force)) {
+        try ctx.err.print("holt: {s}; run the command again\n", .{try prepared.changedWhy(ctx, "the clone")});
+        if (member != null) try ctx.err.print("holt: {s}\n", .{still});
+        return 1;
+    }
+    prepared.beforeDelete();
+    common.removeContent(ctx, clone_path) catch {
+        if (member) |m| try ctx.err.print("holt: {s} is still in {s}/{s}\n", .{ a.repo, m.org, m.name });
+        return 1;
+    };
+    if (member) |*m| try unlinkMember(ctx, m, a.repo);
     if (std.fs.path.dirname(clone_path)) |owner_dir| {
         fsutil.rmdirIfEmpty(owner_dir);
         if (std.fs.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
     }
     try ctx.out.print("deleted clone at {s}\n", .{try app.tilde(ctx, clone_path)});
+    try prepared.printKeptRemain(ctx);
     return 0;
+}
+
+/// Prints the line or lines for the linked worktree `w` of the clone at
+/// `clone_path`, one of `all`: for one holt leaves to the user
+/// (`deleter.LinkedTree.seen`), `deleter.unresolvedLine`, once for each
+/// path; what removing it destroys, each with the command settling it and
+/// the command removing it anyway, when it holds anything
+/// (`deleter.LinkedTree.atRisk`); else the command removing it. A
+/// worktree `holt worktree` made is removed by that command when
+/// `member`, the project `repo` is a member of, names it, else by git's,
+/// which for one whose directory is gone removes that one record; a
+/// locked one is unlocked first, and a dirty one is committed or discarded
+/// first.
+fn printLinked(ctx: *app.Ctx, clone_path: []const u8, member: ?project_mod.Project, repo: []const u8, w: deleter.LinkedTree, all: []const deleter.LinkedTree) !void {
+    const alloc = ctx.alloc;
+    const env = app.envOf(ctx);
+    if (w.seen) |seen| {
+        for (all) |o| {
+            if (std.mem.eql(u8, o.record, w.record)) break;
+            if (o.seen != null and std.mem.eql(u8, try deleter.resolvedPath(alloc, o.path), try deleter.resolvedPath(alloc, w.path))) return;
+        }
+        return ctx.err.print("  {s}\n", .{try deleter.unresolvedLine(ctx, w.path, seen, try deleter.mainGit(ctx, clone_path))});
+    }
+    const shown = try ui.printable(alloc, try app.tilde(ctx, w.path));
+    const cq = try ui.quotePath(alloc, env, clone_path);
+    const wq = try ui.quotePath(alloc, env, w.path);
+    const unlock: []const u8 = if (w.locked) try std.fmt.allocPrint(alloc, "git -C {s} worktree unlock {s} && ", .{ cq, wq }) else "";
+    const holt_cmd = try holtWorktree(ctx, clone_path, member, repo, w.path);
+    if (w.atRisk()) {
+        const force = if (holt_cmd) |cmd|
+            try std.fmt.allocPrint(alloc, "{s}{s} --force", .{ unlock, cmd })
+        else if (w.link == .absent)
+            try std.fmt.allocPrint(alloc, "{s}git -C {s} worktree remove {s}", .{ unlock, cq, wq })
+        else
+            try std.fmt.allocPrint(alloc, "{s}git -C {s} worktree remove --force {s}", .{ unlock, cq, wq });
+        for (try w.lines(ctx, clone_path, force)) |line| try ctx.err.print("  {s}\n", .{line});
+        return;
+    }
+    const remove = holt_cmd orelse try std.fmt.allocPrint(alloc, "git -C {s} worktree remove {s}", .{ cq, wq });
+    const state: []const u8 = if (w.gone()) ", which is gone" else if (w.locked) ", which is locked" else "";
+    if (w.dirty) return ctx.err.print("  commit or discard the changes in {s}, then (run: {s}{s})\n", .{ shown, unlock, remove });
+    try ctx.err.print("  {s}{s} (run: {s}{s})\n", .{ shown, state, unlock, remove });
+}
+
+/// `holt worktree <project>/<repo> <branch> -r`, which removes the linked
+/// worktree at `path` of the clone at `clone_path` when `holt worktree`
+/// made it there (`<clone>@worktrees/<branch>`) and `member`, the project
+/// `repo` is a member of, names it; null otherwise.
+fn holtWorktree(ctx: *app.Ctx, clone_path: []const u8, member: ?project_mod.Project, repo: []const u8, path: []const u8) !?[]const u8 {
+    const alloc = ctx.alloc;
+    const m = member orelse return null;
+    const dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
+    const branch = for ([_][]const u8{ dir, try fsutil.realPathOrSelf(alloc, dir) }) |d| {
+        if (path.len > d.len + 1 and fsutil.pathIsInside(path, d)) break path[d.len + 1 ..];
+    } else return null;
+    const rel = try alloc.dupe(u8, branch);
+    if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+    if (fsutil.SafeRel.parse(rel) == null) return null;
+    const target = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ try m.qualified(alloc), repo });
+    return try std.fmt.allocPrint(alloc, "holt worktree {s} {s} -r", .{ try ui.shellQuote(alloc, target), try ui.shellQuote(alloc, rel) });
+}
+
+/// `holtWorktree` for the linked worktree at `path` of the clone at
+/// `clone_path`, with the first member of a project of the run's
+/// workspace whose clone is there; null when there is no workspace, or
+/// no such member names it.
+pub fn holtWorktreeOf(ctx: *app.Ctx, clone_path: []const u8, path: []const u8) !?[]const u8 {
+    const alloc = ctx.alloc;
+    const c = ctx.context orelse return null;
+    const want = try fsutil.realPathOrSelf(alloc, clone_path);
+    for (try c.ws.list(alloc)) |p| for (p.marker.entries) |e| {
+        const src = e.source orelse continue;
+        const at = try src.id().clonePath(alloc, c.ws.cfg.code_root);
+        if (!std.mem.eql(u8, try fsutil.realPathOrSelf(alloc, at), want)) continue;
+        if (try holtWorktree(ctx, clone_path, p, e.name, path)) |cmd| return cmd;
+    };
+    return null;
+}
+
+/// Removes the member `repo` from `p`'s marker, under the content lock the
+/// caller holds, and rebuilds its hub.
+fn unlinkMember(ctx: *app.Ctx, p: *project_mod.Project, repo: []const u8) !void {
+    const alloc = ctx.alloc;
+    const ws = ctx.context.?.ws;
+    _ = p.marker.remove(repo);
+    try marker.save(&p.marker, try p.markerPath(alloc));
+    _ = try hub.reconcile(alloc, &ws, p, false);
+    try ctx.out.print("removed {s} from {s}/{s}\n", .{ repo, p.org, p.name });
 }
 
 /// Resolves a code-tree key as `holt list --repos` prints it
@@ -730,7 +983,11 @@ pub const promote_command = app.command(PromoteSpec, .{
     .details =
     \\<repo> is the short name of a local (unpushed) repo that has since gained
     \\a remote, as recorded in markers by "local:<repo>" - not a project
-    \\selector.
+    \\selector. Its kept files move to the new identity before the clone does.
+    \\Its <clone>@worktrees dir moves with it; when that dir cannot be moved,
+    \\each worktree is relinked where it is and the dir is named. A local
+    \\repo that is a linked worktree of another repository is refused,
+    \\naming the adopt of that repository's main clone instead.
     \\
     \\Example:
     \\  holt repo promote scratch --yes
@@ -962,8 +1219,16 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
         return 1;
     }
 
+    if (fsutil.exists(old_path) and try refuseLinked(ctx, old_path, null)) return 1;
+
+    const old_key = try std.fmt.allocPrint(alloc, "local/{s}", .{name});
+    const new_key = try resolved.new_id.relPath(alloc);
     if (dry_run) {
         try printPlan(ctx, alloc, old_path, new_path, resolved.move_needed, referencing);
+        const layout: kept.store.Layout = .{ .synced_root = ws.cfg.synced_root };
+        if (try kept.store.readRecord(alloc, layout, old_key) != null or try kept.rekey.holds(alloc, layout, old_key)) {
+            try ctx.out.print("move kept files kept/{s} -> kept/{s}\n", .{ old_key, new_key });
+        }
         return 0;
     }
 
@@ -987,7 +1252,7 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
 
     // No clone-path lock here, deliberately. It is unnecessary: `archive
     // --prune` can never target this move. The source is a `local:` clone,
-    // which prune always keeps (no upstream -> recover.check fails); the
+    // which prune never weighs (it skips `local:` members); the
     // destination, if it already exists, makes promote refuse above, and if it
     // does not, prune skips it as missing. A concurrent clone of the same
     // remote onto `new_path` is made non-corrupting by git.clone's atomic
@@ -995,10 +1260,15 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
     // Taking a clone lock here WOULD deadlock: promote locks content per
     // referenced project below, so a clone-then-content order here inverts the
     // content-then-clone order add/adopt use.
+    const kept_locks = (try kept_hooks.moveKept(ctx, ctx.err, old_key, new_key, if (resolved.move_needed) old_path else new_path, try std.fmt.allocPrint(alloc, "holt repo promote {s}", .{try ui.shellQuote(alloc, name)}))) orelse return 1;
     if (resolved.move_needed) {
-        common.moveClone(ctx, old_path, new_path) catch return 1;
+        common.moveClone(ctx, old_path, new_path) catch {
+            kept_locks.release();
+            return 1;
+        };
         if (std.fs.path.dirname(old_path)) |old_local_dir| fsutil.rmdirIfEmpty(old_local_dir);
     }
+    kept_locks.release();
 
     var progress: std.ArrayList(Referencing) = .empty;
     for (referencing) |ref| {
@@ -1019,6 +1289,7 @@ fn runPromote(ctx: *app.Ctx, a: cli.Args(PromoteSpec)) anyerror!u8 {
 
     try ctx.out.print("moved {s} -> {s}\n", .{ try app.tilde(ctx, old_path), try app.tilde(ctx, new_path) });
     try ctx.out.print("{d} marker(s) updated, hub(s) rebuilt\n", .{referencing.len});
+    try kept_hooks.hook(ctx, ctx.out, new_path, .{ .path = new_path });
     return 0;
 }
 
@@ -1497,9 +1768,9 @@ test "get: a parseable but unreachable url surfaces git's cause, naming the url"
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    // Loopback with nothing listening: connection refused immediately, no
-    // DNS or network dependency, so the failure is fast and deterministic.
     const url = "https://holt-test.invalid/x/y.git";
+    const override = try testutil.gitUnreachable(arena, root, &.{url});
+    defer override.restore();
     const got = try testutil.runCmd(arena, get_command.run, ws, &.{url});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, url) != null);
@@ -1621,9 +1892,9 @@ test "get: with -p, a parseable but unreachable url surfaces git's cause, not a 
     const ws = try testutil.testWorkspace(arena, root);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
-    // Loopback with nothing listening: connection refused immediately, no
-    // DNS or network dependency, so the failure is fast and deterministic.
-    const url = "git://127.0.0.1:1/acme/widget";
+    const url = "https://holt-test.invalid/acme/widget";
+    const override = try testutil.gitUnreachable(arena, root, &.{url});
+    defer override.restore();
     const got = try testutil.runCmd(arena, get_command.run, ws, &.{ url, "-p", "proj" });
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "failed to clone") != null);
@@ -2240,12 +2511,16 @@ test "remove: --clone deletes an unreferenced checkout" {
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const reach = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = "https://holt-test.invalid/acme/widget", .bare = bare }});
+    defer reach.restore();
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -2259,12 +2534,16 @@ test "remove: --clone asks before deleting, --force does not skip the prompt, on
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const reach = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = "https://holt-test.invalid/acme/widget", .bare = bare }});
+    defer reach.restore();
 
     // Nothing to read is a "no", which is what a non-interactive invocation
     // gets: the prompt names the checkout and the clone survives.
@@ -2299,13 +2578,15 @@ test "remove: --clone asks before deleting, --force does not skip the prompt, on
     try testing.expect(!fsutil.exists(clone_path));
 }
 
-test "remove: --clone with -p keeps the clone when the prompt is declined, but the unlink still stands" {
+test "remove: --clone with -p changes nothing when the prompt is declined" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
@@ -2316,19 +2597,20 @@ test "remove: --clone with -p keeps the clone when the prompt is declined, but t
     defer testing.allocator.free(bare);
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const reach = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = "https://holt-test.invalid/acme/widget", .bare = bare }});
+    defer reach.restore();
 
     ui.stdin_for_test = "";
     defer ui.stdin_for_test = null;
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "clone kept") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "clone kept; nothing changed, widget is still in acme/only") != null);
     try testing.expect(fsutil.exists(clone_path));
 
-    // Declining the delete does not undo the unlink that already happened.
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "only", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
+    try testing.expectEqual(@as(usize, 1), loaded.memberCount());
 }
 
 test "remove: --clone refuses to delete a clone that has a linked worktree, even with --force" {
@@ -2338,6 +2620,8 @@ test "remove: --clone refuses to delete a clone that has a linked worktree, even
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
@@ -2372,6 +2656,8 @@ test "remove: --clone reports an unreadable directory as unreadable, and --force
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     // A directory at an identity path that git cannot read as a repository:
@@ -2381,7 +2667,7 @@ test "remove: --clone reports an unreadable directory as unreadable, and --force
 
     const refused = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(std.mem.indexOf(u8, refused.err, "repository is unreadable") != null);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "could not be read; --force deletes it\n") != null);
     try testing.expect(std.mem.indexOf(u8, refused.err, "other worktree(s)") == null);
     try testing.expect(fsutil.exists(clone_path));
 
@@ -2397,12 +2683,16 @@ test "remove: --clone refuses a dirty clone without --force, then proceeds with 
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const offline = try testutil.gitUnreachable(arena, sb.root, &.{"https://holt-test.invalid/acme/widget"});
+    defer offline.restore();
 
     {
         var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), clone_path, .{});
@@ -2412,7 +2702,8 @@ test "remove: --clone refuses a dirty clone without --force, then proceeds with 
 
     const refused = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(std.mem.indexOf(u8, refused.err, "unrecoverable local state") != null);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "uncommitted changes: ") != null);
+    try testing.expect(std.mem.indexOf(u8, refused.err, "run: git -C ") != null);
     try testing.expect(fsutil.exists(clone_path));
 
     const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--force", "--yes" });
@@ -2427,6 +2718,8 @@ test "remove: --clone refuses while a project still references the repo, naming 
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
@@ -2590,6 +2883,8 @@ test "remove: -p and --clone together unlink and delete when nothing else refere
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
@@ -2600,6 +2895,8 @@ test "remove: -p and --clone together unlink and delete when nothing else refere
     defer testing.allocator.free(bare);
     const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
     try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const reach = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = "https://holt-test.invalid/acme/widget", .bare = bare }});
+    defer reach.restore();
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -2610,13 +2907,15 @@ test "remove: -p and --clone together unlink and delete when nothing else refere
     try testing.expectEqual(@as(usize, 0), loaded.memberCount());
 }
 
-test "remove: -p and --clone together unlink but keep the clone when a second project still references it" {
+test "remove: -p and --clone together change nothing when a second project still references the clone" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
@@ -2634,12 +2933,88 @@ test "remove: -p and --clone together unlink but keep the clone when a second pr
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "first", "--clone" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "acme/second") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "acme/second; nothing changed, widget is still in acme/first") != null);
     try testing.expect(fsutil.exists(clone_path));
 
     const marker_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "first", marker.marker_basename });
     const loaded = try marker.load(arena, marker_path, null);
-    try testing.expectEqual(@as(usize, 0), loaded.memberCount());
+    try testing.expectEqual(@as(usize, 1), loaded.memberCount());
+}
+
+test "remove: -p and --clone on a dirty clone refuse once, through the delete's gates, naming what settles it and changing nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", repos, .empty);
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const offline = try testutil.gitUnreachable(arena, sb.root, &.{"https://holt-test.invalid/acme/widget"});
+    defer offline.restore();
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ clone_path, "untracked.txt" }), .data = "hi\n" });
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone", "--yes" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "unrecoverable local state") == null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "uncommitted changes: ") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "\nholt: nothing changed, widget is still in acme/only\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "holt;") == null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "removed widget") == null);
+    try testing.expect(fsutil.exists(clone_path));
+    const loaded = try marker.load(arena, try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "only", marker.marker_basename }), null);
+    try testing.expectEqual(@as(usize, 1), loaded.memberCount());
+
+    const hint = "holt repo remove widget -p acme/only --clone --force";
+    try testing.expect(std.mem.indexOf(u8, got.err, hint) != null);
+    const forced = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "acme/only", "--clone", "--force", "--yes" });
+    try testing.expectEqual(@as(u8, 0), forced.code);
+    try testing.expect(!fsutil.exists(clone_path));
+}
+
+test "remove: -p and --clone whose delete fails leave the member in the project" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "only", repos, .empty);
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const reach = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = "https://holt-test.invalid/acme/widget", .bare = bare }});
+    defer reach.restore();
+    const stuck = try std.fs.path.join(arena, &.{ clone_path, ".git", "stuck" });
+    try fsutil.ensureDir(stuck);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ stuck, "f" }), .data = "x" });
+    try std.Io.Dir.cwd().setFilePermissions(fsutil.io(), stuck, @enumFromInt(0o500), .{});
+    defer std.Io.Dir.cwd().setFilePermissions(fsutil.io(), stuck, @enumFromInt(0o755), .{}) catch {};
+    if (std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ stuck, "probe" }), .data = "x" })) |_| return error.SkipZigTest else |_| {}
+
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone", "--yes" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, "holt: widget is still in acme/only") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "removed widget") == null);
+    const loaded = try marker.load(arena, try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "only", marker.marker_basename }), null);
+    try testing.expectEqual(@as(usize, 1), loaded.memberCount());
 }
 
 test "remove: -p with an unparseable marker url refuses without falling back to a code-tree key" {
@@ -2649,6 +3024,8 @@ test "remove: -p with an unparseable marker url refuses without falling back to 
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     // The member's short name ("acme/widget") happens to also look like a
@@ -2853,6 +3230,102 @@ test "promote: carries a repo's worktrees along and keeps them working" {
     try testing.expect(!fsutil.exists(wt_old));
     try testing.expect(fsutil.exists(wt_new));
     try testing.expectEqualStrings("feature", (try git.currentBranch(arena, wt_new)).?);
+}
+
+test "promote: relinks each worktree that moved, and one outside the worktrees dir, one at a time, leaving another repository's worktree at a stale record's path and that record as they were" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin = "https://holt-test.invalid/acme/scratch";
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
+
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
+    try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
+    const wt_old = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{local_clone_path}), "feature" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "worktree", "add", "-q", "-b", "feature", wt_old });
+    const outside = try std.fs.path.join(arena, &.{ sb.root, "outside" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "worktree", "add", "-q", "-b", "outside", outside });
+    const shared = try std.fs.path.join(arena, &.{ sb.root, "shared" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "worktree", "add", "-q", "-b", "stale", shared });
+    try std.Io.Dir.cwd().deleteTree(fsutil.io(), shared);
+    const other = try std.fs.path.join(arena, &.{ sb.root, "other" });
+    try cloneWithOrigin(&sb, bare, other, "https://holt-test.invalid/acme/other");
+    try testutil.runGit(&sb, other, &.{ "worktree", "add", "-q", "--detach", shared });
+    const shared_git = try std.fs.path.join(arena, &.{ shared, ".git" });
+    const shared_link = try kept.content.readSmall(arena, shared_git);
+    const stale_gitdir = "worktrees/shared/gitdir";
+    const stale_before = try kept.content.readSmall(arena, try std.fs.path.join(arena, &.{ local_clone_path, ".git", stale_gitdir }));
+
+    const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+
+    const new_clone_path = try (try identity.fromUrl(arena, fake_origin)).clonePath(arena, ws.cfg.code_root);
+    const wt_new = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{new_clone_path}), "feature" });
+    try testing.expectEqualStrings("feature", (try git.currentBranch(arena, wt_new)).?);
+    try testing.expectEqualStrings("outside", (try git.currentBranch(arena, outside)).?);
+    const common_dir = try fsutil.realPathOrSelf(arena, try std.fs.path.join(arena, &.{ new_clone_path, ".git" }));
+    for ([_][]const u8{ wt_new, outside }) |tree| {
+        const found = try git.runInRepo(arena, &.{ "rev-parse", "--path-format=absolute", "--git-common-dir" }, tree);
+        try testing.expectEqualStrings(common_dir, try fsutil.realPathOrSelf(arena, std.mem.trim(u8, found.stdout, " \r\n")));
+    }
+    try testing.expectEqualStrings(shared_link, try kept.content.readSmall(arena, shared_git));
+    try testing.expectEqualStrings(stale_before, try kept.content.readSmall(arena, try std.fs.path.join(arena, &.{ new_clone_path, ".git", stale_gitdir })));
+    const theirs = try git.runInRepo(arena, &.{ "rev-parse", "--path-format=absolute", "--git-common-dir" }, shared);
+    try testing.expectEqualStrings(try fsutil.realPathOrSelf(arena, try std.fs.path.join(arena, &.{ other, ".git" })), try fsutil.realPathOrSelf(arena, std.mem.trim(u8, theirs.stdout, " \r\n")));
+}
+
+test "promote: when the worktrees dir cannot be moved, relinks each worktree where it is, the ones in that dir and the one outside it, and names the dir that was not moved" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin = "https://holt-test.invalid/acme/scratch";
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
+
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
+    try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
+    const old_wt_dir = try std.fmt.allocPrint(arena, "{s}@worktrees", .{local_clone_path});
+    const wt_old = try std.fs.path.join(arena, &.{ old_wt_dir, "feature" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "worktree", "add", "-q", "-b", "feature", wt_old });
+    const outside = try std.fs.path.join(arena, &.{ sb.root, "outside" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "worktree", "add", "-q", "-b", "outside", outside });
+    const new_clone_path = try (try identity.fromUrl(arena, fake_origin)).clonePath(arena, ws.cfg.code_root);
+    const new_wt_dir = try std.fmt.allocPrint(arena, "{s}@worktrees", .{new_clone_path});
+    try fsutil.ensureDir(new_wt_dir);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ new_wt_dir, "blocker" }), .data = "x" });
+
+    const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(fsutil.exists(wt_old));
+    try testing.expectEqualStrings("feature", (try git.currentBranch(arena, wt_old)).?);
+    try testing.expectEqualStrings("outside", (try git.currentBranch(arena, outside)).?);
+    const common_dir = try fsutil.realPathOrSelf(arena, try std.fs.path.join(arena, &.{ new_clone_path, ".git" }));
+    for ([_][]const u8{ wt_old, outside }) |tree| {
+        const found = try git.runInRepo(arena, &.{ "rev-parse", "--path-format=absolute", "--git-common-dir" }, tree);
+        try testing.expectEqualStrings(common_dir, try fsutil.realPathOrSelf(arena, std.mem.trim(u8, found.stdout, " \r\n")));
+    }
+    try testing.expect(std.mem.indexOf(u8, got.err, try std.fmt.allocPrint(arena, "holt: moved clone but could not move its worktrees dir {s} to {s} (", .{ try fsutil.contractTilde(arena, app.envOf_current(), old_wt_dir), try fsutil.contractTilde(arena, app.envOf_current(), new_wt_dir) })) != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "); the worktrees in it were not moved\n") != null);
+    const listed = try git.runInRepo(arena, &.{ "worktree", "list", "--porcelain" }, new_clone_path);
+    try testing.expect(std.mem.indexOf(u8, listed.stdout, "prunable") == null);
 }
 
 test "promote: --dry-run prints the planned move and affected projects, changing nothing" {
@@ -3510,4 +3983,844 @@ test "alias: no matching project exits 1 and reports on stderr" {
     const got = try testutil.runCmd(arena, alias_command.run, ws, &.{ "widget", "gadget", "-p", "nope" });
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+}
+
+const kept_test = kept_hooks.TestBed;
+const kept_interrupt = @import("../kept/interrupt.zig");
+
+/// Replaces `to`'s `kept/` with `from`'s, as a backend delivering every
+/// change, deletions included.
+fn deliverKept(a: std.mem.Allocator, from: *const kept_test, to: *const kept_test) !void {
+    const dst = try std.fs.path.join(a, &.{ to.ws.cfg.synced_root, "kept" });
+    try std.Io.Dir.cwd().deleteTree(fsutil.io(), dst);
+    try kept.content.copyRegular(a, try std.fs.path.join(a, &.{ from.ws.cfg.synced_root, "kept" }), dst);
+}
+
+test "get: links the kept files of the repo into its new clone" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const key = "holt-test.invalid/acme/widget";
+    const first = try bed.clone(key);
+    try bed.write(first, "notes.txt", "notes");
+    try bed.keep(first, "notes.txt");
+    try std.Io.Dir.cwd().deleteTree(fsutil.io(), first);
+
+    const url = "https://holt-test.invalid/acme/widget";
+    const override = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = url, .bare = bed.bare }});
+    defer override.restore();
+    const got = try testutil.runCmd(arena, get_command.run, bed.ws, &.{url});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(try bed.linked(first, key, "notes.txt"));
+    try testing.expectEqualStrings("notes", try bed.read(first, "notes.txt"));
+    try testing.expect(std.mem.indexOf(u8, got.err, try std.fmt.allocPrint(arena, "linked {s}\n", .{try bed.shown(try std.fs.path.join(arena, &.{ first, "notes.txt" }))})) != null);
+}
+
+test "get: without kept/, a fresh clone holding nothing to keep prints no first-use line, and stdout stays the clone path" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.init(arena, &sb, "");
+    defer bed.deinit();
+    const url = "https://holt-test.invalid/acme/widget";
+    const override = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = url, .bare = bed.bare }});
+    defer override.restore();
+    const got = try testutil.runCmd(arena, get_command.run, bed.ws, &.{url});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, kept_hooks.not_set_up) == null);
+    try testing.expect(std.mem.indexOf(u8, got.out, kept_hooks.not_set_up) == null);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "\n"));
+}
+
+test "adopt: moves the kept files to the new key before the clone, and relinks them there" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const src = try bed.clone("tmp/widget");
+    try testutil.runGit(&sb, src, &.{ "remote", "set-url", "origin", "https://holt-test.invalid/acme/widget" });
+    try bed.write(src, ".clasp.json", "{\"scriptId\": \"abc\"}");
+    try bed.keep(src, ".clasp.json");
+    try testutil.runGit(&sb, src, &.{ "branch", "feature" });
+    try testutil.runGit(&sb, src, &.{ "worktree", "add", "-q", try std.fmt.allocPrint(arena, "{s}@worktrees/feature", .{src}), "feature" });
+
+    const got = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{src});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const new_key = "holt-test.invalid/acme/widget";
+    const dest = try fsutil.joinSlashy(arena, bed.ws.cfg.code_root, new_key);
+    try testing.expect(try bed.linked(dest, new_key, ".clasp.json"));
+    try testing.expectEqualStrings("{\"scriptId\": \"abc\"}", try bed.read(dest, ".clasp.json"));
+    const moved_wt = try std.fmt.allocPrint(arena, "{s}@worktrees/feature", .{dest});
+    try testing.expect(try bed.linked(moved_wt, new_key, ".clasp.json"));
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept", "tmp" })));
+    try testing.expect(std.mem.indexOf(u8, got.err, "moved 1 kept path from kept/tmp/widget to kept/holt-test.invalid/acme/widget\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "retargeted ") != null);
+}
+
+test "promote: kept files move with the repo on one machine, and a second machine still on the old identity is told, then retargets after promoting" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const saved = app.environ_override;
+    defer app.environ_override = saved;
+    defer kept_interrupt.at = null;
+    const origin = "https://holt-test.invalid/acme/scratch";
+    const new_key = "holt-test.invalid/acme/scratch";
+
+    var ma = try kept_test.init(arena, &sb, "a");
+    try ma.createStore();
+    const ca = try ma.clone("local/scratch");
+    try testutil.runGit(&sb, ca, &.{ "remote", "set-url", "origin", origin });
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try ma.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+    try ma.write(ca, ".clasp.json", "{\"scriptId\": \"abc\"}");
+    try ma.write(ca, ".superpowers/plan.md", "plan");
+    try ma.keep(ca, ".clasp.json");
+    try ma.keep(ca, ".superpowers");
+
+    var mb = try kept_test.init(arena, &sb, "b");
+    mb.bare = ma.bare;
+    const cb = try mb.clone("local/scratch");
+    try testutil.runGit(&sb, cb, &.{ "remote", "remove", "origin" });
+    try testutil.writeMarker(arena, try mb.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+    try deliverKept(arena, &ma, &mb);
+    const sync_cmd = @import("sync.zig").command;
+    const first_b = try testutil.runCmd(arena, sync_cmd.run, mb.ws, &.{});
+    try testing.expectEqual(@as(u8, 0), first_b.code);
+    try testing.expect(try mb.linked(cb, "local/scratch", ".clasp.json"));
+
+    try ma.use();
+    kept_interrupt.at = .rekey_path;
+    const cut = try testutil.runCmd(arena, promote_command.run, ma.ws, &.{ "scratch", "--yes" });
+    kept_interrupt.at = null;
+    try testing.expectEqual(@as(u8, 1), cut.code);
+    try testing.expect(std.mem.indexOf(u8, cut.err, "cannot move the kept files of kept/local/scratch to kept/holt-test.invalid/acme/scratch: Interrupted; the clone was not moved - run: holt repo promote scratch\n") != null);
+    try testing.expect(fsutil.exists(ca));
+    const moved_first = try (kept.store.Layout{ .synced_root = ma.ws.cfg.synced_root }).copyPath(arena, new_key, ".clasp.json");
+    try testing.expectEqualStrings("{\"scriptId\": \"abc\"}", try kept.content.readSmall(arena, moved_first));
+    const between = try testutil.runCmd(arena, @import("sync.zig").command.run, ma.ws, &.{});
+    try testing.expect(std.mem.indexOf(u8, between.out, " - run: holt repo promote scratch\n") != null);
+
+    const done = try testutil.runCmd(arena, promote_command.run, ma.ws, &.{ "scratch", "--yes" });
+    try testing.expectEqual(@as(u8, 0), done.code);
+    const na = try fsutil.joinSlashy(arena, ma.ws.cfg.code_root, new_key);
+    try testing.expect(try ma.linked(na, new_key, ".clasp.json"));
+    try testing.expect(try ma.linked(na, new_key, ".superpowers"));
+    try testing.expectEqualStrings("plan", try ma.read(na, ".superpowers/plan.md"));
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ ma.ws.cfg.synced_root, "kept", "local", "scratch" })));
+
+    try deliverKept(arena, &ma, &mb);
+    try mb.use();
+    const told = try testutil.runCmd(arena, sync_cmd.run, mb.ws, &.{});
+    try testing.expectEqual(@as(u8, 1), told.code);
+    const want = try std.fmt.allocPrint(arena, "not linked: {s}: this repo moved to {s} - run: git -C {s} remote add origin '{s}' && holt repo promote scratch\n", .{ try mb.shown(try std.fs.path.join(arena, &.{ cb, ".clasp.json" })), new_key, try mb.shown(cb), origin });
+    try testing.expect(std.mem.indexOf(u8, told.out, want) != null);
+
+    try testutil.runGit(&sb, cb, &.{ "remote", "add", "origin", origin });
+    const later = try testutil.runCmd(arena, promote_command.run, mb.ws, &.{ "scratch", "--force" });
+    try testing.expectEqual(@as(u8, 0), later.code);
+    const nb = try fsutil.joinSlashy(arena, mb.ws.cfg.code_root, new_key);
+    try testing.expect(try mb.linked(nb, new_key, ".clasp.json"));
+    try testing.expect(try mb.linked(nb, new_key, ".superpowers"));
+    try testing.expectEqualStrings("{\"scriptId\": \"abc\"}", try mb.read(nb, ".clasp.json"));
+    const settled = try testutil.runCmd(arena, sync_cmd.run, mb.ws, &.{});
+    try testing.expectEqual(@as(u8, 0), settled.code);
+}
+
+test "promote: a clone of a local repo no marker names any more, without origin, is hinted to add and fetch origin, then the chain its fetched state needs, which settles it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const saved = app.environ_override;
+    defer app.environ_override = saved;
+    const origin = "https://holt-test.invalid/acme/scratch";
+    const new_key = "holt-test.invalid/acme/scratch";
+
+    var ma = try kept_test.init(arena, &sb, "a");
+    try ma.createStore();
+    const ca = try ma.clone("local/scratch");
+    try testutil.runGit(&sb, ca, &.{ "remote", "set-url", "origin", origin });
+    var local_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try local_repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try ma.ws.projectsRoot(arena), "acme", "proj", local_repos, .empty);
+    try ma.write(ca, ".clasp.json", "{\"scriptId\": \"abc\"}");
+    try ma.keep(ca, ".clasp.json");
+
+    var mb = try kept_test.init(arena, &sb, "b");
+    mb.bare = ma.bare;
+    const cb = try mb.clone("local/scratch");
+    try testutil.runGit(&sb, cb, &.{ "remote", "remove", "origin" });
+    try testutil.writeMarker(arena, try mb.ws.projectsRoot(arena), "acme", "proj", local_repos, .empty);
+    try deliverKept(arena, &ma, &mb);
+    const sync_cmd = @import("sync.zig").command;
+    try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(arena, sync_cmd.run, mb.ws, &.{})).code);
+    try testing.expect(try mb.linked(cb, "local/scratch", ".clasp.json"));
+
+    try ma.use();
+    try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(arena, promote_command.run, ma.ws, &.{ "scratch", "--yes" })).code);
+    const na = try fsutil.joinSlashy(arena, ma.ws.cfg.code_root, new_key);
+    try testutil.runGit(&sb, na, &.{ "commit", "-q", "--allow-empty", "-m", "after the promote" });
+    try testutil.runGit(&sb, na, &.{ "push", "-q", ma.bare, "HEAD" });
+    try deliverKept(arena, &ma, &mb);
+    try mb.use();
+    var remote_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try remote_repos.put(arena, "scratch", origin);
+    try testutil.writeMarker(arena, try mb.ws.projectsRoot(arena), "acme", "proj", remote_repos, .empty);
+
+    try testutil.runGit(&sb, cb, &.{ "commit", "-q", "--allow-empty", "-m", "only on b" });
+    const told = try testutil.runCmd(arena, sync_cmd.run, mb.ws, &.{});
+    try testing.expectEqual(@as(u8, 1), told.code);
+    const at = try mb.shown(cb);
+    const want = try std.fmt.allocPrint(arena, " - run: git -C {s} remote add origin '{s}' && git -C {s} fetch origin && holt sync\n", .{ at, origin, at });
+    try testing.expect(std.mem.indexOf(u8, told.out, want) != null);
+    try testing.expect(std.mem.indexOf(u8, told.out, "holt repo promote") == null);
+
+    try testutil.runGit(&sb, cb, &.{ "remote", "add", "origin", origin });
+    try testutil.runGit(&sb, cb, &.{ "config", try std.fmt.allocPrint(arena, "url.{s}.insteadOf", .{ma.bare}), origin });
+    try testutil.runGit(&sb, cb, &.{ "fetch", "-q", "origin" });
+    const next = try testutil.runCmd(arena, sync_cmd.run, mb.ws, &.{});
+    try testing.expectEqual(@as(u8, 1), next.code);
+    const branch = (try git.currentBranch(arena, cb)).?;
+    const pull = try std.fmt.allocPrint(arena, "git -C {s} pull --rebase origin {s}", .{ at, branch });
+    const chain = try std.fmt.allocPrint(arena, " - run: git -C {s} fetch origin && {s} && git -C {s} push -u origin HEAD && holt repo adopt {s}\n", .{ at, pull, at, at });
+    try testing.expect(std.mem.indexOf(u8, next.out, chain) != null);
+    try testutil.runGit(&sb, cb, &.{ "fetch", "-q", "origin" });
+    try testutil.runGit(&sb, cb, &.{ "pull", "-q", "--rebase", "origin", branch });
+    try testutil.runGit(&sb, cb, &.{ "push", "-q", "-u", "origin", "HEAD" });
+    const adopted = try testutil.runCmd(arena, adopt_command.run, mb.ws, &.{cb});
+    try testing.expectEqual(@as(u8, 0), adopted.code);
+    const nb = try fsutil.joinSlashy(arena, mb.ws.cfg.code_root, new_key);
+    try testing.expect(try mb.linked(nb, new_key, ".clasp.json"));
+    try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(arena, sync_cmd.run, mb.ws, &.{})).code);
+}
+
+test "promote: --dry-run names the kept move and moves nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const c = try bed.clone("local/scratch");
+    try testutil.runGit(&sb, c, &.{ "remote", "set-url", "origin", "https://holt-test.invalid/acme/scratch" });
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+    try bed.write(c, "notes.txt", "notes");
+    try bed.keep(c, "notes.txt");
+    const before = try kept_hooks.snapshot(arena, bed.ws.cfg.synced_root, null);
+
+    const got = try testutil.runCmd(arena, promote_command.run, bed.ws, &.{ "scratch", "--dry-run" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "move kept files kept/local/scratch -> kept/holt-test.invalid/acme/scratch\n") != null);
+    try testing.expectEqualStrings(before, try kept_hooks.snapshot(arena, bed.ws.cfg.synced_root, null));
+}
+
+var lock_probe: ?struct { ctx: kept.Ctx, held: usize = 0, free: usize = 0 } = null;
+
+fn probeLocks(point: kept_interrupt.Point) void {
+    if (point != .rekey_record and point != .rekey_path) return;
+    const p = &(lock_probe orelse return);
+    for ([_][]const u8{ "local/scratch", "holt-test.invalid/acme/scratch" }) |key| {
+        if (kept.lockKey(p.ctx, key)) |h| {
+            h.release();
+            p.free += 1;
+        } else |err| {
+            if (err == error.WouldBlock) p.held += 1;
+        }
+    }
+    lock_probe = p.*;
+}
+
+test "promote: both keys stay locked while the kept files move" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const c = try bed.clone("local/scratch");
+    try testutil.runGit(&sb, c, &.{ "remote", "set-url", "origin", "https://holt-test.invalid/acme/scratch" });
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+    try bed.write(c, "notes.txt", "notes");
+    try bed.keep(c, "notes.txt");
+
+    const ctx_mod = @import("../kept/ctx.zig");
+    ctx_mod.lock_nonblocking_for_test = true;
+    defer ctx_mod.lock_nonblocking_for_test = false;
+    lock_probe = .{ .ctx = try bed.kc() };
+    defer lock_probe = null;
+    kept_interrupt.hook = probeLocks;
+    defer kept_interrupt.hook = null;
+    const got = try testutil.runCmd(arena, promote_command.run, bed.ws, &.{ "scratch", "--yes" });
+    kept_interrupt.hook = null;
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expectEqual(@as(usize, 4), lock_probe.?.held);
+    try testing.expectEqual(@as(usize, 0), lock_probe.?.free);
+    try testing.expect(try bed.linked(try fsutil.joinSlashy(arena, bed.ws.cfg.code_root, "holt-test.invalid/acme/scratch"), "holt-test.invalid/acme/scratch", "notes.txt"));
+}
+
+/// A kept store and a clone at `<code_root>/tmp/widget` whose origin files
+/// it under `holt-test.invalid/acme/widget`, keeping `.clasp.json` and
+/// `notes.txt`.
+fn adoptBed(arena: std.mem.Allocator, sb: *testutil.Sandbox) !struct { bed: kept_test, src: []const u8 } {
+    var bed = try kept_test.init(arena, sb, "");
+    try bed.createStore();
+    const src = try bed.clone("tmp/widget");
+    try testutil.runGit(sb, src, &.{ "remote", "set-url", "origin", "https://holt-test.invalid/acme/widget" });
+    try bed.write(src, ".clasp.json", "{\"scriptId\": \"abc\"}");
+    try bed.write(src, "notes.txt", "notes");
+    try bed.keep(src, ".clasp.json");
+    try bed.keep(src, "notes.txt");
+    return .{ .bed = bed, .src = src };
+}
+
+const adopted_key = "holt-test.invalid/acme/widget";
+
+test "adopt: interrupted while the kept files move, the clone stays, sync names the adopt that finishes it, and rerunning adopt does" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    defer kept_interrupt.at = null;
+    var k = try adoptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+    const shown = try bed.shown(k.src);
+
+    kept_interrupt.at = .rekey_path;
+    const cut = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+    kept_interrupt.at = null;
+    try testing.expectEqual(@as(u8, 1), cut.code);
+    try testing.expect(std.mem.indexOf(u8, cut.err, try std.fmt.allocPrint(arena, "the clone was not moved - run: holt repo adopt {s}\n", .{shown})) != null);
+    try testing.expect(fsutil.exists(k.src));
+
+    const between = try testutil.runCmd(arena, @import("sync.zig").command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(u8, 1), between.code);
+    try testing.expect(std.mem.indexOf(u8, between.out, try std.fmt.allocPrint(arena, " - run: holt repo adopt {s}\n", .{shown})) != null);
+    try testing.expectEqualStrings("notes", try bed.read(k.src, "notes.txt"));
+    try testing.expectEqualStrings("{\"scriptId\": \"abc\"}", try bed.read(k.src, ".clasp.json"));
+
+    const done = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+    try testing.expectEqual(@as(u8, 0), done.code);
+    const dest = try fsutil.joinSlashy(arena, bed.ws.cfg.code_root, adopted_key);
+    try testing.expect(try bed.linked(dest, adopted_key, ".clasp.json"));
+    try testing.expect(try bed.linked(dest, adopted_key, "notes.txt"));
+    try testing.expectEqualStrings("notes", try bed.read(dest, "notes.txt"));
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept", "tmp" })));
+}
+
+test "adopt: interrupted while a path the new key holds differently is set aside, nothing moves, and rerunning sets the old copy aside and names it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    defer kept_interrupt.at = null;
+    var k = try adoptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+    const layout: kept.store.Layout = .{ .synced_root = bed.ws.cfg.synced_root };
+    const index = try kept.store.loadIndex(arena, layout);
+    _ = try kept.store.ensureKey(arena, layout, &index, adopted_key, null, null, &.{});
+    const theirs = try layout.copyPath(arena, adopted_key, ".clasp.json");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = theirs, .data = "{\"scriptId\": \"theirs\"}" });
+    try kept.store.writeFact(arena, layout, adopted_key, "000000000000000b", ".clasp.json", .file, &(try kept.content.hashFile(arena, theirs)));
+    const ours = try layout.copyPath(arena, "tmp/widget", ".clasp.json");
+
+    for ([_]kept_interrupt.Point{ .aside_copied, .rekey_aside }) |point| {
+        kept_interrupt.at = point;
+        const cut = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+        kept_interrupt.at = null;
+        try testing.expectEqual(@as(u8, 1), cut.code);
+        try testing.expect(fsutil.exists(k.src));
+        try testing.expectEqualStrings("{\"scriptId\": \"abc\"}", try kept.content.readSmall(arena, ours));
+        try testing.expectEqual(@as(usize, 1), (try kept.store.loadKeyState(arena, layout, "tmp/widget")).factsFor(".clasp.json").len);
+    }
+
+    const done = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+    try testing.expectEqual(@as(u8, 0), done.code);
+    try testing.expect(std.mem.indexOf(u8, done.err, "kept/holt-test.invalid/acme/widget/.clasp.json already held different content; the copy from kept/tmp/widget is set aside - to use it instead, run: holt keep --take-aside ") != null);
+    const dest = try fsutil.joinSlashy(arena, bed.ws.cfg.code_root, adopted_key);
+    try testing.expectEqualStrings("{\"scriptId\": \"theirs\"}", try bed.read(dest, ".clasp.json"));
+    try testing.expectEqualStrings("notes", try bed.read(dest, "notes.txt"));
+}
+
+test "adopt: a kept file that has not arrived, a link in the old key, and a new key holding stray files each stop the move with what to do" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var k = try adoptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+    const layout: kept.store.Layout = .{ .synced_root = bed.ws.cfg.synced_root };
+    const notes = try layout.copyPath(arena, "tmp/widget", "notes.txt");
+    const clasp = try layout.copyPath(arena, "tmp/widget", ".clasp.json");
+    const new_dir = try layout.keyDir(arena, adopted_key);
+
+    try fsutil.removePath(notes);
+    try fsutil.removePath(clasp);
+    try kept.content.createLink(try std.fs.path.join(arena, &.{ sb.root, "elsewhere" }), clasp, .file);
+    const got = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(fsutil.exists(k.src));
+    try testing.expect(std.mem.indexOf(u8, got.err, try std.fmt.allocPrint(arena, "holt: {s} has not arrived yet (not downloaded, or deleted elsewhere) - wait for {s} to finish downloading it, or if it was deleted, run: holt unkeep {s}\n", .{ try bed.shown(notes), "your cloud client", try bed.shown(try std.fs.path.join(arena, &.{ k.src, "notes.txt" })) })) != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, try std.fmt.allocPrint(arena, "holt: {s} is a link or a special file, which holt does not move - replace it with a regular file, or remove it\n", .{try bed.shown(clasp)})) != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "holt: the clone was not moved - once the paths above are settled, run: holt repo adopt ") != null);
+
+    try fsutil.removePath(clasp);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = clasp, .data = "{\"scriptId\": \"abc\"}" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = notes, .data = "notes" });
+    try std.Io.Dir.cwd().deleteTree(fsutil.io(), new_dir);
+    try bed.write(new_dir, "stray.txt", "stray");
+    const stray = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+    try testing.expectEqual(@as(u8, 1), stray.code);
+    try testing.expect(std.mem.indexOf(u8, stray.err, try std.fmt.allocPrint(arena, "holt: {s} already holds files but no record, so holt will not file this repo's kept files there; the clone was not moved - move those files out of it, then run: holt repo adopt {s}\n", .{ try bed.shown(new_dir), try bed.shown(k.src) })) != null);
+}
+
+test "adopt: a clone with no commit keeps its files where they are, and says to commit first" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const raw = try fsutil.joinSlashy(arena, bed.ws.cfg.code_root, "tmp/scratch");
+    try fsutil.ensureDir(raw);
+    try testutil.runGit(&sb, raw, &.{ "init", "-q" });
+    const src = try fsutil.realPathOrSelf(arena, raw);
+    try bed.write(src, "notes.txt", "notes");
+    try bed.keep(src, "notes.txt");
+
+    const got = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{src});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.err, try std.fmt.allocPrint(arena, "holt: kept/local/scratch needs the repo's first commit, and this clone has none; the clone was not moved - commit once, then run: holt repo adopt {s}\n", .{try bed.shown(src)})) != null);
+    try testing.expect(fsutil.exists(src));
+    try testing.expect(try bed.linked(src, "tmp/scratch", "notes.txt"));
+}
+
+test "get: a kept store that cannot be read is reported, and the clone is still made" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_test.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const url = "https://holt-test.invalid/acme/widget";
+    const override = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = url, .bare = bed.bare }});
+    defer override.restore();
+
+    // Mode bits don't gate access on Windows, so this is POSIX-only.
+    if (@import("builtin").os.tag != .windows) {
+        const synced = bed.ws.cfg.synced_root;
+        try std.Io.Dir.cwd().setFilePermissions(testing.io, synced, std.Io.File.Permissions.fromMode(0o000), .{});
+        defer std.Io.Dir.cwd().setFilePermissions(testing.io, synced, std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+
+        const got = try testutil.runCmd(arena, get_command.run, bed.ws, &.{url});
+        try testing.expectEqual(@as(u8, 0), got.code);
+        try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "\n"));
+        try testing.expect(std.mem.indexOf(u8, got.err, "kept files not linked in ") != null);
+    }
+}
+
+test "adopt: a kept store that cannot be read keeps the clone where it is, and says so" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var k = try adoptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+
+    if (@import("builtin").os.tag != .windows) {
+        const synced = bed.ws.cfg.synced_root;
+        try std.Io.Dir.cwd().setFilePermissions(testing.io, synced, std.Io.File.Permissions.fromMode(0o000), .{});
+        defer std.Io.Dir.cwd().setFilePermissions(testing.io, synced, std.Io.File.Permissions.fromMode(0o755), .{}) catch {};
+
+        const got = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expect(std.mem.indexOf(u8, got.err, try std.fmt.allocPrint(arena, "; the clone was not moved - make it readable, then run: holt repo adopt {s}\n", .{try bed.shown(k.src)})) != null);
+        try testing.expect(fsutil.exists(k.src));
+    }
+}
+
+test "adopt: a clone already at its identity path gets what an earlier identity of its key still holds" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var k = try adoptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+    const first = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{k.src});
+    try testing.expectEqual(@as(u8, 0), first.code);
+    const dest = try fsutil.joinSlashy(arena, bed.ws.cfg.code_root, adopted_key);
+    const layout: kept.store.Layout = .{ .synced_root = bed.ws.cfg.synced_root };
+    const late = try layout.copyPath(arena, "tmp/widget", "late.txt");
+    try bed.write(try layout.keyDir(arena, "tmp/widget"), "late.txt", "arrived late");
+    try kept.store.writeFact(arena, layout, "tmp/widget", "000000000000000b", "late.txt", .file, &(try kept.content.hashFile(arena, late)));
+
+    const again = try testutil.runCmd(arena, adopt_command.run, bed.ws, &.{dest});
+    try testing.expectEqual(@as(u8, 0), again.code);
+    try testing.expect(std.mem.indexOf(u8, again.err, "moved 1 kept path from kept/tmp/widget to kept/holt-test.invalid/acme/widget\n") != null);
+    try testing.expect(try bed.linked(dest, adopted_key, "late.txt"));
+    try testing.expectEqualStrings("arrived late", try bed.read(dest, "late.txt"));
+    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept", "tmp" })));
+}
+
+test "remove: --clone refuses a clone whose uncommitted change only a paused rebase --autostash holds, naming the rebase with the commands that finish or abort it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(&sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const reach = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = "https://holt-test.invalid/acme/widget", .bare = bare }});
+    defer reach.restore();
+    {
+        var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), clone_path, .{});
+        defer dir.close(fsutil.io());
+        try dir.writeFile(fsutil.io(), .{ .sub_path = "README", .data = "unsaved work\n" });
+    }
+    try testutil.runGit(&sb, clone_path, &.{ "-c", "sequence.editor=sed -i.orig s/^pick/edit/", "rebase", "-i", "--autostash", "--root" });
+    const cq = try ui.quotePath(arena, app.envOf_current(), try fsutil.realPathOrSelf(arena, clone_path));
+    const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "holt-test.invalid/acme/widget", "--clone", "--yes" });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(fsutil.exists(clone_path));
+    try testing.expect(std.mem.indexOf(u8, got.err, try std.fmt.allocPrint(arena, "; finish it or abort it (run: git -C {s} rebase --continue, or git -C {s} rebase --abort)\n", .{ cq, cq })) != null);
+    try testing.expect(std.mem.indexOf(u8, got.err, "  rebase in progress in ") != null);
+}
+
+test "remove --clone: a linked worktree's line naming how to delete anyway names the command removing that worktree with --force, and one holt leaves to the user is named with what is seen there and git worktree list alone" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(a, sb.root);
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(a, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(a, try ws.projectsRoot(a), "acme", "proj", repos, .empty);
+    var out: std.Io.Writer.Allocating = .init(a);
+    var err_w: std.Io.Writer.Allocating = .init(a);
+    var ctx: app.Ctx = .{ .alloc = a, .io = testing.io, .context = .{ .ws = ws, .color = false, .env = app.envOf_current() }, .out = &out.writer, .err = &err_w.writer, .argv = &.{} };
+    const member = (try common.resolveOne(&ctx, "acme/proj")).?;
+    const clone = try fsutil.joinSlashy(a, ws.cfg.code_root, "holt-test.invalid/acme/widget");
+    const linked = try std.fs.path.join(a, &.{ sb.root, "linked" });
+    const made = try std.fmt.allocPrint(a, "{s}@worktrees/feature", .{clone});
+    const env = app.envOf_current();
+    const cq = try ui.quotePath(a, env, clone);
+    const lq = try ui.quotePath(a, env, linked);
+    const risk: deleter.RiskAt = .{ .repo = clone, .risk = .{ .what = .unasked, .refs = &.{"refs/heads/x"}, .remote = "origin", .url = "https://holt-test.invalid/acme/widget", .why = "timed out" } };
+    const Case = struct { tree: deleter.LinkedTree, holt: bool = false, force: []const u8 };
+    const record = try fsutil.joinSlashy(a, clone, ".git/worktrees/linked");
+    const cases = [_]Case{
+        .{ .tree = .{ .path = linked, .record = record }, .force = try std.fmt.allocPrint(a, "git -C {s} worktree remove --force {s}", .{ cq, lq }) },
+        .{ .tree = .{ .path = linked, .record = record, .locked = true }, .force = try std.fmt.allocPrint(a, "git -C {s} worktree unlock {s} && git -C {s} worktree remove --force {s}", .{ cq, lq, cq, lq }) },
+        .{ .tree = .{ .path = linked, .record = record, .link = .absent }, .force = try std.fmt.allocPrint(a, "git -C {s} worktree remove {s}", .{ cq, lq }) },
+        .{ .tree = .{ .path = made, .record = record }, .holt = true, .force = "holt worktree acme/proj/widget feature -r --force" },
+    };
+    for (cases) |c| {
+        err_w.clearRetainingCapacity();
+        var tree = c.tree;
+        tree.risks = &.{risk};
+        try printLinked(&ctx, clone, if (c.holt) member else null, "widget", tree, &.{tree});
+        const want = try std.fmt.allocPrint(a, "; reconnect and run again, or {s} deletes it\n", .{c.force});
+        if (std.mem.indexOf(u8, err_w.written(), want) == null) {
+            std.debug.print("wanted {s} in:\n{s}\n", .{ want, err_w.written() });
+            return error.TestUnexpectedResult;
+        }
+    }
+    err_w.clearRetainingCapacity();
+    const seen = "a linked working tree whose .git is gone";
+    const left: deleter.LinkedTree = .{ .path = linked, .record = record, .link = .unresolved, .seen = seen, .risks = &.{risk} };
+    try printLinked(&ctx, clone, null, "widget", left, &.{ left, .{ .path = linked, .record = "other", .link = .unresolved, .seen = seen } });
+    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "  {s}: {s}; holt does not change it: resolve it with git (git -C {s} worktree list), then run again\n", .{ lq, seen, cq }), err_w.written());
+}
+
+test "promote: a worktree outside the worktrees dir made with relative paths is relinked and its record pointed at it, while one made so in the worktrees dir moves along untouched" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin = "https://holt-test.invalid/acme/scratch";
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
+    try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
+    const outside = try std.fs.path.join(arena, &.{ sb.root, "outside" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "-c", "worktree.useRelativePaths=true", "worktree", "add", "-q", "-b", "outside", outside });
+    const wt_old = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{local_clone_path}), "feature" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "branch", "feature" });
+    try git.worktreeAdd(arena, local_clone_path, wt_old, "feature", null);
+    const inside_link = try kept.content.readSmall(arena, try std.fs.path.join(arena, &.{ wt_old, ".git" }));
+
+    const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
+    if (got.code != 0) std.debug.print("{s}", .{got.err});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const new_clone_path = try (try identity.fromUrl(arena, fake_origin)).clonePath(arena, ws.cfg.code_root);
+    const wt_new = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{new_clone_path}), "feature" });
+    for ([_][]const u8{ outside, wt_new }) |tree| {
+        const st = try git.runInRepo(arena, &.{ "status", "--porcelain" }, tree);
+        if (st.status != 0) std.debug.print("{s}: {s}\n", .{ tree, st.stderr });
+        try testing.expectEqual(@as(u32, 0), st.status);
+    }
+    if (!std.fs.path.isAbsolute(std.mem.trimEnd(u8, inside_link, "\r\n")["gitdir: ".len..]))
+        try testing.expectEqualStrings(inside_link, try kept.content.readSmall(arena, try std.fs.path.join(arena, &.{ wt_new, ".git" })));
+    const listed = try git.runInRepo(arena, &.{ "worktree", "list", "--porcelain" }, new_clone_path);
+    if (std.mem.indexOf(u8, listed.stdout, "prunable") != null) std.debug.print("{s}", .{listed.stdout});
+    try testing.expect(std.mem.indexOf(u8, listed.stdout, "prunable") == null);
+}
+
+test "promote: a worktree of a clone with a separate git dir has its record pointed at where it moved" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin = "https://holt-test.invalid/acme/scratch";
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
+    const sep_dir = try std.fs.path.join(arena, &.{ sb.root, "gitdirs", "scratch.git" });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ sb.root, "gitdirs" }));
+    try testutil.runGit(&sb, null, &.{ "clone", "-q", "--separate-git-dir", sep_dir, bare, local_clone_path });
+    try testutil.runGit(&sb, local_clone_path, &.{ "remote", "set-url", "origin", fake_origin });
+    const wt_old = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{local_clone_path}), "feature" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "worktree", "add", "-q", "-b", "feature", wt_old });
+
+    const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
+    if (got.code != 0) std.debug.print("{s}", .{got.err});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const new_clone_path = try (try identity.fromUrl(arena, fake_origin)).clonePath(arena, ws.cfg.code_root);
+    const wt_new = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{new_clone_path}), "feature" });
+    try testing.expectEqualStrings("feature", (try git.currentBranch(arena, wt_new)).?);
+    const listed = try git.runInRepo(arena, &.{ "worktree", "list", "--porcelain" }, new_clone_path);
+    if (std.mem.indexOf(u8, listed.stdout, "prunable") != null) std.debug.print("{s}", .{listed.stdout});
+    try testing.expect(std.mem.indexOf(u8, listed.stdout, "prunable") == null);
+}
+
+test "promote: when the worktrees dir cannot be moved, a worktree holt made with relative paths is relinked where it is and stays unprunable" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const bare = try testutil.makeBareRepo(&sb, "origin.git");
+    defer testing.allocator.free(bare);
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const fake_origin = "https://holt-test.invalid/acme/scratch";
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "scratch", "local:scratch");
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
+    const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
+    try cloneWithOrigin(&sb, bare, local_clone_path, fake_origin);
+    const wt_old = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{local_clone_path}), "feature" });
+    try testutil.runGit(&sb, local_clone_path, &.{ "branch", "feature" });
+    try git.worktreeAdd(arena, local_clone_path, wt_old, "feature", null);
+    const new_clone_path = try (try identity.fromUrl(arena, fake_origin)).clonePath(arena, ws.cfg.code_root);
+    const new_wt_dir = try std.fmt.allocPrint(arena, "{s}@worktrees", .{new_clone_path});
+    try fsutil.ensureDir(new_wt_dir);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ new_wt_dir, "blocker" }), .data = "x" });
+
+    const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
+    if (got.code != 0) std.debug.print("{s}", .{got.err});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const st = try git.runInRepo(arena, &.{ "status", "--porcelain" }, wt_old);
+    if (st.status != 0) std.debug.print("{s}\n", .{st.stderr});
+    try testing.expectEqual(@as(u32, 0), st.status);
+    const listed = try git.runInRepo(arena, &.{ "worktree", "list", "--porcelain" }, new_clone_path);
+    if (std.mem.indexOf(u8, listed.stdout, "prunable") != null) std.debug.print("{s}", .{listed.stdout});
+    try testing.expect(std.mem.indexOf(u8, listed.stdout, "prunable") == null);
+}
+
+test "promote: a worktree holt made with relative paths in a clone with a separate git dir works where it moved, the code root reached through a symlink to another depth or not" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    for ([_]bool{ false, true }) |linked_root| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var sb = try testutil.Sandbox.init(testing.allocator);
+        defer sb.deinit();
+        const bare = try testutil.makeBareRepo(&sb, "origin.git");
+        defer testing.allocator.free(bare);
+        const ws = try testutil.testWorkspace(arena, sb.root);
+        if (linked_root) {
+            const deep = try std.fs.path.join(arena, &.{ sb.root, "deep", "er", "code" });
+            try fsutil.ensureDir(deep);
+            try std.Io.Dir.cwd().symLink(fsutil.io(), deep, ws.cfg.code_root, .{ .is_directory = true });
+        }
+        const fake_origin = "https://holt-test.invalid/acme/scratch";
+        var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        try repos.put(arena, "scratch", "local:scratch");
+        try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos, .empty);
+        const local_clone_path = try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
+        const sep_dir = try std.fs.path.join(arena, &.{ sb.root, "gitdirs", "scratch.git" });
+        try fsutil.ensureDir(try std.fs.path.join(arena, &.{ sb.root, "gitdirs" }));
+        try testutil.runGit(&sb, null, &.{ "clone", "-q", "--separate-git-dir", sep_dir, bare, local_clone_path });
+        try testutil.runGit(&sb, local_clone_path, &.{ "remote", "set-url", "origin", fake_origin });
+        const wt_old = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{local_clone_path}), "feature" });
+        try testutil.runGit(&sb, local_clone_path, &.{ "branch", "feature" });
+        try git.worktreeAdd(arena, local_clone_path, wt_old, "feature", null);
+
+        const got = try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes" });
+        if (got.code != 0) std.debug.print("{s}{s}\n", .{ got.out, got.err });
+        try testing.expectEqual(@as(u8, 0), got.code);
+        const new_clone_path = try (try identity.fromUrl(arena, fake_origin)).clonePath(arena, ws.cfg.code_root);
+        const wt_new = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{new_clone_path}), "feature" });
+        const st = try git.runInRepo(arena, &.{ "status", "--porcelain" }, wt_new);
+        if (st.status != 0) std.debug.print("linked root {}: {s}\n", .{ linked_root, st.stderr });
+        try testing.expectEqual(@as(u32, 0), st.status);
+        const listed = try git.runInRepo(arena, &.{ "worktree", "list", "--porcelain" }, new_clone_path);
+        if (std.mem.indexOf(u8, listed.stdout, "prunable") != null) std.debug.print("linked root {}: {s}", .{ linked_root, listed.stdout });
+        try testing.expect(std.mem.indexOf(u8, listed.stdout, "prunable") == null);
+    }
+}
+
+fn unlistedRecordSetup(arena: std.mem.Allocator, sb: *testutil.Sandbox, ws: anytype, gitdir_dir: bool) !struct { clone: []const u8, record: []const u8 } {
+    const bare_raw = try testutil.makeBareRepo(sb, "origin.git");
+    const bare = try arena.dupe(u8, bare_raw);
+    testing.allocator.free(bare_raw);
+    const work = try std.fs.path.join(arena, &.{ sb.root, "work-other" });
+    try testutil.runGit(sb, null, &.{ "clone", bare, work });
+    try testutil.runGit(sb, work, &.{ "checkout", "-b", "other" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ work, "other.txt" }), .data = "other\n" });
+    try testutil.runGit(sb, work, &.{ "add", "other.txt" });
+    try testutil.runGit(sb, work, &.{ "commit", "-m", "other" });
+    try testutil.runGit(sb, work, &.{ "push", "origin", "other" });
+    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+    try cloneWithOrigin(sb, bare, clone_path, "https://holt-test.invalid/acme/widget");
+    const wt = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "wt" });
+    try fsutil.ensureDir(std.fs.path.dirname(wt).?);
+    try testutil.runGit(sb, clone_path, &.{ "worktree", "add", "--detach", wt, "origin/main" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ wt, "README" }), .data = "USER WORK ONLY HERE\n" });
+    try testutil.runGit(sb, wt, &.{ "merge", "--autostash", "--no-ff", "--no-commit", "origin/other" });
+    const record = try std.fs.path.join(arena, &.{ clone_path, ".git", "worktrees", "wt" });
+    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ record, "MERGE_AUTOSTASH" })));
+    const gitdir = try std.fs.path.join(arena, &.{ record, "gitdir" });
+    try fsutil.removePath(gitdir);
+    if (gitdir_dir) try std.Io.Dir.cwd().createDirPath(fsutil.io(), gitdir);
+    return .{ .clone = clone_path, .record = record };
+}
+
+test "remove --clone: a worktree record git does not list, holding no gitdir or an unreadable one, is refused with what is seen there and the record's path, which is there, with or without --force, and left with the clone as it was" {
+    for ([_]bool{ true, false }) |gitdir_dir| for ([_]bool{ false, true }) |force| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var sb = try testutil.Sandbox.init(testing.allocator);
+        defer sb.deinit();
+        const state = try testutil.stateScope(arena, sb.root);
+        defer state.restore();
+        const ws = try testutil.testWorkspace(arena, sb.root);
+        const set = try unlistedRecordSetup(arena, &sb, ws, gitdir_dir);
+        const reach = try testutil.gitInsteadOf(arena, try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" }), &.{.{ .url = "https://holt-test.invalid/acme/widget", .bare = try std.fs.path.join(arena, &.{ sb.root, "origin.git" }) }});
+        defer reach.restore();
+        const listed = try git.runInRepo(arena, &.{ "worktree", "list", "--porcelain" }, set.clone);
+        try testing.expectEqual(@as(usize, 1), std.mem.count(u8, listed.stdout, "worktree "));
+        const argv: []const []const u8 = if (force) &.{ "holt-test.invalid/acme/widget", "--clone", "--yes", "--force" } else &.{ "holt-test.invalid/acme/widget", "--clone", "--yes" };
+        const got = try testutil.runCmd(arena, remove_command.run, ws, argv);
+        try testing.expectEqual(@as(u8, 1), got.code);
+        const seen = if (gitdir_dir) deleter.record_unreadable_seen else deleter.half_made_seen;
+        const rq = try fsutil.contractTilde(arena, app.envOf_current(), set.record);
+        const want = try std.fmt.allocPrint(arena, "{s}: {s}; holt does not change it: resolve it with git (the record is {s}), then run again", .{ rq, seen, rq });
+        if (std.mem.indexOf(u8, got.err, want) == null) {
+            std.debug.print("want: {s}\ngot: {s}\n", .{ want, got.err });
+            return error.TestExpectedEqual;
+        }
+        try testing.expect(fsutil.exists(set.clone));
+        try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ set.record, "MERGE_AUTOSTASH" })));
+        try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ set.record, "HEAD" })));
+        const ls = try @import("../proc.zig").runEnv(arena, &.{ "sh", "-c", try std.fmt.allocPrint(arena, "ls -d {s}", .{try ui.quotePath(arena, app.envOf_current(), set.record)}) }, null, &sb.git_env.map);
+        try testing.expectEqual(@as(u8, 0), ls.status);
+    };
+}
+
+test "adopt and promote: a linked worktree of another repository is refused, naming its main clone to adopt instead, and that repository's records are left as they were; the named adopt runs" {
+    for ([_]bool{ false, true }) |promote| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var sb = try testutil.Sandbox.init(testing.allocator);
+        defer sb.deinit();
+        const bare = try testutil.makeBareRepo(&sb, "origin.git");
+        defer testing.allocator.free(bare);
+        const ws = try testutil.testWorkspace(arena, sb.root);
+        const main_clone = try std.fs.path.join(arena, &.{ sb.root, "checkout", "widget" });
+        try cloneWithOrigin(&sb, bare, main_clone, "https://holt-test.invalid/acme/widget");
+        const wt = if (promote) blk: {
+            var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            try repos.put(arena, "scratch", "local:scratch");
+            try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+            break :blk try identity.local(fsutil.SafeSegment.parse("scratch").?).clonePath(arena, ws.cfg.code_root);
+        } else try std.fs.path.join(arena, &.{ sb.root, "elsewhere", "wt" });
+        try fsutil.ensureDir(std.fs.path.dirname(wt).?);
+        try testutil.runGit(&sb, main_clone, &.{ "worktree", "add", "-q", "--detach", wt });
+        const gitdir = try std.fs.path.join(arena, &.{ main_clone, ".git", "worktrees", std.fs.path.basename(wt), "gitdir" });
+        const before = try kept.content.readSmall(arena, gitdir);
+
+        const got = if (promote)
+            try testutil.runCmd(arena, promote_command.run, ws, &.{ "scratch", "--yes", "--force" })
+        else
+            try testutil.runCmd(arena, adopt_command.run, ws, &.{ wt, "--force" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        const want = try std.fmt.allocPrint(arena, "holt: {s} is a linked worktree of the repository at {s}; adopt that clone instead (run: holt repo adopt {s})\n", .{ try fsutil.contractTilde(arena, app.envOf_current(), wt), try fsutil.contractTilde(arena, app.envOf_current(), main_clone), try fsutil.contractTilde(arena, app.envOf_current(), main_clone) });
+        if (!std.mem.eql(u8, want, got.err)) {
+            std.debug.print("want: {s}got: {s}\n", .{ want, got.err });
+            return error.TestExpectedEqual;
+        }
+        try testing.expect(fsutil.exists(wt));
+        try testing.expectEqualStrings(before, try kept.content.readSmall(arena, gitdir));
+        try testing.expect(try deleter.findsRecord(arena, wt, std.fs.path.dirname(gitdir).?));
+
+        const hinted = try testutil.runCmd(arena, adopt_command.run, ws, &.{main_clone});
+        try testing.expectEqual(@as(u8, 0), hinted.code);
+    }
 }

@@ -36,6 +36,8 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+    const test_bin_step = b.step("test-bin", "Build the unit test binary into zig-out/bin without running it");
+    test_bin_step.dependOn(&b.addInstallArtifact(tests, .{}).step);
 
     const lib_module = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),

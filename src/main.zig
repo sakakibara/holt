@@ -17,8 +17,8 @@ pub fn main(init: std.process.Init) u8 {
     var out_buf: [4096]u8 = undefined;
     var err_buf: [4096]u8 = undefined;
     const stdout_file = std.Io.File.stdout();
-    var stdout_fw: std.Io.File.Writer = .init(stdout_file, fsutil.io(), &out_buf);
-    var stderr_fw: std.Io.File.Writer = .init(.stderr(), fsutil.io(), &err_buf);
+    var stdout_fw = stdioWriter(stdout_file, &out_buf);
+    var stderr_fw = stdioWriter(.stderr(), &err_buf);
     const out = &stdout_fw.interface;
     const err = &stderr_fw.interface;
     defer out.flush() catch {};
@@ -44,6 +44,7 @@ pub fn main(init: std.process.Init) u8 {
     // otherwise report every one of those allocations as leaked.
     // `init.arena` is this process's own scratch arena, reclaimed in bulk
     // at exit rather than individually tracked.
+    @import("completion_source.zig").command_line = call_argv;
     return app.run(init.arena.allocator(), fsutil.io(), call_argv, &app.command_table, out, err) catch |e| {
         err.print("holt: internal error: {s}\n", .{@errorName(e)}) catch {};
         return 1;
@@ -60,11 +61,15 @@ test {
     _ = @import("marker.zig");
     _ = @import("proc.zig");
     _ = @import("git.zig");
+    _ = @import("remote_url.zig");
     _ = @import("recover.zig");
     _ = @import("project.zig");
     _ = @import("workspace.zig");
     _ = @import("hub.zig");
+    _ = @import("kept.zig");
     _ = @import("doctor.zig");
+    _ = @import("doctor_kept.zig");
+    _ = @import("kept_cmd.zig");
     _ = @import("testutil.zig");
     _ = @import("app.zig");
     _ = @import("completion_source.zig");
@@ -89,11 +94,15 @@ test {
     _ = @import("commands/backend.zig");
     _ = @import("commands/recent.zig");
     _ = @import("commands/keep.zig");
+    _ = @import("commands/kept_util.zig");
+    _ = @import("commands/unkeep.zig");
     _ = @import("commands/edit.zig");
     _ = @import("commands/config.zig");
     _ = @import("commands/run.zig");
     _ = @import("commands/upgrade.zig");
     _ = @import("commands/worktree.zig");
+    _ = @import("commands/deleter.zig");
+    _ = @import("commands/retire.zig");
     _ = @import("integration_test.zig");
 }
 
@@ -145,6 +154,7 @@ test "coverage: every command positional and value-flag completes or is allowlis
         .{ .cmd = "doctor", .field = "jobs" }, // numeric concurrency count
         .{ .cmd = "run", .field = "jobs" }, // numeric concurrency count
         .{ .cmd = "repo new", .field = "spec" }, // a new repo name / url the user types
+        .{ .cmd = "keep", .field = "older-than" }, // numeric day count
     };
 
     var gaps: std.ArrayList([]const u8) = .empty;
@@ -176,6 +186,39 @@ fn findCandidate(candidates: []const cli.complete.Candidate, value: []const u8) 
         if (std.mem.eql(u8, c.value, value)) return c;
     }
     return null;
+}
+
+/// A writer for the process's standard output or error. It streams, each
+/// write landing at the file's own offset, so `>> file` appends and
+/// `> file 2>&1` keeps both streams' lines; a positional writer would write
+/// at offsets of its own, over what is there.
+fn stdioWriter(file: std.Io.File, buf: []u8) std.Io.File.Writer {
+    return .initStreaming(file, fsutil.io(), buf);
+}
+
+test "stdioWriter: what it writes to a file opened for appending lands after what is there, and two writers on one file keep each other's lines" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const path = try std.fs.path.join(testing.allocator, &.{ sb.root, "log" });
+    defer testing.allocator.free(path);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = path, .data = "first\n" });
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .APPEND = true }, 0);
+    const file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(fsutil.io());
+    var out_buf: [64]u8 = undefined;
+    var err_buf: [64]u8 = undefined;
+    var out = stdioWriter(file, &out_buf);
+    var err = stdioWriter(file, &err_buf);
+    try out.interface.writeAll("out\n");
+    try out.interface.flush();
+    try err.interface.writeAll("err\n");
+    try err.interface.flush();
+    try out.interface.writeAll("out again\n");
+    try out.interface.flush();
+    const got = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, testing.allocator, .limited(1 << 10));
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("first\nout\nerr\nout again\n", got);
 }
 
 /// A stand-in `Ctx` for driving completion directly (not through `app.run`):

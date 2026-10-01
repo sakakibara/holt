@@ -11,6 +11,7 @@ const config = @import("config.zig");
 const fsutil = @import("fsutil.zig");
 const diagnostic = @import("diag.zig");
 const completion_source = @import("completion_source.zig");
+const kept = @import("kept.zig");
 const testing = std.testing;
 
 /// Per-command context: the loaded workspace and whether output should be
@@ -21,6 +22,13 @@ pub const Context = struct {
     /// The environment every command reads through, rather than each reaching
     /// for the process's own.
     env: Env,
+    /// The run's one warning to a retired machine writing kept facts
+    /// (`kept.RetiredNotice`); null says nothing.
+    retired_notice: ?*kept.RetiredNotice = null,
+    /// What asking remotes has shown over this run (`deleter.AskRun`), so
+    /// no host that gave no answer is asked again; null leaves each asker
+    /// its own.
+    ask_run: ?*deleter.AskRun = null,
 };
 
 /// Section a command is listed under in the general help table.
@@ -62,7 +70,11 @@ pub fn loadContext(alloc: std.mem.Allocator, io: std.Io, diag: *cli.Diagnostic) 
         diag.message = try alloc.dupe(u8, holt_diag.message);
         return err;
     };
-    return .{ .ws = .{ .cfg = cfg, .env = env }, .color = color_enabled, .env = env };
+    const notice = try alloc.create(kept.RetiredNotice);
+    notice.* = .{};
+    const ask_run = try alloc.create(deleter.AskRun);
+    ask_run.* = .{};
+    return .{ .ws = .{ .cfg = cfg, .env = env }, .color = color_enabled, .env = env, .retired_notice = notice, .ask_run = ask_run };
 }
 
 /// The environment before any context exists -- `main` deciding on color, say.
@@ -281,11 +293,13 @@ const backends_cmd = @import("commands/backends.zig");
 const backend_cmd = @import("commands/backend.zig");
 const recent_cmd = @import("commands/recent.zig");
 const keep_cmd = @import("commands/keep.zig");
+const unkeep_cmd = @import("commands/unkeep.zig");
 const edit_cmd = @import("commands/edit.zig");
 const config_cmd = @import("commands/config.zig");
 const run_cmd = @import("commands/run.zig");
 const upgrade_cmd = @import("commands/upgrade.zig");
 const worktree_cmd = @import("commands/worktree.zig");
+const deleter = @import("commands/deleter.zig");
 
 /// Every registered top-level command.
 pub const command_table = [_]Command{
@@ -296,6 +310,7 @@ pub const command_table = [_]Command{
     project_cmd.command,
     repo_cmd.command,
     keep_cmd.command,
+    unkeep_cmd.command,
     info_cmd.command,
     status_cmd.command,
     backends_cmd.command,
@@ -474,4 +489,23 @@ test "HoltCli wiring: __complete resolves a .dynamic key through resolveCompleti
     const out = out_w.buffered();
     try testing.expect(std.mem.startsWith(u8, out, "default\n"));
     try testing.expect(std.mem.indexOf(u8, out, "dropbox") != null);
+}
+
+/// The first line of `cmd`'s details, or of a subcommand's, longer than
+/// `limit` columns, but for an indented example line; null when none is.
+fn longDetailsLine(cmd: Command, limit: usize) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, cmd.details, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "  ")) continue;
+        if (line.len > limit) return line;
+    }
+    for (cmd.subcommands) |s| if (longDetailsLine(s, limit)) |line| return line;
+    return null;
+}
+
+test "help: every prose line of every command's details fits 76 columns" {
+    for (command_table) |cmd| if (longDetailsLine(cmd, 76)) |line| {
+        std.debug.print("{s}: {d} columns: {s}\n", .{ cmd.name, line.len, line });
+        return error.TestUnexpectedResult;
+    };
 }

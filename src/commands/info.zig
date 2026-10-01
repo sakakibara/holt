@@ -1,6 +1,6 @@
 //! `holt info <project>`: read-only summary of a project - its org/name,
-//! content/hub paths, and per-member-repo identity, clone path, and
-//! cloned-or-missing state.
+//! content/hub paths, and per-member-repo identity, clone path,
+//! cloned-or-missing state, and kept paths with their state.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -13,6 +13,7 @@ const fsutil = @import("../fsutil.zig");
 const json = @import("json");
 const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
+const kept_hooks = @import("kept_hooks.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
@@ -62,22 +63,32 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         const rel = try id.relPath(alloc);
         const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
         try ctx.out.print("  {s}: {s} ({s}) [", .{ e.name, rel, try app.tilde(ctx, clone_path) });
-        if (!fsutil.exists(clone_path)) {
+        const exists = fsutil.exists(clone_path);
+        const readable = exists and try git.inspectable(alloc, clone_path);
+        if (!exists) {
             try ui.color(ctx.context.?.color, ctx.out, color_red, "missing");
-        } else if (!try git.inspectable(alloc, clone_path)) {
+        } else if (!readable) {
             try ui.color(ctx.context.?.color, ctx.out, color_red, "cloned, unreadable");
         } else {
             try ui.color(ctx.context.?.color, ctx.out, color_green, "cloned");
         }
         try ctx.out.writeAll("]\n");
+        if (exists and !readable) continue;
+        for (try kept_hooks.keptPaths(ctx, clone_path, rel, exists)) |k| {
+            try ctx.out.print("    kept: {s} ({s}) [", .{ k.rel, k.kind });
+            const good = std.mem.eql(u8, k.state, "linked");
+            try ui.color(ctx.context.?.color, ctx.out, if (good) color_green else color_red, try std.mem.replaceOwned(u8, alloc, k.state, "_", " "));
+            try ctx.out.writeAll("]\n");
+        }
     }
 
     return 0;
 }
 
 /// Emits the project as a single JSON object: org, name, content/hub paths,
-/// and a `repos` array of {name, identity, clone_path, state}, where `state`
-/// is "missing", "unreadable", or "cloned".
+/// and a `repos` array of {name, identity, clone_path, state, kept}, where
+/// `state` is "missing", "unreadable", or "cloned", and `kept` is an array
+/// of {rel, kind, state} (`kept_hooks.KeptPath`).
 fn runJson(ctx: *app.Ctx, ws: *const workspace.Workspace, p: *const project_mod.Project) anyerror!u8 {
     const alloc = ctx.alloc;
 
@@ -104,6 +115,17 @@ fn runJson(ctx: *app.Ctx, ws: *const workspace.Workspace, p: *const project_mod.
         try ro.put(alloc, "identity", .{ .string = rel });
         try ro.put(alloc, "clone_path", .{ .string = clone_path });
         try ro.put(alloc, "state", .{ .string = state });
+        var kept_items: std.ArrayList(json.Value) = .empty;
+        if (!std.mem.eql(u8, state, "unreadable")) {
+            for (try kept_hooks.keptPaths(ctx, clone_path, rel, !std.mem.eql(u8, state, "missing"))) |k| {
+                var ko: json.ObjectMap = .empty;
+                try ko.put(alloc, "rel", .{ .string = k.rel });
+                try ko.put(alloc, "kind", .{ .string = k.kind });
+                try ko.put(alloc, "state", .{ .string = k.state });
+                try kept_items.append(alloc, .{ .object = ko });
+            }
+        }
+        try ro.put(alloc, "kept", .{ .array = try kept_items.toOwnedSlice(alloc) });
         try repo_items.append(alloc, .{ .object = ro });
     }
 
@@ -184,7 +206,8 @@ test "run: --json emits a parseable object with per-repo identity, path, and sta
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "\x1b[") == null);
 
-    const Repo = struct { name: []const u8, identity: []const u8, clone_path: []const u8, state: []const u8 };
+    const Kept = struct { rel: []const u8, kind: []const u8, state: []const u8 };
+    const Repo = struct { name: []const u8, identity: []const u8, clone_path: []const u8, state: []const u8, kept: []Kept };
     const Obj = struct { org: []const u8, name: []const u8, content_path: []const u8, hub_path: []const u8, repos: []Repo };
     const parsed = try json.parseInto(Obj, arena, got.out, .{});
     try testing.expectEqualStrings("acme", parsed.org);
@@ -301,4 +324,86 @@ test "run: --json marks an unusable member and keeps the rest" {
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(std.mem.indexOf(u8, got.out, "unusable") != null);
     try testing.expect(std.mem.indexOf(u8, got.out, "good") != null);
+}
+
+test "run: each member repo lists its kept paths with their state, and --json adds them as kept" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_hooks.TestBed.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const c = try bed.clone("holt-test.invalid/acme/widget");
+    try bed.write(c, ".superpowers/plan.md", "plan");
+    try bed.write(c, "notes.txt", "notes");
+    try bed.keep(c, ".superpowers");
+    try bed.keep(c, "notes.txt");
+    try bed.remove(c, "notes.txt");
+    const gone = try bed.clone("holt-test.invalid/acme/gone");
+    try bed.write(gone, "a.txt", "a");
+    try bed.keep(gone, "a.txt");
+    try std.Io.Dir.cwd().deleteTree(fsutil.io(), gone);
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
+    try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+    const before = try kept_hooks.snapshot(arena, c, try std.fs.path.join(arena, &.{ c, ".git" }));
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "    kept: .superpowers (dir) [linked]\n    kept: notes.txt (file) [not linked]\n") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "    kept: a.txt (file) [not cloned]\n") != null);
+    try testing.expectEqualStrings(before, try kept_hooks.snapshot(arena, c, try std.fs.path.join(arena, &.{ c, ".git" })));
+
+    const js = try testutil.runCmd(arena, command.run, bed.ws, &.{ "proj", "--json" });
+    try testing.expectEqual(@as(u8, 0), js.code);
+    const Kept = struct { rel: []const u8, kind: []const u8, state: []const u8 };
+    const Repo = struct { name: []const u8, identity: []const u8, clone_path: []const u8, state: []const u8, kept: []Kept };
+    const Obj = struct { org: []const u8, name: []const u8, content_path: []const u8, hub_path: []const u8, repos: []Repo };
+    const parsed = try json.parseInto(Obj, arena, js.out, .{});
+    for (parsed.repos) |r| {
+        if (std.mem.eql(u8, r.name, "widget")) {
+            try testing.expectEqual(@as(usize, 2), r.kept.len);
+            try testing.expectEqualStrings(".superpowers", r.kept[0].rel);
+            try testing.expectEqualStrings("dir", r.kept[0].kind);
+            try testing.expectEqualStrings("linked", r.kept[0].state);
+            try testing.expectEqualStrings("not_linked", r.kept[1].state);
+        } else {
+            try testing.expectEqual(@as(usize, 1), r.kept.len);
+            try testing.expectEqualStrings("not_cloned", r.kept[0].state);
+        }
+    }
+}
+
+test "run: kept paths are shown while a kept-file writer holds the clone's and the key's locks" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var bed = try kept_hooks.TestBed.init(arena, &sb, "");
+    defer bed.deinit();
+    try bed.createStore();
+    const c = try bed.clone("holt-test.invalid/acme/widget");
+    try bed.write(c, "notes.txt", "notes");
+    try bed.keep(c, "notes.txt");
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
+    const kept = @import("../kept.zig");
+    const kc = try bed.kc();
+    const cl = try kept.clone.inspect(arena, c, kc.code_root);
+    const ctx_mod = @import("../kept/ctx.zig");
+    ctx_mod.lock_nonblocking_for_test = true;
+    defer ctx_mod.lock_nonblocking_for_test = false;
+    const clone_lock = try kept.lockClone(kc, cl.common_dir);
+    defer clone_lock.release();
+    const key_lock = try kept.lockKey(kc, cl.key.?);
+    defer key_lock.release();
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "    kept: notes.txt (file) [linked]\n") != null);
 }

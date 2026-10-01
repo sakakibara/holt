@@ -220,3 +220,24 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     try testing.expect(fsutil.exists(clone_alpha));
     try testing.expect(fsutil.exists(clone_beta));
 }
+
+test "integration: keep --help names the review's answers as its prompt offers them, and --retire-machine what stops blocking" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const got = try dispatch(arena, &.{ "keep", "--help" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "For a file in a clone: keep,\nkeep everywhere, skip, skip everywhere, or quit, or only skip or quit\nwhen its name holds a control character. With --all, first, for a\npattern files in several repos share: keep everywhere, skip everywhere,\nreview each, or quit. The first prompt, when it is one of these, also\noffers never ask again") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "so its records so far no longer block keep, --take-local, or unkeep\n") != null);
+}
+
+test "integration: doctor --help names each ending --retire can have" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const got = try dispatch(arena, &.{ "doctor", "--help" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(std.mem.indexOf(u8, got.out, "ends by naming holt\nkeep --retire-machine") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "there is nothing to retire") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "\"This machine was retired on\n<date>\"") != null);
+}

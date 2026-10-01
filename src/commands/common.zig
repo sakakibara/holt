@@ -15,6 +15,8 @@ const marker = @import("../marker.zig");
 const hub = @import("../hub.zig");
 const fsutil = @import("../fsutil.zig");
 const git = @import("../git.zig");
+const kept = @import("../kept.zig");
+const deleter = @import("deleter.zig");
 const diagnostic = @import("../diag.zig");
 const testutil = @import("../testutil.zig");
 const testing = std.testing;
@@ -101,6 +103,14 @@ pub const OrgName = struct { org: []const u8, name: []const u8 };
 /// Reserved as an ORG only: these are the structural siblings of - or the
 /// name of - the projects dir under the synced root, so an org named after
 /// one would confuse the on-disk layout.
+/// The code-tree key of the clone at `clone_path` under `code_root`, as
+/// `holt list --repos` prints it.
+pub fn codeKey(alloc: std.mem.Allocator, code_root: []const u8, clone_path: []const u8) ![]const u8 {
+    const rel = try alloc.dupe(u8, if (clone_path.len > code_root.len and fsutil.pathIsInside(clone_path, code_root)) clone_path[code_root.len + 1 ..] else clone_path);
+    if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+    return rel;
+}
+
 const reserved_orgs = [_][]const u8{ "archive", "backups", "projects" };
 
 /// Rejects an org or project name that is unsafe or confusing as a single
@@ -177,50 +187,97 @@ pub fn moveDir(ctx: *app.Ctx, from: []const u8, to: []const u8) !void {
 }
 
 /// Moves a clone `from` -> `to`, carrying its sibling `<clone>@worktrees` dir
-/// along so a repo's worktrees survive its clone moving to a new identity.
-/// Used by the movers that relocate a clone (promote, adopt).
+/// along so a repo's worktrees survive its clone moving to a new identity,
+/// then points each linked worktree that no longer leads back to its record
+/// at it again, one worktree and one record at a time (`relinkMoved`).
+/// When the `@worktrees` dir cannot be moved, the worktrees in it are
+/// relinked where they are, as is every other, and the failure is then
+/// named with the dir that was not moved. Used by the movers that relocate
+/// a clone (promote, adopt).
 ///
-/// Worktrees created with relative admin paths (git 2.48+, see git.worktreeAdd)
-/// keep working across this move untouched, because the clone-to-worktree
-/// layout is preserved. The repair below is only for worktrees git recorded
-/// with absolute paths (older git) - a no-op otherwise.
+/// A worktree in `<clone>@worktrees` created with relative admin paths
+/// (git 2.48+, see git.worktreeAdd) keeps working untouched when that dir
+/// moves along, because the layout between the clone and it is preserved;
+/// one elsewhere, or left behind, is relinked as any other.
 pub fn moveClone(ctx: *app.Ctx, from: []const u8, to: []const u8) !void {
     try moveDir(ctx, from, to);
 
     const alloc = ctx.alloc;
     const from_wt = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{from});
-    if (!fsutil.exists(from_wt)) return;
-
     const to_wt = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{to});
-    fsutil.moveTree(alloc, from_wt, to_wt) catch |err| {
-        try ctx.err.print("holt: moved clone but could not move its worktrees dir: {s}\n", .{@errorName(err)});
-        return;
+    var wt_failed: ?anyerror = null;
+    if (fsutil.exists(from_wt)) fsutil.moveTree(alloc, from_wt, to_wt) catch |err| {
+        wt_failed = err;
     };
-
-    // Fallback for absolute-path worktrees (pre-2.48 git); harmless otherwise.
-    var leaves: std.ArrayList([]const u8) = .empty;
-    try collectWorktreeLeaves(alloc, to_wt, &leaves);
-    git.worktreeRepair(alloc, to, leaves.items) catch {};
+    try relinkMoved(ctx, from, to, wt_failed == null);
+    if (wt_failed) |err| try ctx.err.print("holt: moved clone but could not move its worktrees dir {s} to {s} ({s}); the worktrees in it were not moved\n", .{ try app.tilde(ctx, from_wt), try app.tilde(ctx, to_wt), @errorName(err) });
 }
 
-/// Absolute paths of the leaf worktrees under `dir_path` - dirs containing a
-/// `.git` entry - without descending into them, so a nested slashy branch is
-/// collected at its leaf.
-fn collectWorktreeLeaves(alloc: std.mem.Allocator, dir_path: []const u8, out: *std.ArrayList([]const u8)) !void {
-    var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), dir_path, .{ .iterate = true }) catch return;
-    defer dir.close(fsutil.io());
-    var walker = try dir.walkSelectively(alloc);
-    defer walker.deinit();
-    while (try walker.next(fsutil.io())) |entry| {
-        if (entry.kind != .directory) continue;
-        const full = try std.fs.path.join(alloc, &.{ dir_path, entry.path });
-        const dotgit = try std.fs.path.join(alloc, &.{ full, ".git" });
-        if (fsutil.exists(dotgit)) {
-            try out.append(alloc, full);
-        } else {
-            try walker.enter(fsutil.io(), entry);
+/// For each record of a linked worktree of the clone moved from `from` to
+/// `to`: the worktree is where the record's `gitdir` named it before the
+/// move, a relative one read against where the record was then, moved
+/// along when that is under `from`, or under `<from>@worktrees` and
+/// `wt_moved` says that dir moved. A worktree where git does not find the
+/// record, whose `.git` names the record where it was before the move, a
+/// relative one read against where the worktree was then, gets its `.git`
+/// written as the record is now (`deleter.writeLink`). Each path is
+/// compared with its deepest existing directory resolved to its real path
+/// (`deleter.resolvedPath`), and each relative one is read against such a
+/// path, so a symlinked parent folds `..` as git does.
+/// Once git there finds the record, the record's `gitdir` is written as
+/// where the worktree is now (`deleter.recordText`) whenever it no longer
+/// leads there, as a relative one does once only the record moved. Every
+/// other worktree and record is left as it is: one with no `.git`, and one
+/// whose `.git` names anything else, as another repository's worktree at
+/// the path of a stale record does. Each that cannot be written is named
+/// with the command that settles it.
+fn relinkMoved(ctx: *app.Ctx, from: []const u8, to: []const u8, wt_moved: bool) !void {
+    const a = ctx.alloc;
+    const res = git.runInRepo(a, &.{ "rev-parse", "--path-format=absolute", "--git-common-dir" }, to) catch return;
+    if (res.status != 0) return;
+    const common = try fsutil.realPathOrSelf(a, std.mem.trim(u8, res.stdout, " \t\r\n"));
+    const to_real = try fsutil.realPathOrSelf(a, to);
+    const from_real = try deleter.resolvedPath(a, from);
+    const old_common = if (fsutil.pathIsInside(common, to_real)) try std.mem.concat(a, u8, &.{ from_real, common[to_real.len..] }) else common;
+    const records = kept.clone.linkedRecords(a, common) catch return;
+    for (records) |rec| {
+        const now = rec.path orelse continue;
+        const old_record = try std.mem.concat(a, u8, &.{ old_common, rec.record[common.len..] });
+        const at = kept.clone.recordedTree(a, rec.record, old_record) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => continue,
+        };
+        const old_tree = try deleter.resolvedPath(a, at);
+        const tree = try movedPath(a, old_tree, from_real, to_real, wt_moved);
+        if (!try deleter.findsRecord(a, tree, rec.record)) {
+            const old = kept.content.readSmall(a, try std.fs.path.join(a, &.{ tree, ".git" })) catch continue;
+            const line = std.mem.trimEnd(u8, old, " \t\r\n");
+            if (!std.mem.startsWith(u8, line, "gitdir: ")) continue;
+            const named = try deleter.resolvedPath(a, try std.fs.path.resolve(a, &.{ old_tree, line["gitdir: ".len..] }));
+            if (!std.mem.eql(u8, named, old_record)) continue;
+            deleter.writeLink(a, tree, rec.record, old) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => {
+                    try ctx.err.print("holt: moved clone but could not relink its worktree {s} ({s}) (run: {s})\n", .{ try app.tilde(ctx, tree), @errorName(err), try deleter.relinkCmd(ctx, tree, rec.record, false) });
+                    continue;
+                },
+            };
         }
+        if (std.mem.eql(u8, try deleter.resolvedPath(a, now), tree)) continue;
+        fsutil.writeFileAtomic(a, try std.fs.path.join(a, &.{ rec.record, "gitdir" }), try deleter.recordText(a, tree)) catch |err| {
+            try ctx.err.print("holt: moved clone but could not point the record of its worktree {s} at it ({s}) (run: {s})\n", .{ try app.tilde(ctx, tree), @errorName(err), try deleter.repointCmd(ctx, rec.record, tree) });
+        };
     }
+}
+
+/// `path` moved from under `from` to under `to`: under `<to>@worktrees`
+/// for one under `<from>@worktrees` when `wt_moved`, else `path` itself;
+/// under `to` for one under `from`; `path` itself for any other.
+fn movedPath(a: std.mem.Allocator, path: []const u8, from: []const u8, to: []const u8, wt_moved: bool) ![]const u8 {
+    const from_wt = try std.mem.concat(a, u8, &.{ from, "@worktrees" });
+    if (fsutil.pathIsInside(path, from_wt)) return if (wt_moved) std.mem.concat(a, u8, &.{ to, "@worktrees", path[from_wt.len..] }) else path;
+    if (fsutil.pathIsInside(path, from)) return std.mem.concat(a, u8, &.{ to, path[from.len..] });
+    return path;
 }
 
 /// Clones `url` into `clone_path` if it is not already present, returning
@@ -259,10 +316,11 @@ pub fn cloneIfAbsent(ctx: *app.Ctx, url: []const u8, clone_path: []const u8) !bo
 }
 
 /// Recursively deletes `path`, reporting a contextual message on failure
-/// instead of a raw error name.
+/// instead of a raw error name, and that what was deleted before it failed
+/// is gone.
 pub fn removeContent(ctx: *app.Ctx, path: []const u8) !void {
     std.Io.Dir.cwd().deleteTree(fsutil.io(), path) catch |err| {
-        try ctx.err.print("holt: failed to delete {s}: {s}\n", .{ try app.tilde(ctx, path), @errorName(err) });
+        try ctx.err.print("holt: failed to delete {s}: {s}; part of it may already be gone\n", .{ try app.tilde(ctx, path), @errorName(err) });
         return err;
     };
 }
@@ -333,6 +391,7 @@ test "validateSegment: rejects sibling names only as an org, not as a name" {
         try testing.expect(validateSegment(.org, r) != null);
         try testing.expect(validateSegment(.name, r) == null);
     }
+    try testing.expect(validateSegment(.org, "kept") == null);
 }
 
 test "validateSegment: accepts ordinary and unicode names" {
@@ -493,9 +552,9 @@ test "cloneIfAbsent: a failed clone prunes the empty owner and host scaffold it 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    // Loopback with nothing listening: connection refused immediately, no
-    // DNS or network dependency, so the failure is fast and deterministic.
-    const url = "git://127.0.0.1:1/acme/widget";
+    const url = "https://127.0.0.1/acme/widget";
+    const override = try testutil.gitUnreachable(arena, root, &.{url});
+    defer override.restore();
     const clone_path = try std.fs.path.join(arena, &.{ root, "127.0.0.1", "acme", "widget" });
 
     var out: std.Io.Writer.Allocating = .init(arena);
@@ -594,9 +653,9 @@ test "cloneIfAbsent: a failed clone leaves a shared owner directory holding anot
     const sibling_clone = try std.fs.path.join(arena, &.{ owner_dir, "other" });
     try fsutil.ensureDir(sibling_clone);
 
-    // Loopback with nothing listening: connection refused immediately, no
-    // DNS or network dependency, so the failure is fast and deterministic.
-    const url = "git://127.0.0.1:1/acme/widget";
+    const url = "https://127.0.0.1/acme/widget";
+    const override = try testutil.gitUnreachable(arena, root, &.{url});
+    defer override.restore();
     const clone_path = try std.fs.path.join(arena, &.{ owner_dir, "widget" });
 
     var out: std.Io.Writer.Allocating = .init(arena);

@@ -24,7 +24,8 @@ const hub = @import("../hub.zig");
 const ui = @import("../ui.zig");
 const projectlock = @import("../projectlock.zig");
 const identity = @import("../identity.zig");
-const recover = @import("../recover.zig");
+const deleter = @import("deleter.zig");
+const keep_cmd = @import("keep.zig");
 const workspace = @import("../workspace.zig");
 const git = @import("../git.zig");
 const testing = std.testing;
@@ -308,12 +309,30 @@ pub const archive_command = app.command(ArchiveSpec, .{
     .group = .create,
     .needs_context = true,
     .details =
-    \\With --prune, after archiving, each member clone that is clean, in sync
-    \\with its remote, and no longer used by any active project is deleted to
-    \\reclaim disk (it can be re-cloned from its remote by `holt restore`). A
-    \\clone with local changes, unpushed commits, no upstream, or a linked
-    \\worktree is kept and reported, and a clone still shared with an active
-    \\project is never touched.
+    \\With --prune, after archiving, each member clone no longer used by any
+    \\active project is deleted to reclaim disk (it can be re-cloned from its
+    \\remote by `holt restore`) when it passes the gates holt repo remove
+    \\--clone weighs. A clone with a linked worktree, uncommitted changes,
+    \\stash entries, commits or other git state no remote holds, an operation
+    \\in progress (a merge, rebase, am, cherry-pick, revert, or bisect), files
+    \\holt does not keep, nested repositories, or unsettled kept files is kept
+    \\and reported as `not pruned <repo>: <reason>`, each reason on a line of
+    \\its own when there are several, then `once settled, delete it with: holt
+    \\repo remove <key> --clone`; a branch with no upstream whose commits a
+    \\remote holds is no reason, and a clone git cannot read is named as
+    \\such. A remote holds only what its URLs on another machine list now, as
+    \\holt repo remove --help says; each clone is weighed once before the
+    \\prompt, and once after it only when the prompt waited at a terminal
+    \\(not with --yes). A host that gave no answer, or whose host key was not
+    \\verified, is named once, after the last clone, with the clones it kept
+    \\from being asked. Since the project is archived, a remote that could
+    \\not be asked is settled by reconnecting, or verifying the host key,
+    \\then deleting each clone with holt repo remove <key> --clone, never by
+    \\running the archive again. A reason that names deleting anyway names
+    \\holt repo remove <key> --clone --force. A clone still shared with an
+    \\active project is never touched.
+    \\On a terminal, without --yes, a clone those checks would keep is first
+    \\offered holt keep --review inline, then weighed again.
     \\
     \\Example:
     \\  holt project archive acme/widget --prune --yes
@@ -371,40 +390,40 @@ fn runArchive(ctx: *app.Ctx, a: cli.Args(ArchiveSpec)) anyerror!u8 {
 const Member = struct { repo: []const u8, id: identity.Identity, clone_path: []const u8 };
 
 /// After the project is archived, deletes each member clone that is safe to
-/// reclaim - present on disk, referenced by no remaining active project, and
-/// clean + in sync with its remote (so nothing is lost that isn't already
-/// pushed). Everything else is kept and reported with the reason. Never fails
-/// the command: the archive already succeeded.
+/// reclaim - present on disk, referenced by no remaining active project,
+/// with no linked worktree, and holding nothing the gates weigh
+/// (`deleter`): no file holt does not keep, no uncommitted change, and no
+/// commit or other object no remote holds.
+/// Everything else is kept and reported as `not pruned <repo>: <reason>`,
+/// or with every reason on a line of its own (`printNotPruned`).
+/// Never fails the command: the archive already succeeded.
 fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const Member, yes: bool) !void {
     const alloc = ctx.alloc;
 
-    var eligible: std.ArrayList(Member) = .empty;
+    const Eligible = struct { m: Member, answers: ?*deleter.Answers };
+    var eligible: std.ArrayList(Eligible) = .empty;
+    var held: HeldBack = .{};
     for (members) |m| {
         if (!fsutil.exists(m.clone_path)) continue;
         if ((try ws.projectsUsing(alloc, m.id)).len > 0) {
-            try ctx.out.print("kept {s}: still used by an active project\n", .{m.repo});
+            try ctx.out.print("not pruned {s}: still used by an active project\n", .{m.repo});
             continue;
         }
-        // A linked worktree may hold uncommitted work that recover.check on the
-        // main clone can't see; refuse rather than risk deleting it. If we
-        // can't tell (>1 defaults on error), keep it - deletion is never worth
-        // guessing wrong. worktreeCount includes the main tree, so >1 means
-        // extra worktrees exist.
-        if ((git.worktreeCount(alloc, m.clone_path) catch 2) > 1) {
-            try ctx.out.print("kept {s}: has worktrees\n", .{m.repo});
+        // Deleting the clone leaves a linked worktree without its repository,
+        // as repo remove --clone refuses. If we can't tell (>1 defaults on
+        // error), keep it. worktreeCount includes the main tree, so >1 means
+        // extra worktrees exist. As for repo remove --clone, only a repo git
+        // can read is asked: the deleter weighs one it cannot read.
+        if (try git.inspectable(alloc, m.clone_path) and (git.worktreeCount(alloc, m.clone_path) catch 2) > 1) {
+            try ctx.out.print("not pruned {s}: has worktrees\n", .{m.repo});
             continue;
         }
-        var verdict = recover.check(alloc, m.clone_path) catch {
-            try ctx.out.print("kept {s}: could not verify it is safe to reclaim\n", .{m.repo});
-            continue;
-        };
-        if (!verdict.safe()) {
-            try ctx.out.print("kept {s}: has local changes or unpushed commits\n", .{m.repo});
-            continue;
-        }
-        try eligible.append(alloc, m);
+        var prepared = (try prepareClone(ctx, m, .{ .review = keep_cmd.reviewHeld, .interactive = !yes and ui.stdinIsTerminal(), .many = true }, &held)) orelse continue;
+        prepared.release();
+        try eligible.append(alloc, .{ .m = m, .answers = prepared.answers });
     }
 
+    defer held.print(ctx) catch {};
     if (eligible.items.len == 0) return;
 
     if (!yes) {
@@ -415,7 +434,11 @@ fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const M
         }
     }
 
-    for (eligible.items) |m| {
+    // What the remotes said before the prompt stands unless the prompt
+    // waited on a person at a terminal.
+    const prompted = !yes and ui.stdinIsTerminal();
+    for (eligible.items) |e| {
+        const m = e.m;
         // Hold the clone-path lock across the final reference re-check and the
         // delete. A concurrent add/new/adopt/promote that references this clone
         // holds the same lock while writing its marker, so if one slipped in
@@ -424,11 +447,30 @@ fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const M
         var lock = try projectlock.acquire(alloc, app.envOf(ctx), m.clone_path);
         defer lock.release();
         if ((try ws.projectsUsing(alloc, m.id)).len > 0) {
-            try ctx.out.print("kept {s}: now used by an active project\n", .{m.repo});
+            try ctx.out.print("not pruned {s}: now used by an active project\n", .{m.repo});
             continue;
         }
+        var prepared = (try prepareClone(ctx, m, .{ .answers = if (prompted) null else e.answers, .many = true }, &held)) orelse continue;
+        defer prepared.release();
+        switch (try prepared.clear(ctx, false, .reuse)) {
+            .done => {},
+            .blocked => {
+                try held.add(ctx, &prepared, m);
+                try printNotPruned(ctx, m, try prepared.reasons(ctx, try forceCmd(ctx, m), try deleteCmd(ctx, m)));
+                continue;
+            },
+            .failed => {
+                try ctx.out.print("not pruned {s}: what it holds could not be set aside{s}\n", .{ m.repo, try followUp(ctx, m) });
+                continue;
+            },
+        }
+        if (!try prepared.unchanged(ctx, false)) {
+            try ctx.out.print("not pruned {s}: {s}; delete it with: holt repo remove {s} --clone\n", .{ m.repo, try prepared.changedWhy(ctx, "the clone"), try ui.shellQuote(alloc, try m.id.relPath(alloc)) });
+            continue;
+        }
+        prepared.beforeDelete();
         std.Io.Dir.cwd().deleteTree(fsutil.io(), m.clone_path) catch |err| {
-            try ctx.err.print("holt: could not reclaim {s}: {s}\n", .{ try app.tilde(ctx, m.clone_path), @errorName(err) });
+            try ctx.err.print("holt: failed to delete {s}: {s}; part of it may already be gone\n", .{ try app.tilde(ctx, m.clone_path), @errorName(err) });
             continue;
         };
         if (std.fs.path.dirname(m.clone_path)) |owner_dir| {
@@ -436,6 +478,81 @@ fn pruneClones(ctx: *app.Ctx, ws: *const workspace.Workspace, members: []const M
             if (std.fs.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
         }
         try ctx.out.print("reclaimed {s} ({s})\n", .{ m.repo, try app.tilde(ctx, m.clone_path) });
+    }
+}
+
+/// What deletes `m`'s clone once what kept it is settled, the project
+/// being archived already, for the end of its `not pruned` lines.
+fn followUp(ctx: *app.Ctx, m: Member) ![]const u8 {
+    return std.fmt.allocPrint(ctx.alloc, "once settled, delete it with: {s}", .{try deleteCmd(ctx, m)});
+}
+
+/// `holt repo remove <key> --clone`, which deletes `m`'s clone.
+fn deleteCmd(ctx: *app.Ctx, m: Member) ![]const u8 {
+    return std.fmt.allocPrint(ctx.alloc, "holt repo remove {s} --clone", .{try ui.shellQuote(ctx.alloc, try m.id.relPath(ctx.alloc))});
+}
+
+/// What deletes `m`'s clone anyway, setting aside what it can first, for
+/// the `not pruned` reasons that name one.
+fn forceCmd(ctx: *app.Ctx, m: Member) ![]const u8 {
+    return std.fmt.allocPrint(ctx.alloc, "holt repo remove {s} --clone --force", .{try ui.shellQuote(ctx.alloc, try m.id.relPath(ctx.alloc))});
+}
+
+/// The clones a skipped host kept from being asked, and so from being
+/// pruned (`deleter.Prepared.skippedHosts`), named once per host after
+/// the last clone.
+const HeldBack = struct {
+    by_host: deleter.HeldBack = .{},
+
+    fn add(h: *HeldBack, ctx: *app.Ctx, p: *const deleter.Prepared, m: Member) !void {
+        const a = ctx.alloc;
+        const key = try ui.shellQuote(a, try m.id.relPath(a));
+        for (try p.skippedHosts(a)) |sk| try h.by_host.add(a, sk, key);
+    }
+
+    fn print(h: *const HeldBack, ctx: *app.Ctx) !void {
+        for (try h.by_host.lines(ctx.alloc, "not asked and not pruned", "holt repo remove <key> --clone", ", or holt repo remove <key> --clone --force deletes one")) |line| try ctx.out.print("{s}\n", .{line});
+    }
+};
+
+fn paths_contains(list: []const []const u8, s: []const u8) bool {
+    for (list) |x| if (std.mem.eql(u8, x, s)) return true;
+    return false;
+}
+
+/// Prints why `m`'s clone is kept, `why` holding a phrase per unmet gate,
+/// then what deletes it once they are settled: on one line for one gate,
+/// which names it alone when it names it already (a remote that could not
+/// be asked), else each on a line of its own; nothing when `why` is empty,
+/// as for a clone only a host that did not answer held back (`HeldBack`).
+fn printNotPruned(ctx: *app.Ctx, m: Member, why: []const []const u8) !void {
+    if (why.len == 0) return;
+    const named = try std.fmt.allocPrint(ctx.alloc, ", then delete it with: {s},", .{try deleteCmd(ctx, m)});
+    if (why.len == 1 and std.mem.indexOf(u8, why[0], named) != null) return ctx.out.print("not pruned {s}: {s}\n", .{ m.repo, why[0] });
+    if (why.len == 1) return ctx.out.print("not pruned {s}: {s}; {s}\n", .{ m.repo, why[0], try followUp(ctx, m) });
+    try ctx.out.print("not pruned {s}:\n", .{m.repo});
+    for (why) |w| try ctx.out.print("  {s}\n", .{w});
+    try ctx.out.print("  {s}\n", .{try followUp(ctx, m)});
+}
+
+/// The kept-file steps for pruning `m`'s clone, holding its locks; null,
+/// with its `not pruned` line printed, when the clone must be kept.
+fn prepareClone(ctx: *app.Ctx, m: Member, opts: deleter.Options, held: *HeldBack) !?deleter.Prepared {
+    switch (try deleter.prepare(ctx, m.clone_path, .clone, opts)) {
+        .refused => |why| {
+            try ctx.out.print("not pruned {s}: {s}; {s}\n", .{ m.repo, why, try followUp(ctx, m) });
+            return null;
+        },
+        .ready => |p| {
+            var prepared = p;
+            if (prepared.found.blocked()) {
+                try held.add(ctx, &prepared, m);
+                try printNotPruned(ctx, m, try prepared.reasons(ctx, try forceCmd(ctx, m), try deleteCmd(ctx, m)));
+                prepared.release();
+                return null;
+            }
+            return prepared;
+        },
     }
 }
 
@@ -1230,6 +1347,8 @@ test "archive: --prune reclaims a clean, synced, unreferenced member clone" {
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
@@ -1249,6 +1368,8 @@ test "archive: --prune keeps a clone still referenced by another active project"
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const url = "https://holt-test.invalid/acme/widget";
@@ -1260,7 +1381,7 @@ test "archive: --prune keeps a clone still referenced by another active project"
 
     const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "kept widget: still used by an active project") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "not pruned widget: still used by an active project") != null);
     try testing.expect(fsutil.exists(clone_path));
 }
 
@@ -1271,6 +1392,8 @@ test "archive: --prune keeps a clone with uncommitted local changes" {
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
@@ -1281,7 +1404,7 @@ test "archive: --prune keeps a clone with uncommitted local changes" {
 
     const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "kept widget: has local changes or unpushed commits") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "not pruned widget: 1 uncommitted change in ") != null);
     try testing.expect(fsutil.exists(clone_path));
 }
 
@@ -1292,6 +1415,8 @@ test "archive: --prune keeps a clone that has worktrees" {
 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
     const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
@@ -1304,7 +1429,7 @@ test "archive: --prune keeps a clone that has worktrees" {
 
     const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "kept widget: has worktrees") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, "not pruned widget: has worktrees") != null);
     try testing.expect(fsutil.exists(clone_path));
 }
 
@@ -1413,4 +1538,46 @@ test "unarchive: unarchiving over an existing project is a hard error, archive k
 
     const archive_marker = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "widget", marker.marker_basename });
     try testing.expect(fsutil.exists(archive_marker));
+}
+
+test "archive: --prune keeps a clone whose uncommitted change only a paused rebase --autostash holds, naming the rebase" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
+    {
+        var d = try std.Io.Dir.cwd().openDir(fsutil.io(), clone_path, .{});
+        defer d.close(fsutil.io());
+        try d.writeFile(fsutil.io(), .{ .sub_path = "README", .data = "unsaved work\n" });
+    }
+    try testutil.runGit(&sb, clone_path, &.{ "-c", "sequence.editor=sed -i.orig s/^pick/edit/", "rebase", "-i", "--autostash", "--root" });
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
+    try testing.expect(fsutil.exists(clone_path));
+    const cq = try ui.quotePath(arena, app.envOf_current(), try fsutil.realPathOrSelf(arena, clone_path));
+    try testing.expect(std.mem.indexOf(u8, got.out, "not pruned widget: rebase in progress in ") != null);
+    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "; finish it or abort it (run: git -C {s} rebase --continue, or git -C {s} rebase --abort); once settled, delete it with: holt repo remove holt-test.invalid/acme/widget --clone\n", .{ cq, cq })) != null);
+}
+
+test "archive: --prune names a clone git cannot read as unreadable, with the repo remove that deletes it, not as one with worktrees" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const state = try testutil.stateScope(arena, sb.root);
+    defer state.restore();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const clone_path = try writeProjectWithClone(&sb, arena, ws, "acme", "proj", "widget", "https://holt-test.invalid/acme/widget");
+    try testutil.runGit(&sb, clone_path, &.{ "config", "core.repositoryformatversion", "1" });
+    try testutil.runGit(&sb, clone_path, &.{ "config", "extensions.holt-test-unknown", "x" });
+    const got = try testutil.runCmd(arena, archive_command.run, ws, &.{ "acme/proj", "--prune", "--yes" });
+    try testing.expect(fsutil.exists(clone_path));
+    try testing.expect(std.mem.indexOf(u8, got.out, "has worktrees") == null);
+    const shown = try fsutil.contractTilde(arena, app.envOf_current(), clone_path);
+    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "not pruned widget: git state of {s} could not be read; holt repo remove holt-test.invalid/acme/widget --clone --force deletes it; once settled, delete it with: holt repo remove holt-test.invalid/acme/widget --clone\n", .{shown})) != null);
 }
