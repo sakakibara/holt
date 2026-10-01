@@ -32,10 +32,19 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    const tests = b.addTest(.{ .root_module = root_module });
-    const run_tests = b.addRunArtifact(tests);
+    const tests = b.addTest(.{
+        .root_module = root_module,
+        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .server },
+    });
+    const test_shards = b.option(u32, "test-shards", "Processes the unit tests run across at once (default 64)") orelse 64;
+    if (test_shards == 0) @panic("-Dtest-shards must be at least 1");
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_tests.step);
+    for (0..test_shards) |i| {
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.setName(b.fmt("run test {d}/{d}", .{ i + 1, test_shards }));
+        run_tests.addArg(b.fmt("--shard={d}/{d}", .{ i, test_shards }));
+        test_step.dependOn(&run_tests.step);
+    }
     const test_bin_step = b.step("test-bin", "Build the unit test binary into zig-out/bin without running it");
     test_bin_step.dependOn(&b.addInstallArtifact(tests, .{}).step);
 
