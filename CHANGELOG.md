@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-10-01
 
 ### Added
 
@@ -96,6 +96,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   records says there is nothing to retire.
 - `holt worktree -r --force` removes a dirty worktree, passing `--force` to
   `git worktree remove`.
+- `holt doctor` notes each clone under `<code_root>/local` that has no
+  remote, with the project that claims it: no marker carries a URL for it,
+  so `holt restore` on another machine cannot recreate it. The note never
+  fails doctor.
 
 ### Changed
 
@@ -287,8 +291,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counts a failing `git status` as dirty.
 - Hint paths are quoted for PowerShell on Windows, each single quote in
   them doubled, the typographic ones U+2018 to U+201B, which PowerShell also
-  reads as quotes, included, and a path holding a backslash reads the same in fish and POSIX shells, the backslash kept inside
-  the quotes where both shells read it as is.
+  reads as quotes, included; a path holding a backslash reads the same in
+  fish and POSIX shells, the backslash kept inside the quotes where both
+  shells read it as is.
+- `holt doctor` fails on a clone under `<code_root>/local` that has gained
+  an origin outside holt, hinting `holt repo promote` when a marker claims
+  it and `holt repo adopt` otherwise. Before, such a clone went unreported.
+- On Windows, a remote URL is read as a local path only when git would: a
+  drive letter and `:` followed by a valid Windows path. `u:pw@h:p`, which
+  git reaches over ssh, is no longer taken for the drive `u:`.
+- On Windows, paths git prints with `/` are shown and compared with `\`:
+  the main clone `repo adopt` and `repo promote` name for a linked
+  worktree, the `.gitignore` line named for a negated path, doctor's hint
+  for a released key, and a worktree under `<clone>@worktrees` spelled with
+  `/`, which `repo remove --clone` now names with `holt worktree -r`.
 
 ## [0.9.2] - 2026-08-02
 
@@ -708,6 +724,7 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
+[0.10.0]: https://github.com/sakakibara/holt/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/sakakibara/holt/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/sakakibara/holt/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/sakakibara/holt/compare/v0.8.1...v0.9.0
