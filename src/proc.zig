@@ -340,6 +340,12 @@ pub fn run(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8)
 /// runner's stdin and stdout carry its protocol, so the child gets none of
 /// them: its stdio is null.
 pub fn spawnInherited(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8) !u8 {
+    return spawnInheritedEnv(alloc, argv, cwd, null);
+}
+
+/// `spawnInherited` with `environ_map`, when set, as the child's whole
+/// environment.
+pub fn spawnInheritedEnv(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8, environ_map: ?*const std.process.Environ.Map) !u8 {
     var threaded = spawnThreaded(alloc);
     defer threaded.deinit();
     const io = threaded.io();
@@ -348,6 +354,7 @@ pub fn spawnInherited(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?
     var child = try std.process.spawn(io, .{
         .argv = argv,
         .cwd = if (cwd) |c| .{ .path = c } else .inherit,
+        .environ_map = environ_map,
         .stdin = stdio,
         .stdout = stdio,
         .stderr = stdio,

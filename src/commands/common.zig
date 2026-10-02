@@ -298,7 +298,7 @@ pub fn cloneIfAbsent(ctx: *app.Ctx, url: []const u8, clone_path: []const u8) !bo
         return false;
     }
     var cd: diagnostic.Diagnostic = .{};
-    git.clone(ctx.alloc, url, clone_path, &cd) catch |err| switch (err) {
+    git.clone(ctx.alloc, url, clone_path, .allow, &cd) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => {
             try ctx.err.print("holt: {s}\n", .{cd.message});

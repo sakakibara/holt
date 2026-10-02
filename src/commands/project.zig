@@ -1336,7 +1336,7 @@ fn writeProjectWithClone(sb: *testutil.Sandbox, arena: std.mem.Allocator, ws: wo
     defer testing.allocator.free(bare);
     const id = try identity.fromUrl(arena, url);
     const clone_path = try id.clonePath(arena, ws.cfg.code_root);
-    try git.clone(arena, bare, clone_path, null);
+    try git.clone(arena, bare, clone_path, .allow, null);
     return clone_path;
 }
 

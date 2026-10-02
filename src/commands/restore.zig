@@ -4,6 +4,7 @@
 //! linked; with one, only that project and its member clones.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli");
 const app = @import("../app.zig");
 const project_mod = @import("../project.zig");
@@ -119,9 +120,9 @@ const CloneOutcome = struct {
 
 /// Runs in a worker thread: allocates only from `arena`, touches no shared
 /// state but the read-only job, and calls the concurrency-safe `git.clone`.
-fn cloneJob(_: void, arena: std.mem.Allocator, job: CloneJob) CloneOutcome {
+fn cloneJob(prompt: git.Prompt, arena: std.mem.Allocator, job: CloneJob) CloneOutcome {
     var cd: diagnostic.Diagnostic = .{};
-    git.clone(arena, job.url, job.clone_path, &cd) catch {
+    git.clone(arena, job.url, job.clone_path, prompt, &cd) catch {
         const msg = if (cd.message.len == 0) "clone failed" else cd.message;
         return .{ .ok = false, .message = msg };
     };
@@ -158,9 +159,23 @@ fn runProjects(ctx: *app.Ctx, targets: []const project_mod.Project, jobs_cap: ?u
         }
     }
 
+    // Clones run side by side never prompt; one that fails is cloned again
+    // alone, where git can ask for the credentials it may have needed.
     const results = try alloc.alloc(CloneOutcome, jobs.items.len);
-    var arenas = try parallel.map(void, CloneJob, CloneOutcome, cloneJob, alloc, jobs_cap, {}, jobs.items, results);
+    const side_by_side = parallel.workerCount(jobs_cap, jobs.items.len) > 1;
+    var arenas = try parallel.map(git.Prompt, CloneJob, CloneOutcome, cloneJob, alloc, jobs_cap, if (side_by_side) .forbid else .allow, jobs.items, results);
     defer arenas.deinit();
+    if (side_by_side) {
+        var failed: usize = 0;
+        for (results) |r| failed += @intFromBool(!r.ok);
+        if (failed > 0) {
+            try ctx.err.print("holt: retrying {d} clone{s} one at a time, so git can ask for credentials\n", .{ failed, if (failed == 1) "" else "s" });
+            try ctx.err.flush();
+            for (jobs.items, results) |job, *r| {
+                if (!r.ok) r.* = cloneJob(.allow, alloc, job);
+            }
+        }
+    }
 
     // Render on the main thread, in project order. A job's "cloned" line prints
     // once (at the first project that references it); a failed shared clone is
@@ -441,6 +456,70 @@ test "run: -j 0 is a usage error" {
 
     const got = try testutil.runCmd(arena, command.run, null, &.{ "-j", "0" });
     try testing.expectEqual(@as(u8, 2), got.code);
+}
+
+/// Restores two repos whose remote, like one that asks for credentials,
+/// refuses a clone made with git's terminal prompt off, with `args` as the
+/// command line. Returns the run and the GIT_TERMINAL_PROMPT each attempt
+/// saw, one line per attempt.
+fn restoreGated(arena: std.mem.Allocator, args: []const []const u8) !struct { got: testutil.RunResult, attempts: []const u8 } {
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const ws = try testutil.testWorkspace(arena, sb.root);
+    const log = try std.fs.path.join(arena, &.{ sb.root, "attempts.log" });
+    const gate = try std.fs.path.join(arena, &.{ sb.root, "gate.sh" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gate, .data = try std.fmt.allocPrint(arena,
+        \\printf '%s\n' "${{GIT_TERMINAL_PROMPT-unset}}" >> '{s}'
+        \\[ "$GIT_TERMINAL_PROMPT" = 0 ] && exit 128
+        \\exec "$1" "$2"
+        \\
+    , .{log}) });
+
+    var config: std.ArrayList(u8) = .empty;
+    try config.appendSlice(arena, "[protocol \"ext\"]\n\tallow = always\n");
+    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    for ([_][]const u8{ "repoa", "repob" }) |name| {
+        const bare = try testutil.makeBareRepo(&sb, try std.fmt.allocPrint(arena, "{s}.git", .{name}));
+        defer testing.allocator.free(bare);
+        const url = try std.fmt.allocPrint(arena, "https://holt-test.invalid/acme/{s}", .{name});
+        try repos.put(arena, name, url);
+        try config.appendSlice(arena, try std.fmt.allocPrint(arena, "[url \"ext::sh {s} %S {s}\"]\n\tinsteadOf = {s}\n", .{ gate, bare, url }));
+    }
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gated", repos, .empty);
+    const config_path = try std.fs.path.join(arena, &.{ sb.root, "gated.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = config_path, .data = config.items });
+    const override = try testutil.EnvOverride.install(arena, "GIT_CONFIG_GLOBAL", config_path);
+    defer override.restore();
+
+    const got = try testutil.runCmd(arena, command.run, ws, args);
+    const attempts = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), log, arena, .limited(1 << 20));
+    return .{ .got = got, .attempts = attempts };
+}
+
+test "run: parallel clones never let git prompt, and a clone that failed is retried alone so git can ask for credentials" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const r = try restoreGated(arena, &.{ "-j", "2" });
+    try testing.expectEqual(@as(u8, 0), r.got.code);
+    try testing.expectEqualStrings("0\n0\nunset\nunset\n", r.attempts);
+    try testing.expect(std.mem.indexOf(u8, r.got.err, "retrying 2 clones one at a time") != null);
+    try testing.expect(std.mem.indexOf(u8, r.got.out, "cloned repoa") != null);
+    try testing.expect(std.mem.indexOf(u8, r.got.out, "cloned repob") != null);
+}
+
+test "run: -j 1 lets git prompt from the first attempt, and retries nothing" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const r = try restoreGated(arena, &.{ "-j", "1" });
+    try testing.expectEqual(@as(u8, 0), r.got.code);
+    try testing.expectEqualStrings("unset\nunset\n", r.attempts);
+    try testing.expect(std.mem.indexOf(u8, r.got.err, "retrying") == null);
 }
 
 test "run: with no project argument, reports a repo whose marker url cannot resolve and exits nonzero" {

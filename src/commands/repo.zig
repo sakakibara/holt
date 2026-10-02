@@ -1825,7 +1825,7 @@ test "get: -p to a second project shares an existing clone rather than re-clonin
     // skip path rejects an incomplete one.
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
-    try git.clone(arena, bare, clone_path, null);
+    try git.clone(arena, bare, clone_path, .allow, null);
     const stat_before = try std.Io.Dir.cwd().statFile(fsutil.io(), clone_path, .{});
 
     const first = try testutil.runCmd(arena, get_command.run, ws, &.{ url, "-p", "first" });

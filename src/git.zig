@@ -55,8 +55,8 @@ pub fn runEnv(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const 
 /// own progress to the terminal and can prompt for credentials, returning the
 /// mapped exit status. Nothing is captured, so a caller wanting git's stderr
 /// text uses `run` instead.
-pub fn spawnStreamed(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8) !u8 {
-    return proc.spawnInherited(alloc, argv, cwd) catch |err| switch (err) {
+pub fn spawnStreamed(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8, environ_map: ?*const std.process.Environ.Map) !u8 {
+    return proc.spawnInheritedEnv(alloc, argv, cwd, environ_map) catch |err| switch (err) {
         error.FileNotFound => error.GitNotFound,
         else => err,
     };
@@ -64,10 +64,15 @@ pub fn spawnStreamed(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[
 
 pub const Unpushed = enum { clean, ahead, no_upstream };
 
+/// Whether a clone may ask for credentials on the terminal. Clones running
+/// side by side `forbid` it: their prompts would share one terminal, and
+/// each line typed would reach whichever git read first.
+pub const Prompt = enum { allow, forbid };
+
 /// `git clone url dest`, creating `dest`'s parent directories first. The
-/// clone streams git's own progress to the terminal and can prompt for
-/// credentials; git prints the real cause of a failure itself, so `diag`
-/// (if non-null) carries only a short summary.
+/// clone streams git's own progress to the terminal and, under `.allow`, can
+/// prompt for credentials; git prints the real cause of a failure itself, so
+/// `diag` (if non-null) carries only a short summary.
 ///
 /// The clone lands in a unique sibling temp dir and is then renamed into
 /// `dest` atomically, so the canonical path only ever appears fully populated:
@@ -78,8 +83,15 @@ pub const Unpushed = enum { clean, ahead, no_upstream };
 /// `url` is a marker value, so it is separated from the options by `--`:
 /// without it a value starting with `-` is read by git as an option
 /// (`--upload-pack=<cmd>` names a command git runs) rather than a repository.
-pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, diag: ?*diagnostic.Diagnostic) !void {
+pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, prompt: Prompt, diag: ?*diagnostic.Diagnostic) !void {
     if (std.fs.path.dirname(dest)) |parent| try fsutil.ensureDir(parent);
+
+    var env: ?std.process.Environ.Map = null;
+    defer if (env) |*m| m.deinit();
+    if (prompt == .forbid) {
+        env = try std.process.Environ.createMap(std.Io.Threaded.global_single_threaded.environ.process_environ, alloc);
+        try env.?.put("GIT_TERMINAL_PROMPT", "0");
+    }
 
     var random_bytes: [8]u8 = undefined;
     fsutil.io().random(&random_bytes);
@@ -89,7 +101,7 @@ pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, diag: 
     defer alloc.free(tmp);
     defer std.Io.Dir.cwd().deleteTree(fsutil.io(), tmp) catch {};
 
-    const status = spawnStreamed(alloc, &.{ "git", "clone", "--", url, tmp }, null) catch |err| switch (err) {
+    const status = spawnStreamed(alloc, &.{ "git", "clone", "--", url, tmp }, null, if (env) |*m| m else null) catch |err| switch (err) {
         error.GitNotFound => {
             if (diag) |d| d.set(alloc, "git is not installed or not on your PATH", .{});
             return error.GitNotFound;
@@ -588,7 +600,7 @@ test "clone: populates dest from a makeBareRepo bare, checked out on main" {
     const dest = try std.fs.path.join(testing.allocator, &.{ sb.root, "cloned" });
     defer testing.allocator.free(dest);
 
-    try clone(testing.allocator, bare, dest, null);
+    try clone(testing.allocator, bare, dest, .allow, null);
 
     const branch = try currentBranch(testing.allocator, dest);
     defer if (branch) |b| testing.allocator.free(b);
@@ -609,7 +621,7 @@ test "clone: on failure, sets the diagnostic to a message containing the url" {
     defer arena_state.deinit();
     const override = try testutil.gitUnreachable(arena_state.allocator(), sb.root, &.{url});
     defer override.restore();
-    try testing.expectError(error.GitCloneFailed, clone(testing.allocator, url, dest, &cd));
+    try testing.expectError(error.GitCloneFailed, clone(testing.allocator, url, dest, .allow, &cd));
     defer testing.allocator.free(cd.message);
     try testing.expect(std.mem.indexOf(u8, cd.message, url) != null);
 }
@@ -634,7 +646,7 @@ test "clone: a url beginning with `-` is the repository git clones, not an optio
     defer override.restore();
 
     const dest = try std.fs.path.join(arena, &.{ sb.root, "cloned" });
-    try clone(arena, url, dest, null);
+    try clone(arena, url, dest, .allow, null);
 
     const branch = try currentBranch(arena, dest);
     try testing.expect(branch != null);
