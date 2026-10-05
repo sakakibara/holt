@@ -246,7 +246,8 @@ fn hasBlock(alloc: std.mem.Allocator, path: []const u8) !bool {
 /// Runs every kept-file check over the clones of the code tree and the hub
 /// roots of `projects`, writing nothing in holt's machine-local state
 /// (`kept_cmd.reportCtx`) and taking no lock.
-pub fn run(alloc: std.mem.Allocator, ws: *const workspace.Workspace, projects: []const project_mod.Project) !Report {
+pub fn run(alloc: std.mem.Allocator, ws: *const workspace.Workspace, projects: []const project_mod.Project, progress: ?*doctor.Progress) !Report {
+    defer if (progress) |pr| pr.endWalk();
     const synced = ws.cfg.synced_root;
     var report: Report = .{ .setup = try kept_cmd.setup(alloc, synced) };
     const clones = try ws.listClones(alloc);
@@ -314,7 +315,7 @@ pub fn run(alloc: std.mem.Allocator, ws: *const workspace.Workspace, projects: [
             return report;
         },
     };
-    try checkStore(alloc, ctx, &index, &report);
+    try checkStore(alloc, ctx, &index, &report, progress);
 
     const git_ok = if (kept.clone.requireGit(alloc)) true else |err| switch (err) {
         error.GitTooOld => false,
@@ -327,6 +328,7 @@ pub fn run(alloc: std.mem.Allocator, ws: *const workspace.Workspace, projects: [
 
     var infos: std.ArrayList(CloneInfo) = .empty;
     for (clones) |p| {
+        if (progress) |pr| pr.enter(p);
         const c = kept.clone.inspect(alloc, p, ctx.code_root) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
@@ -338,6 +340,7 @@ pub fn run(alloc: std.mem.Allocator, ws: *const workspace.Workspace, projects: [
         try checkClone(ctx, &index, &b, &info);
         try infos.append(alloc, info);
     }
+    if (progress) |pr| pr.endWalk();
 
     for (projects) |p| {
         const loose = try kept_cmd.hubLoose(alloc, p.hub_path, ctx);
@@ -508,7 +511,7 @@ fn isReservedCopy(name: []const u8, known: []const []const u8) bool {
 
 /// The store checks: each key's record, markers, paths, unknown and
 /// online-only files, conflict copies, and the aside entries.
-fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIndex, report: *Report) !void {
+fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIndex, report: *Report, progress: ?*doctor.Progress) !void {
     const layout = ctx.layout;
     const kept_dir = try layout.keptDir(alloc);
     var invalid: std.ArrayList(KeyRel) = .empty;
@@ -526,6 +529,7 @@ fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIn
     const host = kept.machine.hostName(&host_buf);
 
     for (index.keys) |key| {
+        if (progress) |pr| pr.enter(try fsutil.joinSlashy(alloc, kept_dir, key));
         const ks = try store.loadKeyState(alloc, layout, key);
         try bad.appendSlice(alloc, ks.bad);
         if (ks.record) |rec| if (!rec.known()) try versions.append(alloc, key);
@@ -558,6 +562,7 @@ fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIn
             }
         }
     }
+    if (progress) |pr| pr.endWalk();
     try reservedCopiesIn(alloc, kept_dir, &top_reserved, &copies);
     try reservedStandIns(alloc, kept_dir, &placeholders);
     try strayOutsideKeys(alloc, kept_dir, index.keys, &unknown, &unrecorded, &placeholders);

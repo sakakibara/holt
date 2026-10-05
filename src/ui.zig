@@ -139,17 +139,34 @@ pub fn quotePathFor(alloc: std.mem.Allocator, env: Env, path: []const u8, shell:
     return printable(alloc, try shellQuote(alloc, t));
 }
 
-/// `s` with each control character shown as `\xHH`, so what a name holds
-/// never drives the terminal.
+/// `s` with each control character, C0, DEL, or a C1 one in UTF-8, shown
+/// as `\xHH` for each of its bytes, so what a name holds never drives the
+/// terminal.
 pub fn printable(alloc: std.mem.Allocator, s: []const u8) ![]const u8 {
-    for (s) |c| {
-        if (c < 0x20 or c == 0x7f) break;
+    for (s, 0..) |_, i| {
+        if (controlLen(s, i) > 0) break;
     } else return s;
     var aw: std.Io.Writer.Allocating = .init(alloc);
-    for (s) |c| {
-        if (c < 0x20 or c == 0x7f) try aw.writer.print("\\x{x:0>2}", .{c}) else try aw.writer.writeByte(c);
+    var i: usize = 0;
+    while (i < s.len) {
+        const n = controlLen(s, i);
+        if (n == 0) {
+            try aw.writer.writeByte(s[i]);
+            i += 1;
+            continue;
+        }
+        for (s[i .. i + n]) |c| try aw.writer.print("\\x{x:0>2}", .{c});
+        i += n;
     }
     return aw.written();
+}
+
+/// The bytes of the control character at `s[i]`, or 0 when none starts there.
+fn controlLen(s: []const u8, i: usize) usize {
+    const c = s[i];
+    if (c < 0x20 or c == 0x7f) return 1;
+    if (c == 0xc2 and i + 1 < s.len and s[i + 1] >= 0x80 and s[i + 1] <= 0x9f) return 2;
+    return 0;
 }
 
 /// Test seam: when set, `stderrIsTerminal` answers this instead of asking.
@@ -161,6 +178,30 @@ pub fn stderrIsTerminal() bool {
     if (stderr_terminal_for_test) |t| return t;
     if (@import("builtin").is_test) return false;
     return std.Io.File.stderr().isTty(fsutil.io()) catch false;
+}
+
+/// Columns of the terminal standard error is on; 80 when that cannot be
+/// told, as on Windows.
+pub fn stderrColumns() usize {
+    if (@import("builtin").os.tag == .windows) return 80;
+    var size: std.posix.winsize = undefined;
+    const rc = std.posix.system.ioctl(std.posix.STDERR_FILENO, std.posix.T.IOCGWINSZ, @intFromPtr(&size));
+    if (std.posix.errno(rc) != .SUCCESS or size.col == 0) return 80;
+    return size.col;
+}
+
+/// Whether standard error is a terminal that takes ANSI escape codes,
+/// turning them on where they must be, as in a Windows console; never when
+/// `TERM` is `dumb`, and under test, false unless the `stderrIsTerminal`
+/// seam says otherwise.
+pub fn stderrTakesEscapes(alloc: std.mem.Allocator, env: Env) bool {
+    if (env.get(alloc, "TERM")) |t| if (std.mem.eql(u8, t, "dumb")) return false;
+    if (stderr_terminal_for_test) |t| return t;
+    if (@import("builtin").is_test) return false;
+    const f = std.Io.File.stderr();
+    if (!(f.isTty(fsutil.io()) catch false)) return false;
+    f.enableAnsiEscapeCodes(fsutil.io()) catch return false;
+    return true;
 }
 
 /// Test seam: when set, `stdinIsTerminal` answers this instead of asking.
@@ -439,4 +480,26 @@ test "powershellQuote: doubles each typographic single quote PowerShell reads as
         try testing.expectEqualStrings(want, try powershellQuote(arena, arg));
     }
     try testing.expectEqualStrings("'C:\\\u{201C}x\u{201D}'", try powershellQuote(arena, "C:\\\u{201C}x\u{201D}"));
+}
+
+test "printable: a C1 control character is escaped byte by byte, other characters pass" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqualStrings("a\\xc2\\x85b\\xc2\\x9b", try printable(arena, "a\u{85}b\u{9b}"));
+    try testing.expectEqualStrings("\u{e9}\u{a0}\u{30de}", try printable(arena, "\u{e9}\u{a0}\u{30de}"));
+}
+
+test "stderrTakesEscapes: a terminal that says it is dumb takes none" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const map = try arena.create(std.process.Environ.Map);
+    map.* = std.process.Environ.Map.init(arena);
+    const env: Env = .{ .map = map };
+    stderr_terminal_for_test = true;
+    defer stderr_terminal_for_test = null;
+    try testing.expect(stderrTakesEscapes(arena, env));
+    try map.put("TERM", "dumb");
+    try testing.expect(!stderrTakesEscapes(arena, env));
 }

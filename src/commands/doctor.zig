@@ -9,6 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const cli = @import("cli");
+const Env = @import("env").Env;
 const app = @import("../app.zig");
 const doctor = @import("../doctor.zig");
 const doctor_kept = @import("../doctor_kept.zig");
@@ -100,11 +101,26 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     }
 
     const ws = ctx.context.?.ws;
-    const report = try doctor.run(ctx.alloc, &ws, .{ .full = full, .fix = fix, .jobs = a.jobs });
+    const terminal = ui.stderrTakesEscapes(ctx.alloc, app.envOf(ctx));
+    const started = std.Io.Clock.awake.now(fsutil.io());
+    var progress: doctor.Progress = .{};
+    const report = report: {
+        var reporter: Reporter = .init(&progress, ctx.err, terminal, null, ws.cfg.synced_root, app.envOf(ctx), .workspace, started);
+        reporter.start();
+        defer reporter.finish();
+        break :report try doctor.run(ctx.alloc, &ws, .{ .full = full, .fix = fix, .jobs = a.jobs, .progress = &progress });
+    };
     try renderBackend(ctx, &ws.cfg);
     try render(ctx, &report);
     if (fix) try fixKept(ctx, a.jobs);
-    const kept_report = try doctor_kept.run(ctx.alloc, &ws, try loadedProjects(ctx.alloc, &ws));
+    try ctx.out.flush();
+    var kept_progress: doctor.Progress = .{};
+    const kept_report = kept_report: {
+        var reporter: Reporter = .init(&kept_progress, ctx.err, terminal, null, ws.cfg.synced_root, app.envOf(ctx), .kept, started);
+        reporter.start();
+        defer reporter.finish();
+        break :kept_report try doctor_kept.run(ctx.alloc, &ws, try loadedProjects(ctx.alloc, &ws), &kept_progress);
+    };
     try renderKept(ctx, &ws, &kept_report);
     return if (report.ok() and kept_report.ok()) 0 else 1;
 }
@@ -397,6 +413,181 @@ fn renderKept(ctx: *app.Ctx, ws: *const workspace.Workspace, r: *const doctor_ke
         try w.print("note: {s} has no clone here, and {s} shares its history: same history - renamed, transferred, or a fork (run: holt keep --from {s} {s})\n", .{ o.key, try util.q(ctx, o.clone), try ui.shellQuote(a, o.key), try util.q(ctx, o.clone) });
     }
     for (r.suspected_conflicts) |p| try w.print("note: {s} looks like a cloud conflict copy; merge what you need, then delete it\n", .{try util.q(ctx, p)});
+}
+
+/// Reports how far one phase of doctor has got, and the time since
+/// `started`, from a thread of its own: a cloud folder can take minutes to
+/// read each folder and file the first time. After `delay_ms`, on a terminal
+/// that takes escape codes it redraws one status line in place every
+/// `interval_ms`, fitted to the terminal's width at each redraw, and erases
+/// it at `finish`; elsewhere it prints one line. Nothing else may write to
+/// `w` between `start` and `finish`.
+const Reporter = struct {
+    progress: *doctor.Progress,
+    w: *std.Io.Writer,
+    terminal: bool,
+    /// The width to fit; null asks the terminal at each redraw.
+    columns: ?usize,
+    root: []const u8,
+    env: Env,
+    phase: Phase,
+    started: std.Io.Timestamp,
+    delay_ms: u32,
+    interval_ms: u32 = 1_000,
+    stop: std.atomic.Value(bool) = .init(false),
+    ended: std.atomic.Value(bool) = .init(false),
+    /// Lines written so far.
+    frames: std.atomic.Value(usize) = .init(0),
+    thread: ?std.Thread = null,
+
+    /// A reporter yet to start, which waits two seconds on a terminal before
+    /// its first line and five elsewhere.
+    fn init(progress: *doctor.Progress, w: *std.Io.Writer, terminal: bool, columns: ?usize, root: []const u8, env: Env, phase: Phase, started: std.Io.Timestamp) Reporter {
+        return .{ .progress = progress, .w = w, .terminal = terminal, .columns = columns, .root = root, .env = env, .phase = phase, .started = started, .delay_ms = if (terminal) 2_000 else 5_000 };
+    }
+
+    /// Without a thread there is no report; the run itself is unaffected.
+    fn start(r: *Reporter) void {
+        r.thread = std.Thread.spawn(.{}, loop, .{r}) catch null;
+    }
+
+    fn finish(r: *Reporter) void {
+        r.stop.store(true, .release);
+        if (r.thread) |t| t.join();
+        r.thread = null;
+        if (!r.terminal or r.frames.load(.acquire) == 0) return;
+        r.w.writeAll("\r\x1b[K") catch {};
+        r.w.flush() catch {};
+    }
+
+    /// Sleeps `ms`, or less once `finish` is called; false then.
+    fn wait(r: *Reporter, ms: u32) bool {
+        const io = fsutil.io();
+        const deadline = std.Io.Clock.awake.now(io).addDuration(.fromMilliseconds(ms));
+        while (!r.stop.load(.acquire)) {
+            const left = std.Io.Clock.awake.now(io).durationTo(deadline).toMilliseconds();
+            if (left <= 0) return true;
+            std.Io.sleep(io, .fromMilliseconds(@min(left, 25)), .awake) catch {};
+        }
+        return false;
+    }
+
+    fn loop(r: *Reporter) void {
+        defer r.ended.store(true, .release);
+        if (!r.wait(r.delay_ms)) return;
+        var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena_state.deinit();
+        var buf: [doctor.Progress.path_max]u8 = undefined;
+        while (true) {
+            _ = arena_state.reset(.retain_capacity);
+            const seen = r.progress.snapshot(&buf);
+            const elapsed = r.started.durationTo(std.Io.Clock.awake.now(fsutil.io()));
+            const columns = if (!r.terminal) std.math.maxInt(usize) else r.columns orelse ui.stderrColumns();
+            const line = statusLine(arena_state.allocator(), r.env, r.phase, seen.count, seen.path, r.root, columns, elapsed) catch return;
+            _ = r.frames.fetchAdd(1, .release);
+            if (r.terminal) {
+                r.w.print("\r{s}\x1b[K", .{line}) catch return;
+            } else {
+                r.w.print("{s}\n", .{line}) catch return;
+            }
+            r.w.flush() catch return;
+            if (!r.terminal or !r.wait(r.interval_ms)) return;
+        }
+    }
+};
+
+/// The part of a doctor run a `Reporter` reports: the workspace checks,
+/// whose walk of the synced folder counts folders, or the kept-file checks.
+const Phase = enum { workspace, kept };
+
+/// The line `Reporter` shows in `phase` for `count` places entered and the
+/// one it is in, `path` (empty when in none), shown relative to `root`, or
+/// from `~` when outside it, with `elapsed` at its end. By `columnsOf` it
+/// leaves the last two of `columns` free, so a redraw in place never wraps;
+/// the path keeps its end, and is left out when too little of it fits.
+fn statusLine(alloc: std.mem.Allocator, env: Env, phase: Phase, count: usize, path: []const u8, root: []const u8, columns: usize, elapsed: std.Io.Duration) ![]const u8 {
+    const limit = columns -| 2;
+    const suffix = try std.fmt.allocPrint(alloc, " ({s})", .{try elapsedText(alloc, elapsed)});
+    const lead, const path_lead = switch (phase) {
+        .workspace => if (count == 0)
+            .{ "holt: doctor: checking the workspace", "" }
+        else if (path.len == 0)
+            .{ try std.fmt.allocPrint(alloc, "holt: doctor: scanned {d} folder{s}; checking the rest", .{ count, if (count == 1) "" else "s" }), "" }
+        else
+            .{ try std.fmt.allocPrint(alloc, "holt: doctor: scanned {d} folder{s}", .{ count, if (count == 1) "" else "s" }), ", now in " },
+        .kept => .{ "holt: doctor: checking kept files", if (path.len == 0) "" else ", now " },
+    };
+    const plain = fitAscii(try std.mem.concat(alloc, u8, &.{ lead, suffix }), limit);
+    if (path_lead.len == 0) return plain;
+    const rel = if (std.mem.startsWith(u8, path, root) and path.len > root.len and std.fs.path.isSep(path[root.len])) path[root.len + 1 ..] else try fsutil.contractTilde(alloc, env, path);
+    const shown = try ui.printable(alloc, rel);
+    if (shown.len == 0) return plain;
+    const budget = limit -| (lead.len + path_lead.len + suffix.len);
+    if (columnsOf(shown) <= budget) return std.mem.concat(alloc, u8, &.{ lead, path_lead, shown, suffix });
+    if (budget < 4) return plain;
+    const tail = tailColumns(shown, budget - 3);
+    if (tail.len == 0) return plain;
+    return std.mem.concat(alloc, u8, &.{ lead, path_lead, "...", tail, suffix });
+}
+
+/// `line`, which is ASCII, cut to at most `limit` columns.
+fn fitAscii(line: []const u8, limit: usize) []const u8 {
+    return line[0..@min(line.len, limit)];
+}
+
+/// `elapsed` as `7s`, `1m05s`, or `1h02m`.
+fn elapsedText(alloc: std.mem.Allocator, elapsed: std.Io.Duration) ![]const u8 {
+    const s: u64 = @intCast(@max(elapsed.toSeconds(), 0));
+    if (s < 60) return std.fmt.allocPrint(alloc, "{d}s", .{s});
+    if (s < 3600) return std.fmt.allocPrint(alloc, "{d}m{d:0>2}s", .{ s / 60, s % 60 });
+    return std.fmt.allocPrint(alloc, "{d}h{d:0>2}m", .{ s / 3600, s % 3600 / 60 });
+}
+
+/// At least the terminal columns `s` takes: one for an ASCII byte, two for
+/// any other character, and two for each byte of a sequence that decodes to
+/// none, which a terminal may draw as one wide replacement character a byte.
+fn columnsOf(s: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) {
+        const len = unitLen(s, i);
+        n += unitColumns(s[i .. i + len]);
+        i += len;
+    }
+    return n;
+}
+
+fn unitColumns(unit: []const u8) usize {
+    if (unit[0] < 0x80) return 1;
+    return if (std.unicode.utf8ValidateSlice(unit)) 2 else 2 * unit.len;
+}
+
+/// The bytes of the character at `s[i]`: one for ASCII or a byte that
+/// starts no character, else its lead byte and the continuation bytes that
+/// follow, at most as many as the lead byte calls for.
+fn unitLen(s: []const u8, i: usize) usize {
+    const want: usize = switch (s[i]) {
+        0xc0...0xdf => 2,
+        0xe0...0xef => 3,
+        0xf0...0xf7 => 4,
+        else => 1,
+    };
+    var n: usize = 1;
+    while (n < want and i + n < s.len and s[i + n] & 0xc0 == 0x80) n += 1;
+    return n;
+}
+
+/// The longest end of `s` that takes at most `budget` columns by
+/// `columnsOf`, starting at a character boundary.
+fn tailColumns(s: []const u8, budget: usize) []const u8 {
+    var total = columnsOf(s);
+    var i: usize = 0;
+    while (i < s.len and total > budget) {
+        const len = unitLen(s, i);
+        total -= unitColumns(s[i .. i + len]);
+        i += len;
+    }
+    return s[i..];
 }
 
 test "run: every planted violation is caught; --fix resolves only the hub drift" {
@@ -973,6 +1164,24 @@ test "run: kept checks pass on a healthy kept path, and note the aside, naming -
     try testutil.ageAsideEntries(arena, w.ws.cfg.synced_root);
     const aged = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expect(has(aged.out, "; 1 can be removed (run: holt keep --prune-aside)\n"));
+}
+
+test "doctor_kept.run: enters each kept key and each clone it checks into the progress, and none once it ends" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try keptWorld(arena, &sb, true);
+    defer w.deinit();
+    try w.keep(arena, ".clasp.json", "{}\n");
+
+    var progress: doctor.Progress = .{};
+    _ = try doctor_kept.run(arena, &w.ws, try loadedProjects(arena, &w.ws), &progress);
+    var buf: [doctor.Progress.path_max]u8 = undefined;
+    const seen = progress.snapshot(&buf);
+    try testing.expectEqual(@as(usize, 2), seen.count);
+    try testing.expectEqualStrings("", seen.path);
 }
 
 test "run: the aside note names --prune-aside only while an entry can be removed" {
@@ -1623,4 +1832,155 @@ test "run: a released path of a key with no clone here names the clone to get an
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     const at = try quoted(arena, try std.fs.path.join(arena, &.{ w.ws.cfg.code_root, "github.com", "acme", "gone", "old.json" }));
     try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "(run: holt repo get 'https://github.com/acme/gone' && holt unkeep --purge {s} --yes)\n", .{at})));
+}
+
+fn reportFor(arena: std.mem.Allocator, terminal: bool, delay_ms: u32, frames: usize, linger_ms: u32) ![]const u8 {
+    var progress: doctor.Progress = .{};
+    progress.enter("/synced/projects/acme");
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    var r: Reporter = .init(&progress, &aw.writer, terminal, 80, "/synced", app.envOf_current(), .workspace, std.Io.Clock.awake.now(fsutil.io()));
+    r.delay_ms = delay_ms;
+    r.interval_ms = 10;
+    r.start();
+    const io = fsutil.io();
+    const deadline = std.Io.Clock.awake.now(io).addDuration(.fromSeconds(5));
+    while (r.frames.load(.acquire) < frames and std.Io.Clock.awake.now(io).durationTo(deadline).toMilliseconds() > 0) std.Io.sleep(io, .fromMilliseconds(5), .awake) catch {};
+    std.Io.sleep(io, .fromMilliseconds(linger_ms), .awake) catch {};
+    r.stop.store(true, .release);
+    const stop_by = std.Io.Clock.awake.now(io).addDuration(.fromSeconds(2));
+    while (r.thread != null and !r.ended.load(.acquire)) {
+        // Returning would leave the thread writing to this frame's memory.
+        if (std.Io.Clock.awake.now(io).durationTo(stop_by).toMilliseconds() <= 0) @panic("the reporter did not stop");
+        std.Io.sleep(io, .fromMilliseconds(10), .awake) catch {};
+    }
+    r.finish();
+    if (r.frames.load(.acquire) < frames) return error.TooFewFrames;
+    return aw.written();
+}
+
+test "Reporter: on a terminal, redraws one line in place, erasing what the last left, and erases it at the end" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const out = try reportFor(arena_state.allocator(), true, 0, 2, 0);
+    try testing.expect(std.mem.indexOfScalar(u8, out, '\n') == null);
+    try testing.expect(std.mem.startsWith(u8, out, "\rholt: doctor: scanned 1 folder, now in projects/acme ("));
+    try testing.expect(std.mem.count(u8, out, "\r") >= 3);
+    try testing.expectEqual(std.mem.count(u8, out, "\r"), std.mem.count(u8, out, "\x1b[K"));
+    try testing.expect(std.mem.endsWith(u8, out, "s)\x1b[K\r\x1b[K"));
+}
+
+test "Reporter: off a terminal, prints one plain line once the delay has passed" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const out = try reportFor(arena_state.allocator(), false, 0, 1, 50);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "\n"));
+    try testing.expect(std.mem.startsWith(u8, out, "holt: doctor: scanned 1 folder, now in projects/acme ("));
+    try testing.expect(std.mem.indexOfAny(u8, out, "\r\x1b") == null);
+}
+
+test "Reporter: a run that ends before the delay prints nothing, and stopping does not wait out the delay" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const started = std.Io.Clock.awake.now(fsutil.io());
+    const out = try reportFor(arena_state.allocator(), true, 60_000, 0, 0);
+    const elapsed = started.durationTo(std.Io.Clock.awake.now(fsutil.io()));
+    try testing.expectEqualStrings("", out);
+    try testing.expect(elapsed.toMilliseconds() < 2_000);
+}
+
+test "statusLine: a long path keeps its end, leaving the last two columns free" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const path = "/synced/" ++ "a/" ** 40 ++ "refs/heads";
+    try testing.expectEqualStrings("holt: doctor: scanned 1234 folders, now in ...a/a/a/a/a/a/a/refs/heads (1h02m)", try statusLine(arena, try lineEnv(arena), .workspace, 1234, path, "/synced", 80, .fromSeconds(3725)));
+}
+
+test "statusLine: wide characters are counted as two columns, and a cut never splits one" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const path = "/synced/projects/" ++ "\u{30de}\u{30a4}\u{30c9}\u{30e9}\u{30a4}\u{30d6}/" ** 8 ++ "refs/heads";
+    const line = try statusLine(arena, try lineEnv(arena), .workspace, 1234, path, "/synced", 80, .fromSeconds(3725));
+    try testing.expect(std.unicode.utf8ValidateSlice(line));
+    var width: usize = 0;
+    var it = std.unicode.Utf8View.initUnchecked(line).iterator();
+    while (it.nextCodepoint()) |cp| width += if (cp < 0x80) 1 else 2;
+    try testing.expect(width <= 78);
+    try testing.expect(std.mem.endsWith(u8, line, "refs/heads (1h02m)"));
+    try testing.expect(std.mem.indexOf(u8, line, "now in ...") != null);
+}
+
+test "statusLine: a terminal too narrow for the line gets a cut that still leaves two columns free" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const env = try lineEnv(arena);
+    try testing.expectEqualStrings("", try statusLine(arena, env, .workspace, 0, "", "/synced", 1, .fromSeconds(3)));
+    try testing.expectEqualStrings("", try statusLine(arena, env, .workspace, 0, "", "/synced", 2, .fromSeconds(3)));
+    try testing.expectEqualStrings("holt: doctor: chec", try statusLine(arena, env, .workspace, 0, "", "/synced", 20, .fromSeconds(3)));
+    try testing.expectEqualStrings("holt: doctor: scanned 3 folders, now in ...ts (3s)", try statusLine(arena, env, .workspace, 3, "/synced/projects", "/synced", 52, .fromSeconds(3)));
+    try testing.expectEqualStrings("holt: doctor: scanned 3 folders (3s)", try statusLine(arena, env, .workspace, 3, "/synced/projects", "/synced", 42, .fromSeconds(3)));
+    try testing.expectEqualStrings("holt: doctor: scanned 3 folders (3s)", try statusLine(arena, env, .workspace, 3, "/synced/", "/synced", 38, .fromSeconds(3)));
+    try testing.expectEqualStrings("holt: doctor: scanned 3 fold", try statusLine(arena, env, .workspace, 3, "/synced/projects", "/synced", 30, .fromSeconds(3)));
+}
+
+test "columnsOf: a byte sequence that decodes to no character counts two columns a byte" {
+    try testing.expectEqual(@as(usize, 6), columnsOf("\xe0\x80\x80"));
+    try testing.expectEqual(@as(usize, 6), columnsOf("\xed\xa0\x80"));
+    try testing.expectEqual(@as(usize, 8), columnsOf("\xf5\x80\x80\x80"));
+    try testing.expectEqualStrings("\xe0\x80\x80x", tailColumns("ab\xe0\x80\x80x", 7));
+}
+
+test "statusLine: a path whose end does not fit the room left is left out" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqualStrings("holt: doctor: scanned 3 folders (3s)", try statusLine(arena, try lineEnv(arena), .workspace, 3, "/synced/xxxxx\u{30de}", "/synced", 51, .fromSeconds(3)));
+}
+
+test "columnsOf: never counts fewer columns than a terminal draws" {
+    try testing.expectEqual(@as(usize, 3), columnsOf("abc"));
+    try testing.expectEqual(@as(usize, 2), columnsOf("\u{e9}"));
+    try testing.expectEqual(@as(usize, 4), columnsOf("\u{30ab}\u{3099}"));
+    try testing.expectEqual(@as(usize, 5), columnsOf("\x80\x80a"));
+    try testing.expectEqual(@as(usize, 4), columnsOf("\xe3\x83"));
+}
+
+test "tailColumns: keeps whole characters, and a stray byte is a character of its own" {
+    try testing.expectEqualStrings("\u{30de}x", tailColumns("ab\u{30de}x", 3));
+    try testing.expectEqualStrings("x", tailColumns("ab\u{30de}x", 2));
+    try testing.expectEqualStrings("\x80x", tailColumns("a\x80x", 3));
+}
+
+test "statusLine: every line names the time so far, so a wait on one slow folder still moves" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqualStrings("holt: doctor: checking the workspace (7s)", try statusLine(arena, try lineEnv(arena), .workspace, 0, "", "/synced", 80, .fromSeconds(7)));
+    try testing.expectEqualStrings("holt: doctor: scanned 1 folder, now in projects (1m05s)", try statusLine(arena, try lineEnv(arena), .workspace, 1, "/synced/projects", "/synced", 80, .fromSeconds(65)));
+    try testing.expectEqualStrings("holt: doctor: scanned 2 folders; checking the rest (59s)", try statusLine(arena, try lineEnv(arena), .workspace, 2, "", "/synced", 80, .fromSeconds(59)));
+}
+
+test "statusLine: a place outside the synced folder is shown from ~" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqualStrings("holt: doctor: checking kept files, now ~/Code/github.com/acme/w (3s)", try statusLine(arena, try lineEnv(arena), .kept, 4, "/home/u/Code/github.com/acme/w", "/synced", 80, .fromSeconds(3)));
+}
+
+fn lineEnv(a: std.mem.Allocator) !Env {
+    const map = try a.create(std.process.Environ.Map);
+    map.* = std.process.Environ.Map.init(a);
+    try map.put("HOME", "/home/u");
+    return .{ .map = map };
+}
+
+test "statusLine: the kept phase names the kept key or clone it checks" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqualStrings("holt: doctor: checking kept files (12s)", try statusLine(arena, try lineEnv(arena), .kept, 0, "", "/synced", 80, .fromSeconds(12)));
+    try testing.expectEqualStrings("holt: doctor: checking kept files, now kept/github.com/acme/w (12s)", try statusLine(arena, try lineEnv(arena), .kept, 3, "/synced/kept/github.com/acme/w", "/synced", 80, .fromSeconds(12)));
 }

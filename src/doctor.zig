@@ -133,6 +133,8 @@ pub const Options = struct {
     fix: bool = false,
     /// Concurrency for the per-clone integrity scan; null = auto, 1 = serial.
     jobs: ?usize = null,
+    /// Where the symlink walk of the synced folder reports how far it has got.
+    progress: ?*Progress = null,
 };
 
 /// One present member clone whose integrity is checked concurrently.
@@ -173,17 +175,62 @@ fn scanMarkers(alloc: std.mem.Allocator, ws: *const Workspace) !ProjectScan {
     return .{ .ok = try oks.toOwnedSlice(alloc), .failures = try fails.toOwnedSlice(alloc), .evicted = try evicted.toOwnedSlice(alloc) };
 }
 
+/// How far a long check has got: how many places it has entered (folders
+/// it lists, kept keys and clones it checks) and the one it is in now. Safe
+/// to read from another thread while the check's own thread waits on one
+/// slow read, as a cloud folder's first read of each folder or file can be.
+pub const Progress = struct {
+    pub const path_max = 1024;
+
+    lock: std.atomic.Mutex = .unlocked,
+    count: usize = 0,
+    path_buf: [path_max]u8 = undefined,
+    path_len: usize = 0,
+
+    /// Records that the check is in `path`, keeping its end when it is
+    /// longer than `path_max`, cut at a UTF-8 character boundary.
+    pub fn enter(p: *Progress, path: []const u8) void {
+        var start = path.len -| path_max;
+        while (start < path.len and path[start] & 0xc0 == 0x80) start += 1;
+
+        const tail = path[start..];
+        while (!p.lock.tryLock()) std.atomic.spinLoopHint();
+        defer p.lock.unlock();
+        p.count += 1;
+        @memcpy(p.path_buf[0..tail.len], tail);
+        p.path_len = tail.len;
+    }
+
+    /// Records that the check is in no place now; the count stays.
+    pub fn endWalk(p: *Progress) void {
+        while (!p.lock.tryLock()) std.atomic.spinLoopHint();
+        defer p.lock.unlock();
+        p.path_len = 0;
+    }
+
+    /// The count, and the current place copied into `buf`: empty before
+    /// the check enters one and after it ends.
+    pub fn snapshot(p: *Progress, buf: *[path_max]u8) struct { count: usize, path: []const u8 } {
+        while (!p.lock.tryLock()) std.atomic.spinLoopHint();
+        defer p.lock.unlock();
+        @memcpy(buf[0..p.path_len], p.path_buf[0..p.path_len]);
+        return .{ .count = p.count, .path = buf[0..p.path_len] };
+    }
+};
+
 /// Recursively lists every symlink under `root_path` into `offenders`,
 /// without ever following one: `walker.enter` is only called for an entry
 /// whose own directory-entry kind is `.directory`, so a symlink (even one
 /// pointing at a directory) is reported but never descended into - a
-/// symlink to a huge tree is never walked.
-fn scanNoFollow(alloc: std.mem.Allocator, root_path: []const u8, offenders: *std.ArrayList([]u8)) !void {
+/// symlink to a huge tree is never walked. Each folder is entered into
+/// `progress` before it is listed.
+fn scanNoFollow(alloc: std.mem.Allocator, root_path: []const u8, offenders: *std.ArrayList([]u8), progress: ?*Progress) !void {
     var root_dir = std.Io.Dir.openDirAbsolute(fsutil.io(), root_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return,
         else => return err,
     };
     defer root_dir.close(fsutil.io());
+    if (progress) |p| p.enter(root_path);
 
     var walker = try root_dir.walkSelectively(alloc);
     defer walker.deinit();
@@ -193,21 +240,25 @@ fn scanNoFollow(alloc: std.mem.Allocator, root_path: []const u8, offenders: *std
             try offenders.append(alloc, try std.fs.path.join(alloc, &.{ root_path, entry.path }));
             continue;
         }
-        if (entry.kind == .directory) try walker.enter(fsutil.io(), entry);
+        if (entry.kind == .directory) {
+            if (progress) |p| p.enter(try std.fs.path.join(alloc, &.{ root_path, entry.path }));
+            try walker.enter(fsutil.io(), entry);
+        }
     }
 }
 
 /// D1: no symlink under `<synced>/projects`, `<synced>/archive`, or
 /// `<synced>/kept`; `full` widens the scan to the whole synced root.
-pub fn checkD1(alloc: std.mem.Allocator, ws: *const Workspace, full: bool) ![][]u8 {
+pub fn checkD1(alloc: std.mem.Allocator, ws: *const Workspace, full: bool, progress: ?*Progress) ![][]u8 {
     var offenders: std.ArrayList([]u8) = .empty;
     if (full) {
-        try scanNoFollow(alloc, ws.cfg.synced_root, &offenders);
+        try scanNoFollow(alloc, ws.cfg.synced_root, &offenders, progress);
     } else {
-        try scanNoFollow(alloc, try ws.projectsRoot(alloc), &offenders);
-        try scanNoFollow(alloc, try ws.archiveRoot(alloc), &offenders);
-        try scanNoFollow(alloc, try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "kept" }), &offenders);
+        try scanNoFollow(alloc, try ws.projectsRoot(alloc), &offenders, progress);
+        try scanNoFollow(alloc, try ws.archiveRoot(alloc), &offenders, progress);
+        try scanNoFollow(alloc, try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "kept" }), &offenders, progress);
     }
+    if (progress) |p| p.endWalk();
     return offenders.toOwnedSlice(alloc);
 }
 
@@ -650,7 +701,7 @@ pub fn run(alloc: std.mem.Allocator, ws: *const Workspace, opts: Options) !Repor
     const archived_dirs = try scanNameDirs(alloc, try ws.archiveRoot(alloc));
 
     return .{
-        .d1_offenders = try checkD1(alloc, ws, opts.full),
+        .d1_offenders = try checkD1(alloc, ws, opts.full, opts.progress),
         .d2_ok = try checkD2(alloc, ws),
         .d3_ok = try checkD3(alloc, ws),
         .marker_failures = scan.failures,
@@ -742,7 +793,7 @@ test "checkD1: a planted symlink under projects is caught, one under archive too
     const archive_link = try std.fs.path.join(arena, &.{ archive_dir, "evil2" });
     try fsutil.replaceSymlink("/nonexistent-huge-tree-2", archive_link);
 
-    const offenders = try checkD1(arena, &ws, false);
+    const offenders = try checkD1(arena, &ws, false, null);
     try testing.expectEqual(@as(usize, 2), offenders.len);
 }
 
@@ -760,7 +811,7 @@ test "checkD1: the default scope covers kept/" {
     try fsutil.ensureDir(key_dir);
     try fsutil.replaceSymlink("/nonexistent", try std.fs.path.join(arena, &.{ key_dir, ".clasp.json" }));
 
-    const offenders = try checkD1(arena, &ws, false);
+    const offenders = try checkD1(arena, &ws, false, null);
     try testing.expectEqual(@as(usize, 1), offenders.len);
 }
 
@@ -779,11 +830,42 @@ test "checkD1: default scope misses a symlink outside projects/archive/kept, --f
     try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "backups" }));
     try fsutil.replaceSymlink("/nonexistent", stray_link);
 
-    const narrow = try checkD1(arena, &ws, false);
+    const narrow = try checkD1(arena, &ws, false, null);
     try testing.expectEqual(@as(usize, 0), narrow.len);
 
-    const full = try checkD1(arena, &ws, true);
+    const full = try checkD1(arena, &ws, true, null);
     try testing.expectEqual(@as(usize, 1), full.len);
+}
+
+test "checkD1: counts each folder it lists into the progress, and names none once it ends" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpRoot(arena, &tmp);
+    const ws = try testutil.testWorkspace(arena, root);
+
+    const deepest = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    try fsutil.ensureDir(deepest);
+
+    var progress: Progress = .{};
+    _ = try checkD1(arena, &ws, false, &progress);
+    var buf: [Progress.path_max]u8 = undefined;
+    const seen = progress.snapshot(&buf);
+    try testing.expectEqual(@as(usize, 3), seen.count);
+    try testing.expectEqualStrings("", seen.path);
+}
+
+test "Progress: a path longer than it holds keeps its end, cut at a character boundary" {
+    var progress: Progress = .{};
+    // The last `path_max` bytes begin inside the three-byte character.
+    const tail = "x" ** (Progress.path_max - 2);
+    progress.enter("ab\u{30de}" ++ tail);
+    var buf: [Progress.path_max]u8 = undefined;
+    const seen = progress.snapshot(&buf);
+    try testing.expectEqualStrings(tail, seen.path);
 }
 
 test "checkD2: passes by default, fails when code_root is synced or a .git dir lives under projects" {
