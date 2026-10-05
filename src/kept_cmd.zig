@@ -29,10 +29,7 @@ pub const Setup = enum {
 pub const off_basename = ".holt-kept-off";
 
 pub fn setup(alloc: std.mem.Allocator, synced_root: []const u8) !Setup {
-    if (try kept.content.entryAt(synced_root) != .dir) {
-        const real = fsutil.realPathOrSelf(alloc, synced_root) catch return .no_synced_root;
-        if (try kept.content.entryAt(real) != .dir) return .no_synced_root;
-    }
+    if (!try fsutil.isDirFollowing(alloc, synced_root)) return .no_synced_root;
     const layout: store.Layout = .{ .synced_root = synced_root };
     if (try kept.content.entryAt(try layout.keptDir(alloc)) != .absent) return .present;
     const off = try std.fs.path.join(alloc, &.{ synced_root, off_basename });

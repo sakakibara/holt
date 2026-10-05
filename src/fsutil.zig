@@ -197,6 +197,22 @@ pub fn pathIsInside(child: []const u8, parent: []const u8) bool {
     return child[parent.len] == std.fs.path.sep;
 }
 
+/// Whether `path` is a directory, or a symlink that resolves to one. A
+/// synced root that is not reads as one whose cloud is not mounted.
+pub fn isDirFollowing(alloc: std.mem.Allocator, path: []const u8) !bool {
+    if (try kindAt(path) == .directory) return true;
+    const real = realPathOrSelf(alloc, path) catch return false;
+    return try kindAt(real) == .directory;
+}
+
+fn kindAt(path: []const u8) !?std.Io.File.Kind {
+    const st = std.Io.Dir.cwd().statFile(io(), path, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return null,
+        else => return err,
+    };
+    return st.kind;
+}
+
 /// Resolves `path` to its canonical, symlink-free absolute form, so a
 /// containment check downstream sees the physical location rather than a
 /// lexical alias. A root that doesn't exist yet (fresh machine, not yet
@@ -1057,4 +1073,26 @@ test "replaceLink: overwrites an existing dir link pointing elsewhere" {
         },
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "isDirFollowing: a directory or a link to one is, a file or nothing is not" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const dir = try std.fs.path.join(arena, &.{ root, "dir" });
+    try ensureDir(dir);
+    const link = try std.fs.path.join(arena, &.{ root, "link" });
+    try replaceSymlink(dir, link);
+    const file = try std.fs.path.join(arena, &.{ root, "file" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = file, .data = "" });
+
+    try testing.expect(try isDirFollowing(arena, dir));
+    try testing.expect(try isDirFollowing(arena, link));
+    try testing.expect(!try isDirFollowing(arena, file));
+    try testing.expect(!try isDirFollowing(arena, try std.fs.path.join(arena, &.{ root, "absent" })));
 }

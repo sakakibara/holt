@@ -1,4 +1,6 @@
-//! Enumerates every project in the workspace, one "org/name" per line.
+//! Enumerates every project in the workspace, one "org/name" per line. A
+//! synced root that does not exist fails, since its cloud may not be
+//! mounted; one without `projects/` yet is an empty workspace.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -7,6 +9,7 @@ const workspace = @import("../workspace.zig");
 const project_mod = @import("../project.zig");
 const fsutil = @import("../fsutil.zig");
 const json = @import("json");
+const kept_util = @import("kept_util.zig");
 const testing = std.testing;
 const testutil = @import("../testutil.zig");
 
@@ -47,6 +50,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const with_paths = a.paths;
     const json_flag = a.json;
     const org_filter = a.org;
+
+    if (!try fsutil.isDirFollowing(ctx.alloc, ws.cfg.synced_root)) {
+        try ctx.err.print("holt: the synced folder {s} does not exist; {s} may not be mounted\n", .{ try kept_util.show(ctx, ws.cfg.synced_root), kept_util.backendName(ctx) });
+        return 1;
+    }
 
     const all = try ws.list(ctx.alloc);
 
@@ -306,4 +314,42 @@ test "run: --json on an empty workspace emits [] on stdout, not the human hint" 
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings("[]\n", got.out);
     try testing.expectEqualStrings("", got.err);
+}
+
+test "run: a synced root that does not exist fails, naming it and saying its backend may not be mounted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    var ws = testWorkspace(arena, try std.fs.path.join(arena, &.{ root, "never-mounted" }));
+    ws.cfg.backend = "gdrive";
+
+    inline for (.{ &[_][]const u8{}, &[_][]const u8{"--json"} }) |args| {
+        const got = try testutil.runCmd(arena, command.run, ws, args);
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try testing.expectEqualStrings("", got.out);
+        const want = try std.fmt.allocPrint(arena, "holt: the synced folder {s} does not exist; gdrive may not be mounted\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
+        try testing.expectEqualStrings(want, got.err);
+    }
+}
+
+test "list --repos: reads the code tree even when the synced root does not exist" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    var ws = try testutil.testWorkspace(arena, root);
+    ws.cfg.synced_root = try std.fs.path.join(arena, &.{ root, "never-mounted" });
+    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
+
+    const got = try testutil.runCmd(arena, command.run, ws, &.{"--repos"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expectEqualStrings("local/mox\n", got.out);
 }
