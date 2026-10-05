@@ -22,12 +22,17 @@ pub const evicted_marker_basename = "." ++ marker_basename ++ ".icloud";
 
 pub const marker_version = 1;
 
-/// True when `content_dir` holds an iCloud eviction placeholder for its
-/// marker but not the marker itself - the project is real, its marker is just
-/// not downloaded. Any allocation failure conservatively answers false.
+/// True when the project in `content_dir` is real but its marker is not on
+/// this machine: iCloud's eviction placeholder stands in for it, or it is a
+/// cloud placeholder (`fsutil.isOnlineOnly`) the cloud could not download
+/// for holt to read. Any allocation failure conservatively answers false.
 pub fn markerEvicted(alloc: std.mem.Allocator, content_dir: []const u8) bool {
     const placeholder = std.fs.path.join(alloc, &.{ content_dir, evicted_marker_basename }) catch return false;
-    return fsutil.exists(placeholder);
+    if (fsutil.exists(placeholder)) return true;
+    const path = std.fs.path.join(alloc, &.{ content_dir, marker_basename }) catch return false;
+    if (!fsutil.isOnlineOnly(alloc, path)) return false;
+    _ = load(alloc, path, null) catch return true;
+    return false;
 }
 
 /// Why a member's source or alias value did not parse. Faulted values keep

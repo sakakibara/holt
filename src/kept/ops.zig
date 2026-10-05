@@ -80,7 +80,7 @@ pub fn keptDirAbove(ks: store.KeyState, rel: []const u8) ?[]const u8 {
 
 fn keptHash(a: std.mem.Allocator, target: []const u8) !?content.Hash {
     return switch (try content.entryAt(target)) {
-        .absent => if (content.hasIcloudPlaceholder(a, target)) error.KeptOnlineOnly else null,
+        .absent => if (fsutil.hasIcloudPlaceholder(a, target)) error.KeptOnlineOnly else null,
         .file, .dir => content.hashPath(a, target) catch |err| switch (err) {
             error.OnlineOnly => error.KeptOnlineOnly,
             error.NotRegular => error.KeptNotRegular,
@@ -680,7 +680,7 @@ pub fn unkeep(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, rel: []c
     }
 
     const target = try ctx.layout.copyPath(a, key, rel);
-    const gone = try content.entryAt(target) == .absent and !content.hasIcloudPlaceholder(a, target);
+    const gone = try content.entryAt(target) == .absent and !fsutil.hasIcloudPlaceholder(a, target);
     if (gone) for (ks.factsFor(rel)) |f| {
         if (!std.mem.eql(u8, f.machine, ctx.machine_id) and !try store.factRetired(a, ctx.layout, key, f)) return error.KeptElsewhere;
     };

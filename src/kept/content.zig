@@ -57,44 +57,6 @@ pub fn underNonDir(path: []const u8) !bool {
     return false;
 }
 
-/// True when `path` is present only as a cloud placeholder whose content is
-/// not on this machine: macOS `SF_DATALESS`, the Windows offline and recall
-/// attributes, or an iCloud `.<name>.icloud` sibling standing in for an
-/// absent `path`. Nothing is read, so nothing is downloaded.
-pub fn isOnlineOnly(alloc: std.mem.Allocator, path: []const u8) bool {
-    if (builtin.os.tag.isDarwin()) {
-        const z = alloc.dupeZ(u8, path) catch return false;
-        var st: std.c.Stat = undefined;
-        if (std.c.fstatat(std.c.AT.FDCWD, z, &st, std.c.AT.SYMLINK_NOFOLLOW) == 0) {
-            const sf_dataless: u32 = 0x40000000;
-            return st.flags & sf_dataless != 0;
-        }
-    } else if (builtin.os.tag == .windows) {
-        const w = std.unicode.wtf8ToWtf16LeAllocZ(alloc, path) catch return false;
-        const attrs = GetFileAttributesW(w.ptr);
-        if (attrs != 0xFFFFFFFF) {
-            const offline: u32 = 0x1000;
-            const recall_on_open: u32 = 0x40000;
-            const recall_on_data_access: u32 = 0x400000;
-            return attrs & (offline | recall_on_open | recall_on_data_access) != 0;
-        }
-    }
-    return hasIcloudPlaceholder(alloc, path);
-}
-
-/// True when `path` is absent and iCloud's `.<name>.icloud` placeholder
-/// stands beside it.
-pub fn hasIcloudPlaceholder(alloc: std.mem.Allocator, path: []const u8) bool {
-    if ((entryAt(path) catch return false) != .absent) return false;
-    const parent = std.fs.path.dirname(path) orelse return false;
-    const base = std.fs.path.basename(path);
-    const ph_name = std.fmt.allocPrint(alloc, ".{s}.icloud", .{base}) catch return false;
-    const ph = std.fs.path.join(alloc, &.{ parent, ph_name }) catch return false;
-    return (entryAt(ph) catch return false) == .file;
-}
-
-extern "kernel32" fn GetFileAttributesW(lpFileName: [*:0]const u16) callconv(.winapi) u32;
-
 /// True when `a` and `b` name one filesystem object: the same device and
 /// inode, or on Windows the same volume and file id. Neither is followed
 /// if it is a link. False when either is absent. On Windows, a path that
@@ -443,7 +405,7 @@ pub const FileHash = struct { path: []const u8, hex: [64]u8 };
 
 /// Hex SHA-256 of the regular file at `path`. Refuses a placeholder.
 pub fn hashFile(alloc: std.mem.Allocator, path: []const u8) ![64]u8 {
-    if (isOnlineOnly(alloc, path)) return error.OnlineOnly;
+    if (fsutil.isOnlineOnly(alloc, path)) return error.OnlineOnly;
     var file = try std.Io.Dir.cwd().openFile(io(), path, .{});
     defer file.close(io());
     var h = std.crypto.hash.sha2.Sha256.init(.{});
@@ -707,7 +669,7 @@ pub fn hashPath(alloc: std.mem.Allocator, path: []const u8) !Hash {
     return switch (try entryAt(path)) {
         .file => .{ .kind = .file, .hex = try hashFile(alloc, path) },
         .dir => .{ .kind = .dir, .hex = treeHash(try treeFiles(alloc, path)) },
-        .absent => if (hasIcloudPlaceholder(alloc, path)) error.OnlineOnly else error.FileNotFound,
+        .absent => if (fsutil.hasIcloudPlaceholder(alloc, path)) error.OnlineOnly else error.FileNotFound,
         .symlink, .other => error.NotRegular,
     };
 }
@@ -1125,7 +1087,7 @@ test "hashPath: an iCloud placeholder is online-only, never read" {
 
     _ = try f.write("..clasp.json.icloud", "placeholder");
     const p = try f.path(".clasp.json");
-    try testing.expect(isOnlineOnly(a, p));
+    try testing.expect(fsutil.isOnlineOnly(a, p));
     try testing.expectError(error.OnlineOnly, hashPath(a, p));
 
     _ = try f.write("d/.x.icloud", "placeholder");

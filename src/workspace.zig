@@ -134,9 +134,8 @@ pub const Workspace = struct {
     /// failed to parse: the path scanned and the diagnostic message.
     pub const MarkerFailure = struct { path: []const u8, message: []const u8 };
 
-    /// A project dir whose marker is present in the cloud but evicted from
-    /// local storage (an iCloud placeholder sits where the marker should be),
-    /// so it cannot be read until downloaded.
+    /// A project dir whose marker is present in the cloud but not on this
+    /// machine (`marker.markerEvicted`), so it cannot be read until downloaded.
     pub const EvictedMarker = struct { org: []const u8, name: []const u8, path: []const u8 };
 
     /// One `<synced>/projects/<org>/<name>` dir that has a marker file,
@@ -194,7 +193,11 @@ pub const Workspace = struct {
 
                 var diag: diagnostic.Diagnostic = .{};
                 const m = marker.load(alloc, marker_path, &diag) catch {
-                    try entries.append(alloc, .{ .failed = .{ .path = marker_path, .message = diag.message } });
+                    // A cloud placeholder the cloud could not download is a
+                    // real project whose marker is not here, not a bad one.
+                    if (fsutil.isOnlineOnly(alloc, marker_path)) {
+                        try entries.append(alloc, .{ .evicted = .{ .org = org, .name = name, .path = content_path } });
+                    } else try entries.append(alloc, .{ .failed = .{ .path = marker_path, .message = diag.message } });
                     continue;
                 };
 
@@ -263,7 +266,7 @@ pub const Workspace = struct {
     pub fn hasMalformedMarker(self: Workspace, alloc: std.mem.Allocator, org: []const u8, name: []const u8) !bool {
         const marker_path = try std.fs.path.join(alloc, &.{ try self.projectsRoot(alloc), org, name, marker.marker_basename });
         if (!fsutil.exists(marker_path)) return false;
-        _ = marker.load(alloc, marker_path, null) catch return true;
+        _ = marker.load(alloc, marker_path, null) catch return !fsutil.isOnlineOnly(alloc, marker_path);
         return false;
     }
 
@@ -480,6 +483,56 @@ test "scanProjects: a dir whose marker is evicted becomes an evicted entry, not 
     try testing.expectEqual(@as(usize, 1), evicted_count);
 
     // list() surfaces only the readable project (the evicted one warns on stderr).
+    try testing.expectEqual(@as(usize, 1), (try ws.list(arena)).len);
+}
+
+test "scanProjects: a marker that is a cloud placeholder holt cannot read is evicted, not unparseable" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
+    const dir = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "remote" });
+    try fsutil.ensureDir(dir);
+    const marker_path = try std.fs.path.join(arena, &.{ dir, marker.marker_basename });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = marker_path, .data = "{" });
+
+    const unread = try ws.scanProjects(arena);
+    try testing.expectEqual(@as(usize, 1), unread.len);
+    try testing.expect(unread[0] == .failed);
+    try testing.expect(try ws.hasMalformedMarker(arena, "acme", "remote"));
+    try testing.expect(!marker.markerEvicted(arena, dir));
+
+    fsutil.online_only_for_test = marker_path;
+    defer fsutil.online_only_for_test = null;
+    const placeholder = try ws.scanProjects(arena);
+    try testing.expectEqual(@as(usize, 1), placeholder.len);
+    try testing.expectEqualStrings("remote", placeholder[0].evicted.name);
+    try testing.expect(!try ws.hasMalformedMarker(arena, "acme", "remote"));
+    try testing.expect(marker.markerEvicted(arena, dir));
+}
+
+test "markerEvicted: a cloud placeholder marker that reads fine is not evicted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
+    try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
+    const dir = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+
+    fsutil.online_only_for_test = try std.fs.path.join(arena, &.{ dir, marker.marker_basename });
+    defer fsutil.online_only_for_test = null;
+    try testing.expect(!marker.markerEvicted(arena, dir));
     try testing.expectEqual(@as(usize, 1), (try ws.list(arena)).len);
 }
 

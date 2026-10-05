@@ -511,7 +511,7 @@ pub fn verify(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !Chec
     if (windowsNames() and windowsUnsafeManifest(m)) return .unverifiable;
     for (m.index) |f| {
         const at = try fsutil.joinSlashy(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "index" }), f.path);
-        if (try content.entryAt(at) != .file) return if (content.hasIcloudPlaceholder(alloc, at)) .online_only else .missing;
+        if (try content.entryAt(at) != .file) return if (fsutil.hasIcloudPlaceholder(alloc, at)) .online_only else .missing;
         const hex = content.hashFile(alloc, at) catch |err| switch (err) {
             error.OnlineOnly => return .online_only,
             else => return err,
@@ -544,7 +544,7 @@ pub fn verify(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !Chec
         },
         .absent => {
             if (m.files.len == 0 and (m.links.len > 0 or m.index.len > 0)) return .ok;
-            return if (content.hasIcloudPlaceholder(alloc, rel_root)) .online_only else .missing;
+            return if (fsutil.hasIcloudPlaceholder(alloc, rel_root)) .online_only else .missing;
         },
         .symlink, .other => return .mismatch,
     };

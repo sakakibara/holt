@@ -336,7 +336,7 @@ const KeptSide = enum { absent, placeholder, file, dir, symlink, other };
 
 fn keptSide(alloc: std.mem.Allocator, path: []const u8) !KeptSide {
     return switch (try content.entryAt(path)) {
-        .absent => if (content.hasIcloudPlaceholder(alloc, path)) .placeholder else .absent,
+        .absent => if (fsutil.hasIcloudPlaceholder(alloc, path)) .placeholder else .absent,
         .file => .file,
         .dir => .dir,
         .symlink => .symlink,
@@ -937,7 +937,7 @@ const Run = struct {
         };
         var differs = false;
         switch (oe) {
-            .absent => if (content.hasIcloudPlaceholder(a, old)) {
+            .absent => if (fsutil.hasIcloudPlaceholder(a, old)) {
                 return r.add(.{ .rel = rel, .state = 8, .outcome = .old_unreadable, .unsettled = true, .detail = "online-only" });
             },
             .symlink, .other => return r.add(.{ .rel = rel, .state = 8, .outcome = .old_unreadable, .unsettled = true, .detail = "not a regular file or directory" }),

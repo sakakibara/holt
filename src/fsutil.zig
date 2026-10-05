@@ -197,6 +197,48 @@ pub fn pathIsInside(child: []const u8, parent: []const u8) bool {
     return child[parent.len] == std.fs.path.sep;
 }
 
+/// True when `path` is present only as a cloud placeholder whose content is
+/// not on this machine: macOS `SF_DATALESS`, the Windows offline and recall
+/// attributes, or an iCloud `.<name>.icloud` sibling standing in for an
+/// absent `path`. Nothing is read, so nothing is downloaded.
+pub fn isOnlineOnly(alloc: std.mem.Allocator, path: []const u8) bool {
+    if (builtin.is_test) if (online_only_for_test) |p| if (std.mem.eql(u8, p, path)) return true;
+    if (builtin.os.tag.isDarwin()) {
+        const z = alloc.dupeZ(u8, path) catch return false;
+        var st: std.c.Stat = undefined;
+        if (std.c.fstatat(std.c.AT.FDCWD, z, &st, std.c.AT.SYMLINK_NOFOLLOW) == 0) {
+            const sf_dataless: u32 = 0x40000000;
+            return st.flags & sf_dataless != 0;
+        }
+    } else if (builtin.os.tag == .windows) {
+        const w = std.unicode.wtf8ToWtf16LeAllocZ(alloc, path) catch return false;
+        const attrs = GetFileAttributesW(w.ptr);
+        if (attrs != 0xFFFFFFFF) {
+            const offline: u32 = 0x1000;
+            const recall_on_open: u32 = 0x40000;
+            const recall_on_data_access: u32 = 0x400000;
+            return attrs & (offline | recall_on_open | recall_on_data_access) != 0;
+        }
+    }
+    return hasIcloudPlaceholder(alloc, path);
+}
+
+/// True when `path` is absent and iCloud's `.<name>.icloud` placeholder
+/// stands beside it.
+pub fn hasIcloudPlaceholder(alloc: std.mem.Allocator, path: []const u8) bool {
+    if ((kindAt(path) catch return false) != null) return false;
+    const parent = std.fs.path.dirname(path) orelse return false;
+    const base = std.fs.path.basename(path);
+    const ph_name = std.fmt.allocPrint(alloc, ".{s}.icloud", .{base}) catch return false;
+    const ph = std.fs.path.join(alloc, &.{ parent, ph_name }) catch return false;
+    return (kindAt(ph) catch return false) == .file;
+}
+
+extern "kernel32" fn GetFileAttributesW(lpFileName: [*:0]const u16) callconv(.winapi) u32;
+
+/// Test seam: a path `isOnlineOnly` answers true for.
+pub var online_only_for_test: ?[]const u8 = null;
+
 /// Whether `path` is a directory, or a symlink that resolves to one. A
 /// synced root that is not reads as one whose cloud is not mounted.
 pub fn isDirFollowing(alloc: std.mem.Allocator, path: []const u8) !bool {
@@ -1095,4 +1137,21 @@ test "isDirFollowing: a directory or a link to one is, a file or nothing is not"
     try testing.expect(try isDirFollowing(arena, link));
     try testing.expect(!try isDirFollowing(arena, file));
     try testing.expect(!try isDirFollowing(arena, try std.fs.path.join(arena, &.{ root, "absent" })));
+}
+
+test "isOnlineOnly: an iCloud stand-in beside an absent path is, a plain file or nothing is not" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ root, "..clasp.json.icloud" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ root, "plain" }), .data = "" });
+
+    try testing.expect(isOnlineOnly(arena, try std.fs.path.join(arena, &.{ root, ".clasp.json" })));
+    try testing.expect(hasIcloudPlaceholder(arena, try std.fs.path.join(arena, &.{ root, ".clasp.json" })));
+    try testing.expect(!isOnlineOnly(arena, try std.fs.path.join(arena, &.{ root, "plain" })));
+    try testing.expect(!isOnlineOnly(arena, try std.fs.path.join(arena, &.{ root, "absent" })));
 }

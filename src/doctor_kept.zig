@@ -555,9 +555,9 @@ fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIn
             if (paths.check(rel) != null) continue;
             const cp = try layout.copyPath(alloc, key, rel);
             switch (try content.entryAt(cp)) {
-                .file => if (content.isOnlineOnly(alloc, cp)) try placeholders.append(alloc, cp),
+                .file => if (fsutil.isOnlineOnly(alloc, cp)) try placeholders.append(alloc, cp),
                 .dir => try scanDir(alloc, cp, host, &placeholders, &suspected),
-                .absent => if (content.hasIcloudPlaceholder(alloc, cp)) try placeholders.append(alloc, cp),
+                .absent => if (fsutil.hasIcloudPlaceholder(alloc, cp)) try placeholders.append(alloc, cp),
                 else => {},
             }
         }
@@ -762,7 +762,7 @@ fn scanDir(alloc: std.mem.Allocator, root: []const u8, host: []const u8, placeho
         if (try suspectedConflict(alloc, parent, entry.basename, host)) try suspected.append(alloc, full);
         switch (entry.kind) {
             .directory => try walker.enter(io(), entry),
-            .file => if (content.isOnlineOnly(alloc, full)) try placeholders.append(alloc, full),
+            .file => if (fsutil.isOnlineOnly(alloc, full)) try placeholders.append(alloc, full),
             else => {},
         }
         if (std.mem.startsWith(u8, entry.basename, ".") and std.mem.endsWith(u8, entry.basename, ".icloud")) try placeholders.append(alloc, full);
@@ -868,7 +868,7 @@ fn findReleased(ctx: kept.Ctx, index: *const store.KeyIndex, infos: []const Clon
         for (ks.released) |rel| {
             if (paths.check(rel) != null) continue;
             const cp = try ctx.layout.copyPath(a, k, rel);
-            if (try content.entryAt(cp) == .absent and !content.hasIcloudPlaceholder(a, cp)) continue;
+            if (try content.entryAt(cp) == .absent and !fsutil.hasIcloudPlaceholder(a, cp)) continue;
             var machines: std.ArrayList([]const u8) = .empty;
             for (ks.factsFor(rel)) |f| if (!paths.contains(machines.items, f.machine)) try machines.append(a, f.machine);
             var clone_path: ?[]const u8 = null;
