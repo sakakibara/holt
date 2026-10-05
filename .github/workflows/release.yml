@@ -100,3 +100,10 @@ jobs:
             holt-*.tar.gz
             holt-*.zip
             SHA256SUMS
+
+  # Installs the release just published, as a user would.
+  smoke:
+    needs: release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install-smoke.yml

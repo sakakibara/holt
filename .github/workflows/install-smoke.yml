@@ -1,9 +1,10 @@
 name: install-smoke
 
+# Run by release.yml once a release is published, or by hand. A release
+# published with the workflow's GITHUB_TOKEN starts no `release` event run.
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+  workflow_call:
 
 jobs:
   windows:
