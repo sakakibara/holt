@@ -1,8 +1,12 @@
 //! Shell integration snippets for `holt init`: the `h`/`hi`/`hir` navigation
 //! functions, one flavor per supported shell. `h` shells out to `holt path`
 //! and cds to whatever it printed, since a child process can't change its
-//! parent shell's directory; `hi` pipes `holt list` through fzf first; `hir`
-//! pipes `holt list --repos` through fzf and cds the picked line directly.
+//! parent shell's directory; `hi` picks a line of `holt list` with fzf first;
+//! `hir` picks a line of `holt list --repos` and cds to it under code_root.
+//! Each reads holt's whole list before fzf takes the terminal, so a failure
+//! or an empty list is reported where it can be seen. fzf opens below the
+//! prompt with a preview listing the picked directory; it runs the preview
+//! in `sh`, or on PowerShell in PowerShell itself.
 
 const std = @import("std");
 const testing = std.testing;
@@ -28,8 +32,18 @@ const fish_snippet =
     \\    and cd $dir
     \\end
     \\
+    \\function __holt_fzf
+    \\    SHELL=sh fzf --height=45% --layout=reverse --border=sharp --info=inline --cycle --keep-right --tabstop=1 --bind=ctrl-z:ignore,btab:up,tab:down --preview-window=down,30%,sharp --preview=$argv[1]
+    \\end
+    \\
     \\function hi
-    \\    set -l proj (holt list | fzf)
+    \\    set -l projs (holt list)
+    \\    or return
+    \\    if test (count $projs) -eq 0
+    \\        echo "hi: no projects to pick from" >&2
+    \\        return 1
+    \\    end
+    \\    set -l proj (printf '%s\n' $projs | __holt_fzf 'ls -Cp "$(holt path {})"')
     \\    if test -z "$proj"
     \\        return 1
     \\    end
@@ -39,7 +53,14 @@ const fish_snippet =
     \\
     \\function hir
     \\    set -l root (holt path --root code)
-    \\    set -l key (holt list --repos | fzf)
+    \\    or return
+    \\    set -l keys (holt list --repos)
+    \\    or return
+    \\    if test (count $keys) -eq 0
+    \\        echo "hir: no clones to pick from" >&2
+    \\        return 1
+    \\    end
+    \\    set -l key (printf '%s\n' $keys | __holt_fzf 'ls -Cp "$(holt path --root code)"/{}')
     \\    if test -z "$key"
     \\        return 1
     \\    end
@@ -69,13 +90,21 @@ const posix_hhi =
     \\    fi
     \\}
     \\
+    \\__holt_fzf() {
+    \\    SHELL=sh fzf --height=45% --layout=reverse --border=sharp --info=inline --cycle --keep-right --tabstop=1 --bind=ctrl-z:ignore,btab:up,tab:down --preview-window=down,30%,sharp --preview="$1"
+    \\}
+    \\
     \\hi() {
-    \\    local proj
-    \\    proj="$(holt list | fzf)"
+    \\    local projs proj dir
+    \\    projs="$(holt list)" || return
+    \\    if [ -z "$projs" ]; then
+    \\        echo "hi: no projects to pick from" >&2
+    \\        return 1
+    \\    fi
+    \\    proj="$(printf '%s\n' "$projs" | __holt_fzf 'ls -Cp "$(holt path {})"')"
     \\    if [ -z "$proj" ]; then
     \\        return 1
     \\    fi
-    \\    local dir
     \\    dir="$(holt path "$proj")"
     \\    if [ $? -eq 0 ]; then
     \\        cd "$dir" || return 1
@@ -83,9 +112,14 @@ const posix_hhi =
     \\}
     \\
     \\hir() {
-    \\    local root key
-    \\    root="$(holt path --root code)"
-    \\    key="$(holt list --repos | fzf)"
+    \\    local root keys key
+    \\    root="$(holt path --root code)" || return
+    \\    keys="$(holt list --repos)" || return
+    \\    if [ -z "$keys" ]; then
+    \\        echo "hir: no clones to pick from" >&2
+    \\        return 1
+    \\    fi
+    \\    key="$(printf '%s\n' "$keys" | __holt_fzf 'ls -Cp "$(holt path --root code)"/{}')"
     \\    if [ -z "$key" ]; then
     \\        return 1
     \\    fi
@@ -176,8 +210,23 @@ const powershell_snippet =
     \\    }
     \\}
     \\
+    \\function __holt_fzf {
+    \\    param([string]$Preview)
+    \\    $shell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
+    \\    $input | fzf '--height=45%' '--layout=reverse' '--border=sharp' '--info=inline' '--cycle' '--keep-right' '--tabstop=1' '--bind=ctrl-z:ignore,btab:up,tab:down' '--preview-window=down,30%,sharp' "--with-shell=$shell -NoLogo -NoProfile -NonInteractive -Command" "--preview=$Preview"
+    \\}
+    \\
     \\function hi {
-    \\    $proj = holt list | fzf
+    \\    $projs = @(holt list)
+    \\    if ($LASTEXITCODE -ne 0) {
+    \\        return
+    \\    }
+    \\    if ($projs.Count -eq 0) {
+    \\        [Console]::Error.WriteLine('hi: no projects to pick from')
+    \\        $global:LASTEXITCODE = 1
+    \\        return
+    \\    }
+    \\    $proj = $projs | __holt_fzf 'Get-ChildItem -Name -LiteralPath (holt path {})'
     \\    if ([string]::IsNullOrEmpty($proj)) {
     \\        return
     \\    }
@@ -189,7 +238,19 @@ const powershell_snippet =
     \\
     \\function hir {
     \\    $root = holt path --root code
-    \\    $key = holt list --repos | fzf
+    \\    if ($LASTEXITCODE -ne 0) {
+    \\        return
+    \\    }
+    \\    $keys = @(holt list --repos)
+    \\    if ($LASTEXITCODE -ne 0) {
+    \\        return
+    \\    }
+    \\    if ($keys.Count -eq 0) {
+    \\        [Console]::Error.WriteLine('hir: no clones to pick from')
+    \\        $global:LASTEXITCODE = 1
+    \\        return
+    \\    }
+    \\    $key = $keys | __holt_fzf 'Get-ChildItem -Name -LiteralPath (Join-Path (holt path --root code) {})'
     \\    if ([string]::IsNullOrEmpty($key)) {
     \\        return
     \\    }
@@ -273,7 +334,7 @@ test "snippet: bash strips the description at the tab and quotes the value" {
     try testing.expect(std.mem.indexOf(u8, s, "printf '%q'") != null);
 }
 
-test "snippet: every shell defines hir wired to `holt list --repos | fzf`" {
+test "snippet: every shell defines hir wired to `holt list --repos` and fzf" {
     inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
         const s = snippet(sh);
         try testing.expect(std.mem.indexOf(u8, s, "hir") != null);
@@ -296,4 +357,57 @@ test "snippet: hir is argless and gets no completion registration" {
     try testing.expect(std.mem.indexOf(u8, snippet(.bash), "complete -F _hir") == null);
     try testing.expect(std.mem.indexOf(u8, snippet(.zsh), "compdef _hir") == null);
     try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "-CommandName hir") == null);
+}
+
+const all_shells = .{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell };
+
+test "snippet: hi and hir read holt's list whole before fzf starts, and return holt's failure" {
+    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "    set -l projs (holt list)\n    or return\n") != null);
+    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "    set -l keys (holt list --repos)\n    or return\n") != null);
+    inline for (.{ Shell.zsh, Shell.bash }) |sh| {
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "    projs=\"$(holt list)\" || return\n") != null);
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "    keys=\"$(holt list --repos)\" || return\n") != null);
+    }
+    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "    $projs = @(holt list)\n    if ($LASTEXITCODE -ne 0) {\n") != null);
+    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "    $keys = @(holt list --repos)\n    if ($LASTEXITCODE -ne 0) {\n") != null);
+    inline for (all_shells) |sh| {
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt list | fzf") == null);
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt list --repos | fzf") == null);
+    }
+}
+
+test "snippet: hi and hir say why on stderr when there is nothing to pick" {
+    inline for (all_shells) |sh| {
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "hi: no projects to pick from") != null);
+        try testing.expect(std.mem.indexOf(u8, snippet(sh), "hir: no clones to pick from") != null);
+    }
+    try testing.expect(std.mem.count(u8, snippet(.fish), "to pick from\" >&2\n        return 1\n") == 2);
+    try testing.expect(std.mem.count(u8, snippet(.bash), "to pick from\" >&2\n        return 1\n") == 2);
+    try testing.expect(std.mem.count(u8, snippet(.powershell), "to pick from')\n        $global:LASTEXITCODE = 1\n        return\n") == 2);
+}
+
+test "snippet: fzf opens below the prompt with zoxide's look and keys, matching fuzzily" {
+    const opts = [_][]const u8{ "--height=45%", "--layout=reverse", "--border=sharp", "--info=inline", "--cycle", "--keep-right", "--tabstop=1", "--bind=ctrl-z:ignore,btab:up,tab:down", "--preview-window=down,30%,sharp" };
+    inline for (all_shells) |sh| {
+        const s = snippet(sh);
+        for (opts) |o| if (std.mem.indexOf(u8, s, o) == null) {
+            std.debug.print("{t} is missing {s}\n", .{ sh, o });
+            return error.TestUnexpectedResult;
+        };
+        try testing.expect(std.mem.indexOf(u8, s, "--exact") == null);
+        try testing.expect(std.mem.indexOf(u8, s, "--no-sort") == null);
+    }
+}
+
+test "snippet: the preview lists the directory a line names, in a shell each snippet picks" {
+    inline for (.{ Shell.fish, Shell.zsh, Shell.bash }) |sh| {
+        const s = snippet(sh);
+        try testing.expect(std.mem.indexOf(u8, s, "SHELL=sh fzf ") != null);
+        try testing.expect(std.mem.indexOf(u8, s, "'ls -Cp \"$(holt path {})\"'") != null);
+        try testing.expect(std.mem.indexOf(u8, s, "'ls -Cp \"$(holt path --root code)\"/{}'") != null);
+    }
+    const ps = snippet(.powershell);
+    try testing.expect(std.mem.indexOf(u8, ps, "--with-shell=") != null);
+    try testing.expect(std.mem.indexOf(u8, ps, "'Get-ChildItem -Name -LiteralPath (holt path {})'") != null);
+    try testing.expect(std.mem.indexOf(u8, ps, "'Get-ChildItem -Name -LiteralPath (Join-Path (holt path --root code) {})'") != null);
 }
