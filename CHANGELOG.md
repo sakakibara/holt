@@ -4,6 +4,31 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `holt restore` no longer lets the clones it runs side by side ask for
+  credentials on one terminal, where each line typed reached whichever git
+  read next. Clones run side by side never prompt; any that fail are
+  cloned again one at a time, where git can ask.
+- `holt doctor` reports how far it has got while it waits on a synced
+  folder that is slow to read, such as Google Drive's first read of each
+  folder and file: on a terminal, a status line redrawn in place each
+  second with the folder or kept key being checked and the time so far;
+  elsewhere, one line after five seconds. Before, it printed nothing until
+  it finished, which could take many minutes.
+- `holt list` exits 1 when the synced root itself does not exist, naming
+  it and saying its backend may not be mounted, instead of reporting an
+  empty workspace. A synced root without `projects/` is still an empty
+  workspace, and `--repos` is unaffected.
+- `hi` and `hir` read holt's list before fzf starts, so a failure is shown
+  and returned, and an empty list says why. fzf opens below the prompt with
+  zoxide `zi`'s look and keys and a preview listing the directory under the
+  cursor.
+- A marker that is a cloud placeholder the cloud could not download, as
+  Google Drive leaves one, is reported as evicted rather than unparseable.
+
 ## [0.10.0] - 2026-10-01
 
 ### Added
@@ -724,6 +749,7 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.10.0...HEAD
 [0.10.0]: https://github.com/sakakibara/holt/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/sakakibara/holt/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/sakakibara/holt/compare/v0.9.0...v0.9.1
