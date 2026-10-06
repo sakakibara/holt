@@ -70,9 +70,10 @@ pub const Unpushed = enum { clean, ahead, no_upstream };
 /// whichever read first.
 pub const Prompt = enum { allow, forbid };
 
-/// The ssh command git runs when nothing may prompt: ssh fails rather than
-/// asks, gives up on a host silent for ten seconds, and opens no shared
-/// connection another command could hold.
+/// The command git runs for ssh when the user names none and nothing may
+/// prompt: no prompt for a password or a host key, at most 10 seconds to
+/// connect, and never a connection-sharing master, which a time limit could
+/// kill while other sessions use it.
 pub const batch_ssh = "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no";
 
 /// Whether `environ` names the command git runs for ssh: a non-empty

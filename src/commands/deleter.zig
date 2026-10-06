@@ -2220,11 +2220,6 @@ pub var ask_limit_for_test: ?i64 = null;
 /// else the limit a query waits.
 pub var ask_budget_for_test: ?i64 = null;
 
-/// The command git runs for ssh when the user names none: no prompt for a
-/// password or a host key, at most 10 seconds to connect, and never a
-/// connection-sharing master, which the time limit could kill while other
-/// sessions use it.
-
 /// Asks remotes what they hold for one weighing pass, each distinct URL
 /// once per repository, however many of its remotes name it.
 pub const Asker = struct {
