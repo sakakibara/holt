@@ -460,16 +460,17 @@ test "run: -j 0 is a usage error" {
 
 /// Restores two repos whose remote, like one that asks for credentials,
 /// refuses a clone made with git's terminal prompt off, with `args` as the
-/// command line. Returns the run and the GIT_TERMINAL_PROMPT each attempt
-/// saw, one line per attempt.
-fn restoreGated(arena: std.mem.Allocator, args: []const []const u8) !struct { got: testutil.RunResult, attempts: []const u8 } {
+/// command line and `config` added to git's global configuration. Returns
+/// the run and the GIT_TERMINAL_PROMPT and GIT_SSH_COMMAND each attempt saw,
+/// one `prompt|ssh` line per attempt.
+fn restoreGated(arena: std.mem.Allocator, args: []const []const u8, extra_config: []const u8) !struct { got: testutil.RunResult, attempts: []const u8 } {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
     const log = try std.fs.path.join(arena, &.{ sb.root, "attempts.log" });
     const gate = try std.fs.path.join(arena, &.{ sb.root, "gate.sh" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gate, .data = try std.fmt.allocPrint(arena,
-        \\printf '%s\n' "${{GIT_TERMINAL_PROMPT-unset}}" >> '{s}'
+        \\printf '%s|%s\n' "${{GIT_TERMINAL_PROMPT-unset}}" "${{GIT_SSH_COMMAND-unset}}" >> '{s}'
         \\[ "$GIT_TERMINAL_PROMPT" = 0 ] && exit 128
         \\exec "$1" "$2"
         \\
@@ -477,6 +478,7 @@ fn restoreGated(arena: std.mem.Allocator, args: []const []const u8) !struct { go
 
     var config: std.ArrayList(u8) = .empty;
     try config.appendSlice(arena, "[protocol \"ext\"]\n\tallow = always\n");
+    try config.appendSlice(arena, extra_config);
     var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     for ([_][]const u8{ "repoa", "repob" }) |name| {
         const bare = try testutil.makeBareRepo(&sb, try std.fmt.allocPrint(arena, "{s}.git", .{name}));
@@ -496,18 +498,30 @@ fn restoreGated(arena: std.mem.Allocator, args: []const []const u8) !struct { go
     return .{ .got = got, .attempts = attempts };
 }
 
-test "run: parallel clones never let git prompt, and a clone that failed is retried alone so git can ask for credentials" {
+test "run: parallel clones let neither git nor ssh prompt, and a clone that failed is retried alone so either can ask" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const r = try restoreGated(arena, &.{ "-j", "2" });
+    const r = try restoreGated(arena, &.{ "-j", "2" }, "");
     try testing.expectEqual(@as(u8, 0), r.got.code);
-    try testing.expectEqualStrings("0\n0\nunset\nunset\n", r.attempts);
+    const batch = "0|ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no\n";
+    try testing.expectEqualStrings(batch ++ batch ++ "unset|unset\nunset|unset\n", r.attempts);
     try testing.expect(std.mem.indexOf(u8, r.got.err, "retrying 2 clones one at a time") != null);
     try testing.expect(std.mem.indexOf(u8, r.got.out, "cloned repoa") != null);
     try testing.expect(std.mem.indexOf(u8, r.got.out, "cloned repob") != null);
+}
+
+test "run: parallel clones leave an ssh command the user names as it is" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const r = try restoreGated(arena, &.{ "-j", "2" }, "[core]\n\tsshCommand = ssh -i mine\n");
+    try testing.expectEqual(@as(u8, 0), r.got.code);
+    try testing.expectEqualStrings("0|unset\n0|unset\nunset|unset\nunset|unset\n", r.attempts);
 }
 
 test "run: -j 1 lets git prompt from the first attempt, and retries nothing" {
@@ -516,9 +530,9 @@ test "run: -j 1 lets git prompt from the first attempt, and retries nothing" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const r = try restoreGated(arena, &.{ "-j", "1" });
+    const r = try restoreGated(arena, &.{ "-j", "1" }, "");
     try testing.expectEqual(@as(u8, 0), r.got.code);
-    try testing.expectEqualStrings("unset\nunset\n", r.attempts);
+    try testing.expectEqualStrings("unset|unset\nunset|unset\n", r.attempts);
     try testing.expect(std.mem.indexOf(u8, r.got.err, "retrying") == null);
 }
 

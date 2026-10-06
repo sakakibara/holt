@@ -2224,7 +2224,6 @@ pub var ask_budget_for_test: ?i64 = null;
 /// password or a host key, at most 10 seconds to connect, and never a
 /// connection-sharing master, which the time limit could kill while other
 /// sessions use it.
-const batch_ssh = "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no";
 
 /// Asks remotes what they hold for one weighing pass, each distinct URL
 /// once per repository, however many of its remotes name it.
@@ -2269,7 +2268,7 @@ pub const Asker = struct {
     /// host-level failure of a URL of that key (`queryFailure`, or no
     /// answer in `ask_limit_s` seconds), once its unsuccessful queries took
     /// `ask_limit_s` seconds together, or after its host was not found. git
-    /// runs with no terminal prompt, with `batch_ssh` unless the user names
+    /// runs with no terminal prompt, with `git.batch_ssh` unless the user names
     /// an ssh command (`GIT_SSH_COMMAND`, `GIT_SSH`, or `core.sshCommand`),
     /// and is killed after `ask_limit_s` seconds; each failure is
     /// `unasked`, with why. Under test, a URL of another host than this one
@@ -2321,7 +2320,7 @@ pub const Asker = struct {
         }
         const limit_s = if (builtin.is_test) ask_limit_for_test orelse ask_limit_s else ask_limit_s;
         var set: std.ArrayList([2][]const u8) = .empty;
-        if (!try namesSsh(a, at)) try set.append(a, .{ "GIT_SSH_COMMAND", batch_ssh });
+        if (!try namesSsh(a, at)) try set.append(a, .{ "GIT_SSH_COMMAND", git.batch_ssh });
         const started = std.Io.Clock.awake.now(io());
         const res = try at.runQuery(a, arg, url, .{ .set = set.items, .limit = .fromSeconds(limit_s), .notice = notice });
         const elapsed = started.durationTo(std.Io.Clock.awake.now(io())).nanoseconds;
@@ -2395,9 +2394,7 @@ fn failureReason(a: std.mem.Allocator, stderr: []const u8, status: u8) ![]const 
 fn namesSsh(a: std.mem.Allocator, at: At) !bool {
     var map = try std.process.Environ.createMap(std.Io.Threaded.global_single_threaded.environ.process_environ, a);
     defer map.deinit();
-    for ([_][]const u8{ "GIT_SSH_COMMAND", "GIT_SSH" }) |name| {
-        if (map.get(name)) |v| if (v.len > 0) return true;
-    }
+    if (git.environNamesSsh(&map)) return true;
     const res = try at.run(a, &.{ "config", "core.sshCommand" });
     return res.status == 0 and std.mem.trim(u8, res.stdout, " \t\r\n").len > 0;
 }

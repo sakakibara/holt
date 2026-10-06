@@ -64,15 +64,32 @@ pub fn spawnStreamed(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[
 
 pub const Unpushed = enum { clean, ahead, no_upstream };
 
-/// Whether a clone may ask for credentials on the terminal. Clones running
-/// side by side `forbid` it: their prompts would share one terminal, and
-/// each line typed would reach whichever git read first.
+/// Whether a clone may ask on the terminal, git for credentials or ssh for
+/// a passphrase or a host key. Clones running side by side `forbid` it:
+/// their prompts would share one terminal, and each line typed would reach
+/// whichever read first.
 pub const Prompt = enum { allow, forbid };
+
+/// The ssh command git runs when nothing may prompt: ssh fails rather than
+/// asks, gives up on a host silent for ten seconds, and opens no shared
+/// connection another command could hold.
+pub const batch_ssh = "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no";
+
+/// Whether `environ` names the command git runs for ssh: a non-empty
+/// `GIT_SSH_COMMAND` or `GIT_SSH`. `core.sshCommand` names one too.
+pub fn environNamesSsh(environ: *const std.process.Environ.Map) bool {
+    for ([_][]const u8{ "GIT_SSH_COMMAND", "GIT_SSH" }) |name| {
+        if (environ.get(name)) |v| if (v.len > 0) return true;
+    }
+    return false;
+}
 
 /// `git clone url dest`, creating `dest`'s parent directories first. The
 /// clone streams git's own progress to the terminal and, under `.allow`, can
-/// prompt for credentials; git prints the real cause of a failure itself, so
-/// `diag` (if non-null) carries only a short summary.
+/// prompt; under `.forbid`, git cannot, nor can ssh, run as `batch_ssh`
+/// unless the user names an ssh command, which is left as it is. git prints
+/// the real cause of a failure itself, so `diag` (if non-null) carries only
+/// a short summary.
 ///
 /// The clone lands in a unique sibling temp dir and is then renamed into
 /// `dest` atomically, so the canonical path only ever appears fully populated:
@@ -91,6 +108,7 @@ pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, prompt
     if (prompt == .forbid) {
         env = try std.process.Environ.createMap(std.Io.Threaded.global_single_threaded.environ.process_environ, alloc);
         try env.?.put("GIT_TERMINAL_PROMPT", "0");
+        if (!environNamesSsh(&env.?) and !try configNamesSsh(alloc, std.fs.path.dirname(dest))) try env.?.put("GIT_SSH_COMMAND", batch_ssh);
     }
 
     var random_bytes: [8]u8 = undefined;
@@ -119,6 +137,15 @@ pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, prompt
         error.DirNotEmpty, error.NotDir => return,
         else => return err,
     };
+}
+
+/// Whether git, run in `dir` (or the current directory), reads a
+/// non-empty `core.sshCommand`.
+fn configNamesSsh(alloc: std.mem.Allocator, dir: ?[]const u8) !bool {
+    const res = try run(alloc, &.{ "git", "config", "core.sshCommand" }, dir);
+    defer alloc.free(res.stdout);
+    defer alloc.free(res.stderr);
+    return res.status == 0 and std.mem.trim(u8, res.stdout, " \t\r\n").len > 0;
 }
 
 /// `git -C repo worktree add <path> <branch>`, creating `path`'s parent dirs
