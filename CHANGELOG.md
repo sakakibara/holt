@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `holt restore` no longer lets the clones it runs side by side ask on one
+  terminal through ssh, for a key's passphrase or a new host key. They run
+  ssh in batch mode, which fails rather than asks, and any that fail are
+  cloned again one at a time, where ssh can ask. An ssh command you name in
+  `GIT_SSH_COMMAND`, `GIT_SSH`, or `core.sshCommand` is used as it is.
+
 ## [0.10.1] - 2026-10-05
 
 ### Fixed
@@ -749,6 +759,7 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.10.1...HEAD
 [0.10.1]: https://github.com/sakakibara/holt/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/sakakibara/holt/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/sakakibara/holt/compare/v0.9.1...v0.9.2
