@@ -220,40 +220,39 @@ pub const Listing = struct {
 /// what that holds is unlisted. Only ignored entries are candidates, each
 /// path once, and the directory of each submodule git records that holds
 /// entries but no `.git` (`Candidate.submodule_uninitialized`, never
-/// matched against the skip or auto patterns).
-/// A listed directory that is a nested repository as git's walk decides
-/// (`content.isNestedRepo`, under that working tree's `core.ignorecase`) is
-/// reported before skip matching; one holding such a
-/// directory deeper is listed again file by file, so what lies beside the
-/// nested repository stays a candidate. No path git lists is dropped for
-/// its name. A nested repository the block hides is reported the same
-/// way. What the block hides that holt holds nowhere else, judged by the
-/// closing sweep's rule (`reconcile.unprotected`'s, for this working
-/// tree), is a candidate, and everything else at or under a block line
-/// (byte for byte, or in any ASCII case where git's `core.ignorecase` is
-/// true) or such a place is left to that rule; of the rest, holt's own
-/// links and content identical to its kept copy drop out, then whatever
-/// the skip patterns (`patterns.globalText`, `patterns.repoSkipText`)
-/// match. With
-/// `opts.auto`, each remaining ignored path outside a submodule that an
-/// auto pattern matches is kept through `place.keepPath` when `kept/`
-/// exists, no fact names it, and it holds at most `auto_max_bytes`;
-/// otherwise it stays with the reason, as a file git reads only as a
-/// regular file (`Candidate.git_reads_unlinked`) always does. A pattern ending in `/`
-/// keeps the shallowest directory it matches at or above the path, once for every
-/// path git listed below it, unless something below that directory is
-/// tracked, or untracked and not ignored, or it holds what keep refuses
-/// (`autoUnits`); then each path is kept on its own. Untracked paths git
-/// does not ignore that an auto pattern matches, no skip pattern does, and
-/// no fact names are listed apart, the files inside untracked directories included
-/// (`--untracked-files=all`), those beside a `.git` git cannot open too.
-/// With `opts.deep_nested`, what the walk finds (`walkNested`) is reported
-/// as nested repositories and unwalked directories, and what
-/// `core.ignorecase` hides on a filesystem that tells cases apart as
-/// candidates (`caseHidden`); with `opts.tracked_edits`, the edits git hides
-/// in tracked files (`trackedEdits`) are candidates, never matched against
-/// the skip or auto patterns. Each nested repository says whether git can
-/// open it (`Nested.valid`).
+/// matched against the skip or auto patterns). A listed directory that is a
+/// nested repository as git's walk decides (`content.isNestedRepo`, under
+/// that working tree's `core.ignorecase`) is reported before skip matching;
+/// one holding such a directory deeper is listed again file by file, so
+/// what lies beside the nested repository stays a candidate. No path git
+/// lists is dropped for its name. A nested repository the block hides is
+/// reported the same way. What the block hides that holt holds nowhere
+/// else, judged by the closing sweep's rule (`reconcile.unprotected`'s, for
+/// this working tree), is a candidate, and everything else at or under a
+/// block line (byte for byte, or in any ASCII case where git's
+/// `core.ignorecase` is true) or such a place is left to that rule; of the
+/// rest, holt's own links and content identical to its kept copy drop out,
+/// then whatever the skip patterns (`patterns.globalText`,
+/// `patterns.repoSkipText`) match. With `opts.auto`, each remaining ignored
+/// path outside a submodule that an auto pattern matches is kept through
+/// `place.keepPath` when `kept/` exists, no fact names it, and it holds at
+/// most `auto_max_bytes`; otherwise it stays with the reason, as a file git
+/// reads only as a regular file (`Candidate.git_reads_unlinked`) always
+/// does. A pattern ending in `/` keeps the shallowest directory it matches
+/// at or above the path, once for every path git listed below it, unless
+/// something below that directory is tracked, or untracked and not ignored,
+/// or it holds what keep refuses (`autoUnits`); then each path is kept on
+/// its own. Untracked paths git does not ignore that an auto pattern
+/// matches, no skip pattern does, and no fact names are listed apart, the
+/// files inside untracked directories included (`--untracked-files=all`),
+/// those beside a `.git` git cannot open too. With `opts.deep_nested`, what
+/// the walk finds (`walkNested`) is reported as nested repositories and
+/// unwalked directories, and what `core.ignorecase` hides on a filesystem
+/// that tells cases apart as candidates (`caseHidden`); with
+/// `opts.tracked_edits`, the edits git hides in tracked files
+/// (`trackedEdits`) are candidates, never matched against the skip or auto
+/// patterns. Each nested repository says whether git can open it
+/// (`Nested.valid`).
 ///
 /// Covers the one working tree containing `path`; `listAll` covers every
 /// working tree of a clone. Takes no lock but what auto-keep takes, and

@@ -29,7 +29,7 @@ const Spec = struct {
 
 pub const command = app.command(Spec, .{
     .name = "unkeep",
-    .summary = "Stop keeping files: a clone's become regular copies, a hub root's move into docs",
+    .summary = "Stop keeping files: a clone's become regular copies, a hub root's entries move into docs",
     .usage = "holt unkeep <path>... | --purge <path> [--yes] | --repo <key>",
     .group = .create,
     .needs_context = true,

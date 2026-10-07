@@ -584,57 +584,55 @@ pub const Hidden = struct { found: sweep.Found, entry: ?[]const u8 = null, skipp
 
 /// Keeps `rel` of the working tree at `worktree_path`, with `index` the
 /// store's keys as loaded at the start of the command, holding the clone's
-/// lock (`ctx.lockClone`) and then the key's, or under the locks the
-/// caller holds (`opts.held`): records `pending`,
-/// creates the key and its record if absent, writes the block, sets the
-/// original aside, writes this machine's fact, stages and places the
-/// content, replaces the original with the link, and clears `pending`.
-/// When holt's link to the kept copy is already there but no fact names
-/// the path, this machine's fact for the kept copy is written instead.
-/// Every step can be repeated, so rerunning after an interruption finishes
-/// the job, settling any temporary the interruption left first. A
-/// directory whose kept copy is already a directory (kept whole, or
-/// holding kept files below it) is merged into it (`planMerge`): only the
-/// files the kept directory lacks are placed, each with a no-replace
-/// rename, holt's links inside it to their kept paths are absorbed, and the
-/// facts and released markers of paths below it are removed once its own
-/// fact covers them; this machine's fact for the merged content then
-/// replaces the directory's other facts, whose content it holds. A local
-/// file that differs from the kept directory's is `KeptCopyDiffers`,
-/// naming each in `opts.differs`, and another machine's content for the
-/// directory that may not have arrived (`pendingDownload`) is
-/// `KeptElsewhere`. Refuses
-/// before writing anything when git is older than `clone.min_git`
-/// (`GitTooOld`), when the clone's lock cannot be made
+/// lock (`ctx.lockClone`) and then the key's, or under the locks the caller
+/// holds (`opts.held`): records `pending`, creates the key and its record
+/// if absent, writes the block, sets the original aside, writes this
+/// machine's fact, stages and places the content, replaces the original
+/// with the link, and clears `pending`. When holt's link to the kept copy
+/// is already there but no fact names the path, this machine's fact for the
+/// kept copy is written instead. Every step can be repeated, so rerunning
+/// after an interruption finishes the job, settling any temporary the
+/// interruption left first. A directory whose kept copy is already a
+/// directory (kept whole, or holding kept files below it) is merged into it
+/// (`planMerge`): only the files the kept directory lacks are placed, each
+/// with a no-replace rename, holt's links inside it to their kept paths are
+/// absorbed, and the facts and released markers of paths below it are
+/// removed once its own fact covers them; this machine's fact for the
+/// merged content then replaces the directory's other facts, whose content
+/// it holds. A local file that differs from the kept directory's is
+/// `KeptCopyDiffers`, naming each in `opts.differs`, and another machine's
+/// content for the directory that may not have arrived (`pendingDownload`)
+/// is `KeptElsewhere`. Refuses before writing anything when git is older
+/// than `clone.min_git` (`GitTooOld`), when the clone's lock cannot be made
 /// (`CloneStateUnwritable`), when `opts.held` holds other lock files than
 /// this clone's and key's (`LocksNotHeld`), when the path is invalid or a
 /// file git reads only as a regular file (`GitReadsUnlinked`,
 /// `paths.keepable`), collides with a kept path, enters or contains a
-/// nested key, or is tracked; when a negated
-/// gitignore line that outranks the block makes git see it (`Negated`,
-/// naming the line in `opts.negation`); when it is a directory holding
-/// a name a kept path may not have (a `.holt-` name, a nested repository, a
-/// backslash, a control character; `InvalidName`); when the key's record
-/// cannot be used; when the clone does not match its `local/` key; when
-/// this machine cannot create symlinks; when another machine's fact names
-/// the path but no kept copy is here yet (`KeptElsewhere`, which nothing
-/// but retiring that machine overrides, `store.factRetired`); when the
-/// kept copy holds different content, which also clears an interrupted
-/// keep's `pending` so reconcile reports the difference; when git finds
-/// the main working tree's files in another directory than the one holding
-/// the common directory (`WorktreeElsewhere`); when the clone's working
-/// trees cannot be read (`WorktreeListFailed`); and when the path's new
-/// block lines would hide, in any working tree but the path itself, a
-/// place that cannot be set aside whole, or a working tree git records
-/// cannot be swept (`WouldHide`, naming each in `opts.would_hide`).
-/// Otherwise what the new lines would hide there is set aside first, and
-/// only then are they written. Once the link is made, under the same locks,
-/// keep runs reconcile's closing sweep over every working tree
-/// (`closingSweep`), and returns what both set aside or reported
-/// (`hidden`). Once linked, keep fails only when memory runs out or at
-/// clearing `pending`: a staging slot that cannot be cleared is reported in
-/// `staging_left`, and a closing sweep that fails in `hidden` as a
-/// `failed` place of the working tree itself, the error its detail.
+/// nested key, or is tracked; when a negated gitignore line that outranks
+/// the block makes git see it (`Negated`, naming the line in
+/// `opts.negation`); when it is a directory holding a name a kept path may
+/// not have (a `.holt-` name, a nested repository, a backslash, a control
+/// character; `InvalidName`); when the key's record cannot be used; when
+/// the clone does not match its `local/` key; when this machine cannot
+/// create symlinks; when another machine's fact names the path but no kept
+/// copy is here yet (`KeptElsewhere`, which nothing but retiring that
+/// machine overrides, `store.factRetired`); when the kept copy holds
+/// different content, which also clears an interrupted keep's `pending` so
+/// reconcile reports the difference; when git finds the main working tree's
+/// files in another directory than the one holding the common directory
+/// (`WorktreeElsewhere`); when the clone's working trees cannot be read
+/// (`WorktreeListFailed`); and when the path's new block lines would hide,
+/// in any working tree but the path itself, a place that cannot be set
+/// aside whole, or a working tree git records cannot be swept (`WouldHide`,
+/// naming each in `opts.would_hide`). Otherwise what the new lines would
+/// hide there is set aside first, and only then are they written. Once the
+/// link is made, under the same locks, keep runs reconcile's closing sweep
+/// over every working tree (`closingSweep`), and returns what both set
+/// aside or reported (`hidden`). Once linked, keep fails only when memory
+/// runs out or at clearing `pending`: a staging slot that cannot be cleared
+/// is reported in `staging_left`, and a closing sweep that fails in
+/// `hidden` as a `failed` place of the working tree itself, the error its
+/// detail.
 pub fn keepPath(ctx: Ctx, index: *const store.KeyIndex, worktree_path: []const u8, rel: []const u8, opts: KeepOptions) !KeepOutcome {
     const a = ctx.alloc;
     try clone.requireGit(a);

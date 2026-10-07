@@ -128,14 +128,15 @@ name holds a control character. With `--all`, first, for a pattern files in
 several repos share: keep everywhere, skip everywhere, review each, or quit.
 The first prompt, when it is one of these, also offers never ask again, which
 turns kept files off. For content holt's block hides that holt holds nowhere
-else: take local, take kept, or quit. For a file inside a submodule: skip,
-skip everywhere, or quit. For an entry at a hub root: keep, skip everywhere,
-or quit. A name holding a line break is left as it is, or at a hub root
-offered keep or quit. Keep everywhere also adds the name to the auto patterns,
-and never ask again creates `<synced>/.holt-kept-off`. Without a terminal,
+else: take local, take kept, or quit. For a file inside a submodule, or one
+keep refuses because git reads it only as a regular file: skip, skip
+everywhere, or quit. For an entry at a hub root: keep, skip everywhere, or
+quit. A name holding a line break is left as it is, or at a hub root offered
+keep or quit. Keep everywhere also adds the name to the auto patterns, and
+never ask again creates `<synced>/.holt-kept-off`. Without a terminal,
 `--review` prints each candidate with the command that keeps it (`holt keep
---yes <path>` while `kept/` is absent and the synced folder holds projects)
-and exits 1.
+--yes <path>` while `kept/` is absent and the synced folder holds projects) and
+exits 1.
 
 The first `holt keep` or review answer that writes creates `kept/`, asking
 first when the synced folder already holds projects, since another machine's
@@ -172,19 +173,18 @@ holt unkeep --repo github.com/acme/gone     # release every kept path of a repo
 holt unkeep ~/Projects/acme/site/notes.md   # a hub-root entry: move it into the project's docs/
 ```
 
-A path directly at a hub root is kept as before: it moves into the project's
-synced content. `unkeep` moves it on into the content's `docs/`, where the hub
-links it through `docs`. `keep` refuses a tracked path, a
-directory holding tracked files (naming the untracked ones to keep instead), a
-symlink holt did not make, a path inside a submodule or nested repository, a
-path another machine kept whose kept copy has not arrived yet, a
-`.gitignore`, `.gitattributes`, or `.mailmap` file in any spelling git takes
-for one (git reads it only as a regular file, never through a link; a
-directory holding one is kept whole, and a file an older holt kept is released
-with `holt unkeep`), and a path a negated `.gitignore` line (`!<pattern>`)
-un-ignores: git reads holt's block below every `.gitignore`, so it would see
-the link. The refusal names the line as `<file>:<line>:<pattern>`; remove or
-narrow it, then keep the path.
+A path directly at a hub root is kept by moving it into the project's synced
+content. `unkeep` moves it on into the content's `docs/`, where the hub links
+it through `docs`. `keep` refuses a tracked path, a directory holding tracked
+files (naming the untracked ones to keep instead), a symlink holt did not make,
+a path inside a submodule or nested repository, a path another machine kept
+whose kept copy has not arrived yet, a `.gitignore`, `.gitattributes`, or
+`.mailmap` file in any spelling git takes for one (git reads it only as a
+regular file, never through a link; a directory holding one is kept whole, and
+a file an older holt kept is released with `holt unkeep`), and a path a negated
+`.gitignore` line (`!<pattern>`) un-ignores: git reads holt's block below every
+`.gitignore`, so it would see the link. The refusal names the line as
+`<file>:<line>:<pattern>`; remove or narrow it, then keep the path.
 
 `--take-aside` settles a path two machines kept with different content: both
 versions are in aside, and the report names each entry. `--prune-aside`
