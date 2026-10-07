@@ -52,11 +52,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole.
 - A `holt keep` that fails before it records the file, such as when its
   content cannot be set aside, now leaves the path neither hidden from git
-  nor pending; on a directory, holt's links inside it return at the next
-  `holt sync`. Before, the path stayed hidden with no kept copy, `holt sync`
-  reported it interrupted on every run, and the `holt keep` it suggested
-  failed the same way. A keep that was interrupted, or failed after
-  recording the file, is still finished by running `holt keep` again.
+  nor with a keep pending; on a directory, holt's links inside it return at
+  the next `holt sync`. Before, the path stayed hidden with no kept copy,
+  `holt sync` reported it interrupted on every run, and the `holt keep` it
+  suggested failed the same way. A keep that was interrupted, or failed
+  after recording the file, is still finished by running `holt keep` again.
 
 ## [0.10.1] - 2026-10-05
 
