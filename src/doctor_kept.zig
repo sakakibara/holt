@@ -534,7 +534,12 @@ fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIn
         try bad.appendSlice(alloc, ks.bad);
         if (ks.record) |rec| if (!rec.known()) try versions.append(alloc, key);
         const named = try ks.namedPaths(alloc);
-        for (named) |rel| if (paths.keepable(rel)) |why| try invalid.append(alloc, .{ .key = key, .rel = rel, .reason = why.describe() });
+        for (named) |rel| if (paths.keepable(rel)) |why| {
+            // Released, it is settled: the released rule turns its link
+            // into a regular copy, and purge removes the kept copy.
+            if (why == .git_reads_unlinked and ks.isReleased(rel)) continue;
+            try invalid.append(alloc, .{ .key = key, .rel = rel, .reason = why.describe() });
+        };
         const kept_set = try ks.keptSet(alloc);
         for (try paths.collisions(alloc, kept_set)) |rel| try invalid.append(alloc, .{ .key = key, .rel = rel, .reason = paths.Invalid.collision.describe() });
 
@@ -910,4 +915,39 @@ test "isReservedCopy: a conflict copy of a reserved name, never a name holt writ
     try std.testing.expect(!isReservedCopy(".holt-tmp-0123", &key_reserved));
     try std.testing.expect(!isReservedCopy(".holt-kept.json.abc.tmp", &key_reserved));
     try std.testing.expect(!isReservedCopy("notes", &key_reserved));
+}
+
+test "checkStore: a released path git reads only unlinked is not reported invalid, an unreleased one is" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const harness = @import("kept/harness.zig");
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try @import("testutil.zig").Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try harness.World.init(a, &sb, 1);
+    const m = w.m(0);
+
+    try m.write("first.json", "kept by hand, so the key exists");
+    _ = try m.keep("first.json");
+    const kp = try m.keptPath("a/.mailmap");
+    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = kp, .data = "A <a@example.com>\n" });
+    const h = try content.hashPath(a, kp);
+    try store.writeFact(a, m.ctx.layout, harness.repo_key, m.ctx.machine_id, "a/.mailmap", .file, &h.hex);
+
+    var before: Report = .{ .setup = .present };
+    try checkStore(a, m.ctx, &(try store.loadIndex(a, m.ctx.layout)), &before, null);
+    try testing.expect(namesInvalid(before, "a/.mailmap"));
+
+    _ = try kept.ops.unkeep(m.ctx, &(try store.loadIndex(a, m.ctx.layout)), m.clone, "a/.mailmap", .{});
+    var after: Report = .{ .setup = .present };
+    try checkStore(a, m.ctx, &(try store.loadIndex(a, m.ctx.layout)), &after, null);
+    try testing.expect(!namesInvalid(after, "a/.mailmap"));
+}
+
+fn namesInvalid(r: Report, rel: []const u8) bool {
+    for (r.invalid) |i| if (std.mem.eql(u8, i.rel, rel)) return true;
+    return false;
 }
