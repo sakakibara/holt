@@ -1315,10 +1315,8 @@ pub const alias_command = app.command(AliasSpec, .{
     ,
 }, runAlias);
 
-const reserved_link_names = [_][]const u8{ "docs", "assets", "links" };
-
 fn isReserved(name: []const u8) bool {
-    for (reserved_link_names) |r| {
+    for (project_mod.content_dirs) |r| {
         if (std.mem.eql(u8, name, r)) return true;
     }
     return false;
