@@ -6,6 +6,7 @@
 //! moves from the project's synced content into its `docs/`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli");
 const app = @import("../app.zig");
 const ui = @import("../ui.zig");
@@ -110,6 +111,10 @@ fn unkeepOne(ctx: *app.Ctx, raw: []const u8) !bool {
     return !try util.reconcileAndShow(ctx, k, r.c.worktree, &.{r.rel});
 }
 
+/// Test seam: a path `unkeepHub` removes between its checks and taking
+/// the project lock, as another machine's change arriving then would.
+pub var remove_before_lock_for_test: ?[]const u8 = null;
+
 /// Hub unkeep: moves the entry `abs` at `p`'s hub root, kept in the
 /// project's synced content, into the content's `docs/`, then reconciles
 /// the hub. Any top-level content entry but the layout's own qualifies,
@@ -134,6 +139,7 @@ fn unkeepHub(ctx: *app.Ctx, p: project_mod.Project, abs: []const u8) !bool {
         return false;
     }
 
+    if (builtin.is_test) if (remove_before_lock_for_test) |gone| try fsutil.removePath(gone);
     var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
     defer lock.release();
 
@@ -152,7 +158,7 @@ fn unkeepHub(ctx: *app.Ctx, p: project_mod.Project, abs: []const u8) !bool {
     const report = try hub_mod.reconcile(alloc, &ctx.context.?.ws, &p, false);
     try ctx.out.print("moved {s} into the project's docs: {s}\n", .{ try ui.printable(alloc, base), try util.show(ctx, dest) });
     try sync.printConflicts(ctx, report.conflicts);
-    return true;
+    return report.conflicts.len == 0;
 }
 
 fn isLayout(name: []const u8) bool {
@@ -679,6 +685,61 @@ test "unkeep: a hub entry is unkept by any name the filesystem resolves to it, a
     while (try it.next(fsutil.io())) |e| try names.append(a, try a.dupe(u8, e.name));
     try testing.expectEqual(@as(usize, 1), names.items.len);
     try testing.expectEqualStrings(stored, names.items[0]);
+}
+
+test "unkeep: an iCloud placeholder for the hub entry's name in docs is refused" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    try fsutil.ensureDir(try fsutil.joinSlashy(a, h.content, "docs"));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(a, h.content, "docs/.notes.md.icloud"), .data = "" });
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "new" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try expectContains(got.err, "docs already has notes.md; refusing to overwrite");
+    try testing.expectEqualStrings("new", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "notes.md")));
+}
+
+test "unkeep: a hub entry gone from the content once the project lock is held is refused" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "new" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+
+    remove_before_lock_for_test = try fsutil.joinSlashy(a, h.content, "notes.md");
+    defer remove_before_lock_for_test = null;
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try expectContains(got.err, "it is no longer in the project's synced content");
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try fsutil.joinSlashy(a, h.content, "docs/notes.md")));
+}
+
+test "unkeep: a hub conflict the reconcile after the move reports is printed after the move, and exits 1" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "hello\n" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+    const hub_docs = try fsutil.joinSlashy(a, h.hub, "docs");
+    try fsutil.ensureDir(hub_docs);
+
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    const moved = try fsutil.joinSlashy(a, h.content, "docs/notes.md");
+    try expectContains(got.out, try std.fmt.allocPrint(a, "moved notes.md into the project's docs: {s}\n  conflict: {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), moved), try fsutil.contractTilde(a, app.envOf_current(), hub_docs) }));
+    try testing.expectEqualStrings("hello\n", try kept.content.readSmall(a, moved));
 }
 
 test "unkeep: the names of the project's layout are refused at a hub root" {
