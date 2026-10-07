@@ -118,10 +118,7 @@ fn unkeepHub(ctx: *app.Ctx, p: project_mod.Project, abs: []const u8) !bool {
     const alloc = ctx.alloc;
     const shown = try util.show(ctx, abs);
     const raw_base = std.fs.path.basename(abs);
-    const base = if (fsutil.exists(try std.fs.path.join(alloc, &.{ p.content_path, raw_base })))
-        try contentSpelling(alloc, p.content_path, raw_base) orelse raw_base
-    else
-        raw_base;
+    const base = try contentSpelling(alloc, p.content_path, raw_base) orelse raw_base;
     if (isLayout(raw_base) or isLayout(base)) {
         try ctx.err.print("holt: cannot unkeep {s}: it is part of the project's layout\n", .{shown});
         return false;
@@ -167,31 +164,25 @@ fn isLayout(name: []const u8) bool {
 }
 
 /// The name the content directory `dir` spells its entry `name` with:
-/// `name` itself, or, on a filesystem that folds names, the entry equal to
-/// it under case folding and Unicode normalization (`kept.paths.foldKey`).
+/// `name` itself, or the entry that is the object `<dir>/<name>` resolves
+/// to (`content.knownSameFile`); null when nothing is there.
 fn contentSpelling(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) !?[]const u8 {
+    const typed = try std.fs.path.join(alloc, &.{ dir, name });
+    if (try kept.content.entryAt(typed) == .absent) return null;
     var d = std.Io.Dir.openDirAbsolute(fsutil.io(), dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return null,
         else => return err,
     };
     defer d.close(fsutil.io());
-    const want = try foldOrNull(alloc, name);
-    var found: ?[]const u8 = null;
     var it = d.iterate();
     while (try it.next(fsutil.io())) |e| {
         if (std.mem.eql(u8, e.name, name)) return try alloc.dupe(u8, e.name);
-        if (found != null) continue;
-        const folded = if (want != null) try foldOrNull(alloc, e.name) else null;
-        const same = if (want != null and folded != null) std.mem.eql(u8, want.?, folded.?) else std.ascii.eqlIgnoreCase(e.name, name);
-        if (same) found = try alloc.dupe(u8, e.name);
     }
-    return found;
-}
-
-/// `name`'s fold key, or null when it is not valid UTF-8.
-fn foldOrNull(alloc: std.mem.Allocator, name: []const u8) !?[]const u8 {
-    if (!std.unicode.utf8ValidateSlice(name)) return null;
-    return try kept.paths.foldKey(alloc, name);
+    it = d.iterate();
+    while (try it.next(fsutil.io())) |e| {
+        if (try kept.content.knownSameFile(alloc, typed, try std.fs.path.join(alloc, &.{ dir, e.name }))) return try alloc.dupe(u8, e.name);
+    }
+    return null;
 }
 
 /// Whether an auto pattern names the kept path `rel` of `c`, so unkeep
@@ -664,6 +655,30 @@ test "unkeep: a hub entry kept under one Unicode normalization is unkept by anot
     try testing.expectEqual(@as(usize, 1), names.items.len);
     try testing.expectEqualStrings(nfd, names.items[0]);
     try testing.expectEqualStrings("accent", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, try std.mem.concat(a, u8, &.{ "docs/", nfd }))));
+}
+
+test "unkeep: a hub entry is unkept by any name the filesystem resolves to it, and moves under the content's spelling" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    const stored = "stra\u{00df}e.md";
+    const typed = "Strasse.md";
+    const entry = try fsutil.joinSlashy(a, h.hub, stored);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "eszett" });
+    if (!try kept.content.knownSameFile(a, entry, try fsutil.joinSlashy(a, h.hub, typed))) return error.SkipZigTest;
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+
+    const got = try f.run(&.{try fsutil.joinSlashy(a, h.hub, typed)});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    var d = try std.Io.Dir.openDirAbsolute(fsutil.io(), try fsutil.joinSlashy(a, h.content, "docs"), .{ .iterate = true });
+    defer d.close(fsutil.io());
+    var it = d.iterate();
+    var names: std.ArrayList([]const u8) = .empty;
+    while (try it.next(fsutil.io())) |e| try names.append(a, try a.dupe(u8, e.name));
+    try testing.expectEqual(@as(usize, 1), names.items.len);
+    try testing.expectEqualStrings(stored, names.items[0]);
 }
 
 test "unkeep: the names of the project's layout are refused at a hub root" {
