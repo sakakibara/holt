@@ -31,6 +31,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   setting content aside in a clone that has done so thousands of times.
   An aside manifest over 1 MiB fails lookups on an older holt, so every
   machine sharing the synced root should run this release or later.
+- `holt keep` refuses a `.gitignore`, `.gitattributes`, or `.mailmap` file,
+  in any spelling git takes for one: git reads these only as regular files,
+  so through holt's link it dropped their rules with "Too many levels of
+  symbolic links". An auto pattern no longer keeps one, `holt keep --review`
+  offers it skip, skip everywhere, or quit, and the takes refuse it. One an
+  older holt kept is never linked again and is reported with `holt unkeep
+  <path>`, which turns its link into a regular copy. A directory holding
+  such a file is still kept whole.
 
 ## [0.10.1] - 2026-10-05
 

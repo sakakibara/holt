@@ -105,6 +105,7 @@ pub const Invalid = enum {
     dotgit,
     reserved,
     collision,
+    git_reads_unlinked,
 
     pub fn describe(self: Invalid) []const u8 {
         return switch (self) {
@@ -118,6 +119,7 @@ pub const Invalid = enum {
             .dotgit => "component git treats as .git",
             .reserved => "reserved .holt- name",
             .collision => "equal to another kept path under case folding or Unicode normalization",
+            .git_reads_unlinked => "git reads it only as a regular file, never through a link",
         };
     }
 };
@@ -141,6 +143,33 @@ pub fn check(rel: []const u8) ?Invalid {
         if (isReserved(comp)) return .reserved;
     }
     return null;
+}
+
+/// Why `rel` cannot be kept, or null when it can: `check`'s reasons, then
+/// `git_reads_unlinked` when its last component is a file git opens without
+/// following a link (`gitReadsUnlinked`). A directory holding such a file
+/// may be kept: git never reads inside a directory link.
+pub fn keepable(rel: []const u8) ?Invalid {
+    if (check(rel)) |inv| return inv;
+    const base = if (std.mem.lastIndexOfScalar(u8, rel, '/')) |i| rel[i + 1 ..] else rel;
+    return if (gitReadsUnlinked(base)) .git_reads_unlinked else null;
+}
+
+/// The files git reads only as regular files, with git's hashed prefix of
+/// each one's NTFS short name.
+const unlinked_names = [_]struct { name: []const u8, short: []const u8 }{
+    .{ .name = "gitignore", .short = "gi250a" },
+    .{ .name = "gitattributes", .short = "gi7d29" },
+    .{ .name = "mailmap", .short = "maba30" },
+};
+
+/// True when `comp` is `.gitignore`, `.gitattributes`, or `.mailmap` under
+/// git's own aliasing rules (`is_ntfs_dot_generic`, `is_hfs_dot_generic`).
+pub fn gitReadsUnlinked(comp: []const u8) bool {
+    inline for (unlinked_names) |n| {
+        if (isNtfsDot(comp, n.name, n.short) or isHfsDot(comp, "." ++ n.name)) return true;
+    }
+    return false;
 }
 
 /// True when `rel`, joined to a directory, names a place strictly inside
@@ -210,18 +239,57 @@ pub fn isWalkDotGit(comp: []const u8, ignore_case: bool) bool {
 /// git's NTFS rule, widened: `.git` or its short name `git~1` in any case,
 /// followed only by spaces and dots, or by an alternate data stream.
 fn isNtfsDotGit(comp: []const u8) bool {
-    var name = comp;
-    if (std.mem.indexOfScalar(u8, name, ':')) |i| name = name[0..i];
-    name = std.mem.trimEnd(u8, name, " .");
-    return std.ascii.eqlIgnoreCase(name, ".git") or std.ascii.eqlIgnoreCase(name, "git~1");
+    for ([_][]const u8{ ".git", "git~1" }) |name| {
+        if (comp.len >= name.len and std.ascii.eqlIgnoreCase(comp[0..name.len], name) and ntfsTail(comp[name.len..])) return true;
+    }
+    return false;
+}
+
+/// git's `is_ntfs_dot_generic`: `.<name>` in any ASCII case, or an NTFS
+/// short name of it, followed only by spaces and dots, or by an alternate
+/// data stream. A short name is the first six letters of `name`, `~`, and
+/// a digit 1 to 4, or, within eight characters, a leading part of `short`
+/// (git's hashed prefix), `~`, a digit 1 to 9, and digits.
+fn isNtfsDot(comp: []const u8, name: []const u8, short: []const u8) bool {
+    if (comp.len > name.len and comp[0] == '.' and std.ascii.eqlIgnoreCase(comp[1 .. name.len + 1], name)) return ntfsTail(comp[name.len + 1 ..]);
+    if (comp.len >= 8 and std.ascii.eqlIgnoreCase(comp[0..6], name[0..6]) and comp[6] == '~' and comp[7] >= '1' and comp[7] <= '4') return ntfsTail(comp[8..]);
+    var saw_tilde = false;
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        if (i >= comp.len) return false;
+        const c = comp[i];
+        if (saw_tilde) {
+            if (c < '0' or c > '9') return false;
+        } else if (c == '~') {
+            i += 1;
+            if (i >= comp.len or comp[i] < '1' or comp[i] > '9') return false;
+            saw_tilde = true;
+        } else if (i >= 6 or c >= 0x80 or std.ascii.toLower(c) != short[i]) return false;
+    }
+    return ntfsTail(comp[i..]);
+}
+
+/// True when `rest` holds only spaces and dots up to its end or a `:`.
+fn ntfsTail(rest: []const u8) bool {
+    for (rest) |c| switch (c) {
+        ':' => return true,
+        ' ', '.' => {},
+        else => return false,
+    };
+    return true;
 }
 
 /// git's HFS+ rule: `.git` in any case once the code points HFS+ ignores
 /// are dropped.
 fn isHfsDotGit(comp: []const u8) bool {
+    return isHfsDot(comp, ".git");
+}
+
+/// git's `is_hfs_dot_generic`: `want` in any ASCII case once the code
+/// points HFS+ ignores are dropped.
+fn isHfsDot(comp: []const u8, want: []const u8) bool {
     var view = std.unicode.Utf8View.init(comp) catch return false;
     var it = view.iterator();
-    const want = ".git";
     var i: usize = 0;
     while (it.nextCodepoint()) |cp| {
         if (hfsIgnorable(cp)) continue;
@@ -502,6 +570,41 @@ test "check: refuses every malformed or dangerous path" {
         .{ .rel = "a/.holt-paths/x", .want = .reserved },
     };
     for (cases) |c| try testing.expectEqual(@as(?Invalid, c.want), check(c.rel));
+}
+
+test "gitReadsUnlinked: .gitignore, .gitattributes, and .mailmap under git's NTFS and HFS+ aliasing, and no other name" {
+    for ([_][]const u8{
+        ".gitignore",     ".GitIgnore",     ".gitignore.",           ".gitignore ",      ".gitignore. . ",
+        ".gitattributes", ".GITATTRIBUTES", ".gitattributes::$DATA", ".mailmap",         ".MailMap:stream",
+        "GITIGN~1",       "gitatt~4",       "mailma~2 ",             "gi250a~1",         "GI7D29~9",
+        "maba3~12",       "gi250a~1.",      ".git\u{200c}ignore",    "\u{feff}.mailmap", ".Git\u{200d}Attributes",
+    }) |comp| {
+        if (!gitReadsUnlinked(comp)) {
+            std.debug.print("not matched: {s}\n", .{comp});
+            return error.TestUnexpectedResult;
+        }
+    }
+    for ([_][]const u8{
+        ".gitignore-local", "gitignore",        ".gitignorex", "x.gitignore", ".mailmap2",   "gitign~5", "gitign~0",
+        "gi250a~0",         "gi250a~10",        "gi250b~1",    "gi250a~",     ".gitmodules", ".git",     "git~1",
+        "gi250\u{e9}~1",    ".git\u{e9}ignore",
+    }) |comp| {
+        if (gitReadsUnlinked(comp)) {
+            std.debug.print("matched: {s}\n", .{comp});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "keepable: check's refusals first, then a last component git reads only unlinked" {
+    try testing.expectEqual(@as(?Invalid, .git_reads_unlinked), keepable("x/.gitignore"));
+    try testing.expectEqual(@as(?Invalid, .git_reads_unlinked), keepable(".mailmap"));
+    try testing.expectEqual(@as(?Invalid, .git_reads_unlinked), keepable("a/b/GITATT~1"));
+    try testing.expectEqual(@as(?Invalid, null), keepable(".gitignore/x"));
+    try testing.expectEqual(@as(?Invalid, null), keepable(".husky/_"));
+    try testing.expectEqual(@as(?Invalid, .dotgit), keepable(".git/.gitignore"));
+    try testing.expectEqual(@as(?Invalid, .reserved), keepable(".holt-x/.gitignore"));
+    try testing.expectEqual(@as(?Invalid, null), check("x/.gitignore"));
 }
 
 test "hasDotGit: a .git component anywhere, split at either separator" {

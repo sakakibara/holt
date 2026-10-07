@@ -607,8 +607,10 @@ pub const Hidden = struct { found: sweep.Found, entry: ?[]const u8 = null, skipp
 /// before writing anything when git is older than `clone.min_git`
 /// (`GitTooOld`), when the clone's lock cannot be made
 /// (`CloneStateUnwritable`), when `opts.held` holds other lock files than
-/// this clone's and key's (`LocksNotHeld`), when the path is invalid, collides with a kept
-/// path, enters or contains a nested key, or is tracked; when a negated
+/// this clone's and key's (`LocksNotHeld`), when the path is invalid or a
+/// file git reads only as a regular file (`GitReadsUnlinked`,
+/// `paths.keepable`), collides with a kept path, enters or contains a
+/// nested key, or is tracked; when a negated
 /// gitignore line that outranks the block makes git see it (`Negated`,
 /// naming the line in `opts.negation`); when it is a directory holding
 /// a name a kept path may not have (a `.holt-` name, a nested repository, a
@@ -636,7 +638,7 @@ pub const Hidden = struct { found: sweep.Found, entry: ?[]const u8 = null, skipp
 pub fn keepPath(ctx: Ctx, index: *const store.KeyIndex, worktree_path: []const u8, rel: []const u8, opts: KeepOptions) !KeepOutcome {
     const a = ctx.alloc;
     try clone.requireGit(a);
-    if (paths.check(rel) != null) return error.InvalidPath;
+    if (paths.keepable(rel)) |inv| return if (inv == .git_reads_unlinked) error.GitReadsUnlinked else error.InvalidPath;
     const c = try clone.inspect(a, worktree_path, ctx.code_root);
     const key = c.key orelse return if (c.worktreeElsewhere()) error.WorktreeElsewhere else error.NotUnderCodeRoot;
 

@@ -1511,6 +1511,32 @@ test "run: a kept path whose link is gone is one line hinting holt sync; differi
     try testing.expect(has(js.out, "\"state\":\"clean\""));
 }
 
+test "run: a kept path git reads only as a regular file is not linked, hinting unkeep" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try kept_cmd.TestWorld.init(arena, &sb, true);
+    defer w.deinit();
+    try w.keep(arena, ".clasp.json", "{}\n");
+    const kp = try w.keptPath(arena, "a/.gitignore");
+    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = kp, .data = "*.tmp\n" });
+    const h = try kept.content.hashPath(arena, kp);
+    const c = try w.ctx(arena);
+    try kept.store.writeFact(arena, c.layout, w.key, c.machine_id, "a/.gitignore", .file, &h.hex);
+
+    const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
+    const p = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "a/.gitignore"));
+    const want = try std.fmt.allocPrint(arena, "    1 not linked:\n      {s}: git reads it only as a regular file, so holt never links it (run: holt unkeep {s})\n", .{ p, p });
+    if (!has(got.out, want)) {
+        std.debug.print("expected:\n{s}\nin:\n{s}\n", .{ want, got.out });
+        return error.TestUnexpectedResult;
+    }
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try fsutil.joinSlashy(arena, w.clone, "a/.gitignore")));
+}
+
 test "run: a purged path the next sync restores from aside is counted as not restored yet, apart from the paths not linked" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

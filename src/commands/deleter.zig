@@ -6227,6 +6227,28 @@ test "worktree -r --force: a locked worktree is refused before anything is set a
     try expectSameButLinkRecords(&f, before, try f.snapshot(true));
 }
 
+test "repo remove --clone: an ignored .gitignore an auto pattern matches is not kept automatically, and is named as not kept" {
+    try skipWithoutLinks();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    const state = try testutil.stateScope(a, sb.root);
+    defer state.restore();
+    const f = try Fixture.init(a, &sb, true);
+    try f.ignore("/sub/.gitignore");
+    try f.write(f.clone, "sub/.gitignore", "*.tmp\n");
+    try f.write(try f.kctx.layout.keptDir(a), ".holt-auto.d/1", ".gitignore\n");
+
+    const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
+    try testing.expectEqual(@as(u8, 1), refused.code);
+    const shown = try fsutil.contractTilde(a, app.envOf_current(), try f.path("sub/.gitignore"));
+    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "  not kept: {s}\n", .{shown})));
+    try testing.expect(!contains(refused.out, "kept automatically"));
+    try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(try f.path("sub/.gitignore")));
+}
+
 test "deleter messages show every place as a line names it, and quote it in each command" {
     try skipWithoutLinks();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);

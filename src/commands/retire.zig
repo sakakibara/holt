@@ -244,6 +244,8 @@ fn checkClone(ctx: *app.Ctx, r: *Report, kctx_opt: ?kept.Ctx, index: *const kept
                 try reported.append(a, path);
                 if (cand.hidden_tracked_edit) {
                     try r.fail(ctx, try gitCmd(ctx, l.worktree, "update-index --no-skip-worktree --no-assume-unchanged -- {s}", .{try ui.shellQuote(a, cand.rel)}), "edit git hides in a tracked file: {s}", .{try util.show(ctx, path)});
+                } else if (cand.git_reads_unlinked) {
+                    try r.fail(ctx, try review_all(ctx, l.worktree), "not kept, and git reads it only as a regular file, so holt cannot keep it: {s}", .{try util.show(ctx, path)});
                 } else if (cand.submodule_uninitialized) {
                     try r.fail(ctx, try review_all(ctx, l.worktree), "files in a submodule that is not initialized: {s}", .{try util.show(ctx, path)});
                 } else {

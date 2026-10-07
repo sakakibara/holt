@@ -145,9 +145,10 @@ pub fn takeLocal(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, rel: 
 /// unchanged kept copy in its place. Holds the clone's lock and then the
 /// key's; records `pending` before the working tree changes, so an
 /// interruption is reported and rerunning finishes it. Refuses with
-/// `NotKept` for a path outside the kept set, `KeptMissing` when the kept
-/// copy is not here (`KeptOnlineOnly`, `KeptNotRegular`), `FileNotFound`
-/// when there is no local content, `Tracked`, `ParentNotDir`,
+/// `NotKept` for a path outside the kept set, `GitReadsUnlinked` for a
+/// file git reads only as a regular file (`paths.keepable`), `KeptMissing`
+/// when the kept copy is not here (`KeptOnlineOnly`, `KeptNotRegular`),
+/// `FileNotFound` when there is no local content, `Tracked`, `ParentNotDir`,
 /// `SymlinkNotHolts`, `LinkedElsewhere`, `NotRegular`, `Collision`,
 /// `NestedKey`, `InvalidName` for a directory holding a name a kept path
 /// may not have, a nested repository's `.git` included (the names in
@@ -163,7 +164,7 @@ pub fn takeKept(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, rel: [
 
 fn takeHere(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, rel: []const u8, op: clone.Op, opts: TakeOptions) !TakeOutcome {
     const a = ctx.alloc;
-    if (paths.check(rel) != null) return error.InvalidPath;
+    if (paths.keepable(rel)) |inv| return if (inv == .git_reads_unlinked) error.GitReadsUnlinked else error.InvalidPath;
     const o = try openClone(ctx, index, path, false);
     const c = o.c;
     const key = o.key;

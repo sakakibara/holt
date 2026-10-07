@@ -401,7 +401,10 @@ fn itemHint(ctx: *app.Ctx, tree: []const u8, key: ?[]const u8, synced_root: []co
         .tree_unreadable => try unreadableTree(ctx, tree, i.worktree orelse tree, detail),
         .line_refused => .{ .what = try std.fmt.allocPrint(a, "not hidden from git: its block line would hide what cannot be set aside ({s}); settle the places reported beside it, then sync", .{detail}), .run = sync_only },
         .stopped => syncHint("content git cannot see, in a working tree reconcile could not evaluate"),
-        .invalid => .{ .what = try std.fmt.allocPrint(a, "not a valid kept path ({s}), so holt never links it; keep the file under a valid name instead", .{detail}) },
+        .invalid => if (i.invalid == .git_reads_unlinked)
+            .{ .what = "git reads it only as a regular file, so holt never links it", .run = try cmds(a, &.{try std.fmt.allocPrint(a, "holt unkeep {s}", .{p})}) }
+        else
+            .{ .what = try std.fmt.allocPrint(a, "not a valid kept path ({s}), so holt never links it; keep the file under a valid name instead", .{detail}) },
         .parent_not_dir => try parentHint(ctx, i.worktree orelse tree, i.rel),
         .tracked => .{ .what = "tracked on this branch" },
         .temp_settled => .{ .what = "a temporary an interrupted write left was settled" },

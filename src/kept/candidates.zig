@@ -100,6 +100,10 @@ pub const Candidate = struct {
     /// nowhere. Never matched against the skip patterns nor kept
     /// automatically.
     case_hidden: bool = false,
+    /// The path is a file git reads only as a regular file, never through
+    /// a link (`paths.keepable`), so keep refuses it. Matched against the
+    /// skip patterns like any candidate, but never kept automatically.
+    git_reads_unlinked: bool = false,
     /// The path is a directory the walk `Options.deep_nested` asks for did
     /// not look into, so what it holds is unknown. Never matched against
     /// the skip patterns nor kept automatically.
@@ -130,6 +134,9 @@ pub const AutoMiss = struct {
         released,
         /// Sizing or keeping it failed; `detail` is the error.
         failed,
+        /// git reads the file only as a regular file, never through a
+        /// link (`Candidate.git_reads_unlinked`).
+        git_reads_unlinked,
     },
     detail: ?[]const u8 = null,
 };
@@ -231,8 +238,9 @@ pub const Listing = struct {
 /// `opts.auto`, each remaining ignored path outside a submodule that an
 /// auto pattern matches is kept through `place.keepPath` when `kept/`
 /// exists, no fact names it, and it holds at most `auto_max_bytes`;
-/// otherwise it stays with the reason. A pattern ending in `/` keeps the
-/// shallowest directory it matches at or above the path, once for every
+/// otherwise it stays with the reason, as a file git reads only unlinked
+/// (`Candidate.git_reads_unlinked`) always does. A pattern ending in `/`
+/// keeps the shallowest directory it matches at or above the path, once for every
 /// path git listed below it, unless something below that directory is
 /// tracked, or untracked and not ignored, or it holds what keep refuses
 /// (`autoUnits`); then each path is kept on its own. Untracked paths git
@@ -313,7 +321,7 @@ fn listIn(ctx: Ctx, index: *const store.KeyIndex, c: clone.Clone, opts: Options)
         const entry = entryOf(a, tree, e.rel);
         if (try holtsOwn(scope, tree, e.rel, entry)) continue;
         if (entry == .dir and try holdsNothing(a, try fsutil.joinSlashy(a, tree, e.rel))) continue;
-        try cands.append(a, .{ .rel = e.rel, .entry = entry });
+        try cands.append(a, .{ .rel = e.rel, .entry = entry, .git_reads_unlinked = paths.keepable(e.rel) == .git_reads_unlinked });
     }
 
     var failed: std.ArrayList([]const u8) = .empty;
@@ -351,7 +359,7 @@ fn listIn(ctx: Ctx, index: *const store.KeyIndex, c: clone.Clone, opts: Options)
             if (!e.ignored) continue;
             const entry = entryOf(a, tree, rel);
             if (entry == .dir and try holdsNothing(a, try fsutil.joinSlashy(a, tree, rel))) continue;
-            try cands.append(a, .{ .rel = rel, .entry = entry, .submodule = s });
+            try cands.append(a, .{ .rel = rel, .entry = entry, .submodule = s, .git_reads_unlinked = paths.keepable(rel) == .git_reads_unlinked });
         }
     }
     try failed.appendSlice(a, subs.failed);
@@ -423,11 +431,16 @@ fn listIn(ctx: Ctx, index: *const store.KeyIndex, c: clone.Clone, opts: Options)
     try kept_cands.appendSlice(a, cands.items[0..hidden_count]);
     var auto_q: std.ArrayList(patterns.Query) = .empty;
     var auto_at: std.ArrayList(usize) = .empty;
+    var unlinked_at: std.ArrayList(usize) = .empty;
     for (judged, skipped[0..judged.len]) |cand, sk| {
         if (sk != null) continue;
         if ((opts.auto or opts.auto_plan) and cand.submodule == null) {
-            try auto_q.append(a, .{ .path = cand.rel, .dir = cand.entry == .dir });
-            try auto_at.append(a, kept_cands.items.len);
+            if (cand.git_reads_unlinked) {
+                try unlinked_at.append(a, kept_cands.items.len);
+            } else {
+                try auto_q.append(a, .{ .path = cand.rel, .dir = cand.entry == .dir });
+                try auto_at.append(a, kept_cands.items.len);
+            }
         }
         try kept_cands.append(a, cand);
     }
@@ -439,14 +452,20 @@ fn listIn(ctx: Ctx, index: *const store.KeyIndex, c: clone.Clone, opts: Options)
         try auto_q.append(a, .{ .path = u.rel, .dir = u.dir });
         try unignored_at.append(a, u);
     }
+    const unignored_end = auto_q.items.len;
+    for (unlinked_at.items) |i| try auto_q.append(a, .{ .path = kept_cands.items[i].rel, .dir = kept_cands.items[i].entry == .dir });
     const auto_hits = try patterns.match(ctx, auto_text, auto_q.items);
+    const unignored_hits = auto_hits[auto_candidates..unignored_end];
+    for (unlinked_at.items, auto_hits[unignored_end..]) |i, hit| {
+        if (hit) |p| kept_cands.items[i].auto = .{ .pattern = p, .why = .git_reads_unlinked };
+    }
 
     var unignored: std.ArrayList(AutoUnignored) = .empty;
     var unignored_dirs: std.ArrayList([]const u8) = .empty;
-    for (unignored_at.items, auto_hits[auto_candidates..]) |u, hit| {
+    for (unignored_at.items, unignored_hits) |u, hit| {
         if (hit != null and u.dir) try unignored_dirs.append(a, u.rel);
     }
-    for (unignored_at.items, auto_hits[auto_candidates..]) |u, hit| {
+    for (unignored_at.items, unignored_hits) |u, hit| {
         const p = hit orelse continue;
         if (!u.dir and underAny(u.rel, unignored_dirs.items)) continue;
         if (paths.contains(kept_set, u.rel)) continue;
@@ -1919,6 +1938,41 @@ test "auto-keep: without kept/, the seed's auto patterns keep nothing and create
     try testing.expect(miss.why == .store_absent);
     try testing.expectEqualStrings(".clasp.json", miss.pattern);
     try testing.expectEqual(content.Entry.absent, try content.entryAt(try m.ctx.layout.keptDir(a)));
+}
+
+test "auto-keep: a file git reads only unlinked is never kept, but listed with its flag and counted not kept; a directory holding one is kept whole" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try harness.World.init(a, &sb, 1);
+    const m = w.m(0);
+    const env = try globalIgnore(a, &sb, ".gitattributes\nd/\n");
+    defer env.restore();
+    _ = try patterns.createStore(a, m.ctx.layout);
+    try writeKept(m, ".holt-auto.d/1", ".gitattributes\nd/\n");
+
+    try m.write(".gitattributes", "* text=auto\n");
+    try m.write("d/.gitignore", "*.tmp\n");
+    try m.write("d/conf.json", "{}");
+
+    const plan = try listOf(m, .{ .auto_plan = true });
+    try testing.expectEqual(@as(usize, 1), plan.would_auto.len);
+    try testing.expectEqualStrings("d", plan.would_auto[0].rel);
+
+    const l = try listOf(m, .{ .auto = true });
+    try testing.expectEqual(@as(usize, 1), l.auto_kept.len);
+    try testing.expectEqualStrings("d", l.auto_kept[0].rel);
+    try testing.expect(try m.linked("d"));
+    try expectRels(l, &.{".gitattributes"});
+    const cand = find(l, ".gitattributes").?;
+    try testing.expect(cand.git_reads_unlinked);
+    const miss = cand.auto.?;
+    try testing.expect(miss.why == .git_reads_unlinked);
+    try testing.expectEqualStrings(".gitattributes", miss.pattern);
+    try testing.expectEqual(@as(usize, 1), l.notKept());
+    try testing.expectEqual(content.Entry.file, try m.entry(".gitattributes"));
 }
 
 test "list: where git matches names byte for byte, a case variant of a kept path is a candidate of its own" {

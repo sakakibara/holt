@@ -176,7 +176,7 @@ pub fn notLinked(ctx: kept.Ctx, index: *const store.KeyIndex, c: kept.clone.Clon
     var loose: std.ArrayList([]const u8) = .empty;
     const roots = try store.syncedRoots(a, ctx.layout);
     for (try ks.keptSet(a)) |rel| {
-        if (kept.paths.check(rel) != null) {
+        if (kept.paths.keepable(rel) != null) {
             try loose.append(a, rel);
             continue;
         }
@@ -197,7 +197,7 @@ pub fn notLinked(ctx: kept.Ctx, index: *const store.KeyIndex, c: kept.clone.Clon
     if (loose.items.len == 0) return &.{};
 
     var valid: std.ArrayList([]const u8) = .empty;
-    for (loose.items) |rel| if (kept.paths.check(rel) == null) try valid.append(a, rel);
+    for (loose.items) |rel| if (kept.paths.keepable(rel) == null) try valid.append(a, rel);
     const how = kept.clone.tracked(a, c.worktree, valid.items) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => null,

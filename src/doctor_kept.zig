@@ -534,7 +534,7 @@ fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIn
         try bad.appendSlice(alloc, ks.bad);
         if (ks.record) |rec| if (!rec.known()) try versions.append(alloc, key);
         const named = try ks.namedPaths(alloc);
-        for (named) |rel| if (paths.check(rel)) |why| try invalid.append(alloc, .{ .key = key, .rel = rel, .reason = why.describe() });
+        for (named) |rel| if (paths.keepable(rel)) |why| try invalid.append(alloc, .{ .key = key, .rel = rel, .reason = why.describe() });
         const kept_set = try ks.keptSet(alloc);
         for (try paths.collisions(alloc, kept_set)) |rel| try invalid.append(alloc, .{ .key = key, .rel = rel, .reason = paths.Invalid.collision.describe() });
 

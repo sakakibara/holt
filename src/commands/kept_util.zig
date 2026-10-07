@@ -362,6 +362,7 @@ pub fn reason(ctx: *app.Ctx, err: anyerror) !?[]const u8 {
         error.CloneStateUnwritable => "the clone's holt state directory (.git/holt) cannot be written",
         error.InvalidPath => "the name is not one a kept path may have (a .holt- name, a .git component, a control character, a backslash, or invalid UTF-8)",
         error.Collision => "it equals another kept path under case folding or Unicode normalization",
+        error.GitReadsUnlinked => "git reads it only as a regular file, never through a link",
         error.NestedKey => "it would enter or contain the kept files of a nested repo",
         error.Tracked => "git tracks it (on this branch or in the index)",
         error.ParentNotDir => "a parent directory is a symlink or not a directory",

@@ -273,6 +273,9 @@ pub const Item = struct {
     /// given to the kept copy, whose filesystem refused it. Information
     /// only.
     exec_not_kept: bool = false,
+    /// For `invalid`: why the path cannot be kept, when a `paths.Invalid`
+    /// says it.
+    invalid: ?paths.Invalid = null,
 };
 
 /// Why a working tree could not be evaluated. Every stop but `none` lists
@@ -479,8 +482,8 @@ const Run = struct {
     /// component of `rel` in the working tree is a real directory and no
     /// component is one git treats as `.git`: content reached through a
     /// symlinked parent, or inside a git directory, is only reported.
-    fn noState(r: *Run, rel: []const u8, cp: ?[]const u8, outcome: Outcome, detail: ?[]const u8) !void {
-        var item: Item = .{ .rel = rel, .outcome = outcome, .unsettled = false, .detail = detail };
+    fn noState(r: *Run, rel: []const u8, cp: ?[]const u8, outcome: Outcome, detail: ?[]const u8, invalid: ?paths.Invalid) !void {
+        var item: Item = .{ .rel = rel, .outcome = outcome, .unsettled = false, .detail = detail, .invalid = invalid };
         if (cp) |p| if (!paths.hasDotGit(rel) and try link.parentsReal(r.a, r.c.worktree, rel)) switch (try content.entryAt(p)) {
             .file, .dir => {
                 item.unsettled = true;
@@ -493,22 +496,24 @@ const Run = struct {
 
     fn visit(r: *Run, rel: []const u8) !void {
         const a = r.a;
-        if (paths.check(rel)) |inv| {
+        // A released path git reads only unlinked still takes the released
+        // rule, which turns an older holt's link into a regular copy.
+        if (paths.keepable(rel)) |inv| if (inv != .git_reads_unlinked or !r.ks.isReleased(rel)) {
             const at = if (paths.contained(rel)) try fsutil.joinSlashy(a, r.c.worktree, rel) else null;
-            return r.noState(rel, at, .invalid, inv.describe());
-        }
+            return r.noState(rel, at, .invalid, inv.describe(), inv);
+        };
         const cp = try fsutil.joinSlashy(a, r.c.worktree, rel);
         const collision = paths.Invalid.collision.describe();
-        if (paths.contains(r.collisions, rel)) return r.noState(rel, cp, .invalid, collision);
+        if (paths.contains(r.collisions, rel)) return r.noState(rel, cp, .invalid, collision, .collision);
         if (try r.keptAlias(rel)) |alias| {
             const own_content = try link.parentsReal(a, r.c.worktree, rel) and !try content.sameFile(a, cp, try fsutil.joinSlashy(a, r.c.worktree, alias));
-            return r.noState(rel, if (own_content) cp else null, .invalid, collision);
+            return r.noState(rel, if (own_content) cp else null, .invalid, collision, .collision);
         }
         if (try store.nestedKeyAt(a, r.index, r.rk, rel)) |nk| {
             const how = if (nk.contains) "contains" else "inside";
-            return r.noState(rel, cp, .invalid, try std.fmt.allocPrint(a, "{s} the nested key {s}", .{ how, nk.key }));
+            return r.noState(rel, cp, .invalid, try std.fmt.allocPrint(a, "{s} the nested key {s}", .{ how, nk.key }), null);
         }
-        if (!try link.parentsReal(a, r.c.worktree, rel)) return r.noState(rel, cp, .parent_not_dir, null);
+        if (!try link.parentsReal(a, r.c.worktree, rel)) return r.noState(rel, cp, .parent_not_dir, null, null);
 
         const kc_path = try r.ctx.layout.copyPath(a, r.rk, rel);
         const pend = clone.findPending(r.pending, r.c.tree, rel);

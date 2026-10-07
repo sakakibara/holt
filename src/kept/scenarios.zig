@@ -13,6 +13,7 @@ const aside = @import("aside.zig");
 const block = @import("block.zig");
 const clone = @import("clone.zig");
 const place = @import("place.zig");
+const ops = @import("ops.zig");
 const reconcile_mod = @import("reconcile.zig");
 const harness = @import("harness.zig");
 const interrupt = @import("interrupt.zig");
@@ -892,6 +893,44 @@ test "kept paths colliding with each other are invalid and their local content i
     const item = try expectItem(r2, "notes.md", .invalid);
     try testing.expect(item.unsettled and item.entry != null);
     try testing.expectEqualStrings("local", try content.readSmall(a, try aside.dataPath(a, m.ctx.layout, item.entry.?, "notes.md")));
+}
+
+test "a record naming a file git reads only unlinked is invalid: never linked, an older holt's link left in place, and once unkept the link becomes a regular copy" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+
+    try m.write("first.json", "kept by hand, so the key exists");
+    _ = try m.keep("first.json");
+    const kp = try m.keptPath("a/.mailmap");
+    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = kp, .data = "A <a@example.com>\n" });
+    const h = try content.hashPath(a, kp);
+    try store.writeFact(a, m.ctx.layout, key, m.ctx.machine_id, "a/.mailmap", .file, &h.hex);
+    const c = try clone.inspect(a, m.clone, m.ctx.code_root);
+    try block.add(a, c.common_dir, &.{"a/.mailmap"});
+
+    const r1 = try m.reconcile();
+    const item = try expectItem(r1, "a/.mailmap", .invalid);
+    try testing.expectEqual(@as(?paths.Invalid, .git_reads_unlinked), item.invalid);
+    try testing.expectEqual(content.Entry.absent, try m.entry("a/.mailmap"));
+    try testing.expect(paths.contains(try blockRels(m), "a/.mailmap"));
+
+    try fsutil.ensureDir(try m.path("a"));
+    try content.createLink(kp, try m.path("a/.mailmap"), .file);
+    _ = try expectItem(try m.reconcile(), "a/.mailmap", .invalid);
+    try testing.expect(try m.linked("a/.mailmap"));
+
+    const index = try store.loadIndex(a, m.ctx.layout);
+    _ = try ops.unkeep(m.ctx, &index, m.clone, "a/.mailmap", .{});
+    try testing.expect((try expectItem(try m.reconcile(), "a/.mailmap", .released_converted)).done);
+    try testing.expectEqual(content.Entry.file, try m.entry("a/.mailmap"));
+    try testing.expectEqualStrings("A <a@example.com>\n", try m.read("a/.mailmap"));
 }
 
 test "a retarget never points a link at an online-only kept copy" {

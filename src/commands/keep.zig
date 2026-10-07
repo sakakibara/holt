@@ -58,7 +58,10 @@ pub const command = app.command(Spec, .{
     \\(kept/local/<name>/ for a repo with no remote) and linked from the
     \\clone on every machine; a directory is kept whole, and a file alone.
     \\Anything holt replaces or removes is first copied to an aside entry in
-    \\kept/.holt-aside/.
+    \\kept/.holt-aside/. A .gitignore, .gitattributes, or .mailmap file, in
+    \\any spelling git takes for one, is refused: git reads it only as a
+    \\regular file, never through a link. A directory holding one is kept
+    \\whole.
     \\
     \\--review asks about each file not kept. For a file in a clone: keep,
     \\keep everywhere, skip, skip everywhere, or quit, or only skip or quit
@@ -67,7 +70,8 @@ pub const command = app.command(Spec, .{
     \\review each, or quit. The first prompt, when it is one of these, also
     \\offers never ask again, which turns kept files off. For content holt's
     \\block hides that holt holds nowhere else: take local, take kept, or
-    \\quit. For a file inside a submodule: skip, skip everywhere, or quit.
+    \\quit. For a file inside a submodule, or one keep refuses because git
+    \\reads it only as a regular file: skip, skip everywhere, or quit.
     \\For an entry at a hub root: keep, skip everywhere, or quit. A name
     \\holding a line break is left as it is, or at a hub root offered keep
     \\or quit.
@@ -103,6 +107,9 @@ pub const command = app.command(Spec, .{
 
 /// The most `holt keep <path>` keeps without asking.
 const ask_above: u64 = kept.candidates.auto_max_bytes;
+
+/// Why review can only skip a file git reads only as a regular file.
+const unlinked_words = "git reads it only as a regular file, never through a link";
 
 fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const value_mode = a.take_local != null or a.take_kept != null or a.take_aside != null;
@@ -345,6 +352,9 @@ fn reportKeepError(ctx: *app.Ctx, k: kept.Ctx, index: *const kept.store.KeyIndex
         },
         error.AwaitingPromote => try ctx.err.print("holt: cannot keep {s}: the clone is awaiting promote (run: holt repo promote {s})\n", .{ shown, try ui.shellQuote(alloc, std.fs.path.basename(c.key.?)) }),
         error.KeptElsewhere => try util.refuseNotArrived(ctx, k, c, rel, "keep", abs, try std.fmt.allocPrint(alloc, "holt keep {s}", .{try util.q(ctx, abs)})),
+        error.GitReadsUnlinked => if (try kept.content.entryAt(abs) == .symlink) {
+            try ctx.err.print("holt: cannot keep {s}: {s} (if an older holt kept it, run: holt unkeep {s})\n", .{ shown, (try util.reason(ctx, err)).?, try util.q(ctx, abs) });
+        } else try util.refuse(ctx, "keep", abs, err),
         else => try util.refuse(ctx, "keep", abs, err),
     }
 }
@@ -673,8 +683,9 @@ const Item = struct {
     /// take (or, for a temporary, `holt sync`) settles it. `unsettled`:
     /// such content at a kept path whose state reconcile reports as other
     /// than a differing local copy; it is named with its hint (`hint`),
-    /// never asked about, and not a file not kept.
-    kind: enum { repo, submodule, hub, hidden, unsettled },
+    /// never asked about, and not a file not kept. `unlinked`: a file git
+    /// reads only as a regular file, which can only be skipped.
+    kind: enum { repo, submodule, unlinked, hub, hidden, unsettled },
     /// The clone's working tree, or the hub root.
     root: []const u8,
     /// The clone the item is in; null for a hub entry.
@@ -871,6 +882,7 @@ fn review(ctx: *app.Ctx, raw_paths: []const []const u8, all: bool, yes: bool) !u
                 .repo => try ctx.out.print("not kept: {s} ({s}) - run: {s} {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), keep_cmd, try util.q(ctx, it.abs) }),
                 .hub => try ctx.out.print("not kept: {s} ({s}) - run: holt keep {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try util.q(ctx, it.abs) }),
                 .submodule => try ctx.out.print("not kept: {s} ({s}), inside a submodule, can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try util.q(ctx, it.root) }),
+                .unlinked => try ctx.out.print("not kept: {s} ({s}): {s}, so it can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), unlinked_words, try util.q(ctx, it.root) }),
                 .hidden => try printHiddenItem(ctx, it),
                 .unsettled => try printUnsettledItem(ctx, it),
             }
@@ -913,8 +925,18 @@ fn printHiddenItem(ctx: *app.Ctx, it: Item) !void {
         try ctx.out.print("not kept: an interrupted write left content beside {s}, hidden from git by holt's block and held nowhere else ({s}) - run: holt sync\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes) });
         return;
     }
+    if (untakeable(it)) {
+        try ctx.out.print("not kept: {s} ({s}) {s}; {s}, so it cannot be taken\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try heldWords(alloc, it), unlinked_words });
+        return;
+    }
     const qp = try util.q(ctx, it.abs);
     try ctx.out.print("not kept: {s} ({s}) {s} - run: holt keep --take-local {s}, or holt keep --take-kept {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try heldWords(alloc, it), qp, qp });
+}
+
+/// Whether `it` is hidden content at a file git reads only as a regular
+/// file, which no take may link.
+fn untakeable(it: Item) bool {
+    return it.kind == .hidden and !it.temp and kept.paths.keepable(it.rel) == .git_reads_unlinked;
 }
 
 /// Where a `hidden` item's content is besides the working tree.
@@ -1016,7 +1038,7 @@ fn listClone(r: *Review, path: []const u8) !void {
             }
             try queries.append(alloc, .{ .path = cand.rel, .dir = dir });
             try r.items.append(alloc, .{
-                .kind = if (cand.submodule != null or cand.submodule_uninitialized) .submodule else .repo,
+                .kind = if (cand.submodule != null or cand.submodule_uninitialized) .submodule else if (cand.git_reads_unlinked) .unlinked else .repo,
                 .root = l.worktree,
                 .c = lc,
                 .rel = cand.rel,
@@ -1113,7 +1135,7 @@ fn askGroups(r: *Review) !?u8 {
 
 fn markSame(r: *Review, line: []const u8) void {
     for (r.items.items) |*o| {
-        if ((o.kind == .repo or o.kind == .submodule) and std.mem.eql(u8, o.everywhere, line)) o.done = true;
+        if ((o.kind == .repo or o.kind == .submodule or o.kind == .unlinked) and std.mem.eql(u8, o.everywhere, line)) o.done = true;
     }
 }
 
@@ -1146,6 +1168,11 @@ fn askItem(r: *Review, it: *Item) !?u8 {
         try ctx.out.print("{s}: an interrupted write left content beside it, hidden from git by holt's block and held nowhere else ({s}); run: holt sync\n", .{ shown, size });
         return null;
     }
+    if (untakeable(it.*)) {
+        it.done = true;
+        try ctx.out.print("{s} ({s}, {s}) {s}; {s}, so it cannot be taken; it is left as it is\n", .{ shown, kind, size, try heldWords(alloc, it.*), unlinked_words });
+        return null;
+    }
     if (it.kind == .submodule and !it.patternable()) {
         it.done = true;
         try ctx.out.print("{s}: inside a submodule, and its name holds a line break no pattern can name, so it cannot be skipped; it is left as it is\n", .{shown});
@@ -1164,11 +1191,13 @@ fn askItem(r: *Review, it: *Item) !?u8 {
             others = try otherMatches(r, it.everywhere, mains);
             break :blk try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; keep everywhere also matches {d} other repo{s})", .{ shown, kind, size, others, if (others == 1) "" else "s" });
         } else try std.fmt.allocPrint(alloc, "{s} ({s}, {s})", .{ shown, kind, size }),
+        .unlinked => try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; {s}, so it cannot be kept)", .{ shown, kind, size, unlinked_words }),
         else => try std.fmt.allocPrint(alloc, "{s} ({s}, {s})", .{ shown, kind, size }),
     };
     const choices: []const Answer = if (control) &.{ .skip, .quit } else switch (it.kind) {
         .repo => if (it.patternable()) &.{ .keep, .keep_everywhere, .skip, .skip_everywhere, .quit } else &.{ .keep, .quit },
         .submodule => &.{ .skip, .skip_everywhere, .quit },
+        .unlinked => if (it.patternable()) &.{ .skip, .skip_everywhere, .quit } else &.{ .skip, .quit },
         .hub => if (it.patternable()) &.{ .keep, .skip_everywhere, .quit } else &.{ .keep, .quit },
         .hidden => &.{ .take_local, .take_kept, .quit },
         .unsettled => unreachable,
@@ -1417,7 +1446,7 @@ test "keep: refuses a tracked file, and a directory with a tracked file names th
     try testutil.runGit(&f.sb, f.clone, &.{ "add", "cfg/tracked.txt" });
     try testutil.runGit(&f.sb, f.clone, &.{ "commit", "-q", "-m", "cfg" });
 
-    const file = try f.run(&.{".gitignore"});
+    const file = try f.run(&.{"cfg/tracked.txt"});
     try testing.expectEqual(@as(u8, 1), file.code);
     try expectContains(file.err, "git tracks it");
     const dir = try f.run(&.{"cfg"});
@@ -1491,6 +1520,63 @@ test "keep: refuses a foreign symlink naming its target, a symlinked parent, a n
     const reserved = try f.run(&.{".holt-x"});
     try testing.expectEqual(@as(u8, 1), reserved.code);
     try expectContains(reserved.err, "not one a kept path may have");
+}
+
+test "keep: refuses a file git reads only as a regular file, writing no block line, pending record, or fact; a link there names unkeep" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    try f.write(".env", "x");
+    try testing.expectEqual(@as(u8, 0), (try f.run(&.{".env"})).code);
+    const exclude = try std.fs.path.join(a, &.{ f.clone, ".git", "info", "exclude" });
+    const before = try kept.content.readSmall(a, exclude);
+    try f.write("sub/.gitignore", "*.tmp\n");
+
+    const abs = try f.path("sub/.gitignore");
+    const got = try f.run(&.{"sub/.gitignore"});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try expectContains(got.err, try std.fmt.allocPrint(a, "holt: cannot keep {s}: git reads it only as a regular file, never through a link\n", .{try fsutil.contractTilde(a, app.envOf_current(), abs)}));
+    try testing.expect(!contains(got.err, "unkeep"));
+    try testing.expectEqualStrings(before, try kept.content.readSmall(a, exclude));
+    try testing.expectEqual(@as(usize, 0), (try kept.clone.readPending(a, try std.fs.path.join(a, &.{ f.clone, ".git" }))).len);
+    const ks = try kept.store.loadKeyState(a, .{ .synced_root = f.ws.cfg.synced_root }, "github.com/acme/widget");
+    try testing.expectEqual(@as(usize, 0), ks.factsFor("sub/.gitignore").len);
+    try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(abs));
+
+    try f.write("real/.mailmap", "A <a@example.com>\n");
+    const link_abs = try f.path(".mailmap");
+    try kept.content.createLink(try f.path("real/.mailmap"), link_abs, .file);
+    const linked = try f.run(&.{".mailmap"});
+    try testing.expectEqual(@as(u8, 1), linked.code);
+    try expectContains(linked.err, try std.fmt.allocPrint(a, "holt: cannot keep {s}: git reads it only as a regular file, never through a link (if an older holt kept it, run: holt unkeep {s})\n", .{ try fsutil.contractTilde(a, app.envOf_current(), link_abs), try ui.quotePath(a, app.envOf_current(), link_abs) }));
+    try testing.expectEqualStrings(before, try kept.content.readSmall(a, exclude));
+}
+
+test "keep --take-kept and --take-local: refuse a file git reads only as a regular file that an older holt kept, and link nothing" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    try f.write(".env", "x");
+    try testing.expectEqual(@as(u8, 0), (try f.run(&.{".env"})).code);
+    const k = try keptCtxOf(&f);
+    const kp = try f.keptPath("a/.gitignore");
+    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = kp, .data = "*.tmp\n" });
+    const h = try kept.content.hashPath(a, kp);
+    try kept.store.writeFact(a, k.layout, "github.com/acme/widget", k.machine_id, "a/.gitignore", .file, &h.hex);
+    try f.write("a/.gitignore", "*.log\n");
+
+    for ([_][]const u8{ "--take-kept", "--take-local" }) |flag| {
+        const got = try f.run(&.{ flag, "a/.gitignore" });
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try expectContains(got.err, "git reads it only as a regular file, never through a link");
+        try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(try f.path("a/.gitignore")));
+        try testing.expectEqualStrings("*.log\n", try kept.content.readSmall(a, try f.path("a/.gitignore")));
+        try testing.expectEqualStrings("*.tmp\n", try kept.content.readSmall(a, kp));
+    }
 }
 
 test "keep: more than 10 MiB asks on a terminal, refuses without one, and --yes answers" {
@@ -2074,6 +2160,39 @@ test "keep --review --all groups a pattern shared by repos; a hub root's entries
     try testing.expect(try f.linked(".env"));
     try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try fsutil.joinSlashy(a, other, ".env")));
     try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try std.fs.path.join(a, &.{ hub, "notes.md" })));
+}
+
+test "keep --review: a file git reads only as a regular file is offered skip, skip everywhere, and quit, saying why, and --all groups it nowhere" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const bare2 = try testutil.makeBareRepo(&f.sb, "gadget.git");
+    defer f.sb.alloc.free(bare2);
+    const other = try fsutil.joinSlashy(a, f.ws.cfg.code_root, "github.com/acme/gadget");
+    try testutil.runGit(&f.sb, null, &.{ "clone", "-q", bare2, other });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(a, other, ".git/info/exclude"), .data = ".gitattributes\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(a, other, ".gitattributes"), .data = "g" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(a, f.clone, ".git/info/exclude"), .data = ".gitattributes\n" });
+    try f.write(".gitattributes", "w");
+
+    ui.stdin_terminal_for_test = false;
+    const listed = try f.run(&.{"--review"});
+    try testing.expectEqual(@as(u8, 1), listed.code);
+    try expectContains(listed.out, try std.fmt.allocPrint(a, "not kept: {s} (1 B): git reads it only as a regular file, never through a link, so it can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), try f.path(".gitattributes")), try ui.quotePath(a, app.envOf_current(), f.clone) }));
+
+    ui.stdin_terminal_for_test = true;
+    ui.stdin_for_test = "v\n";
+    const got = try f.run(&.{ "--review", "--all" });
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expect(!contains(got.out, "in 2 repos"));
+    try expectContains(got.out, "/.gitattributes (file, 1 B; git reads it only as a regular file, never through a link, so it cannot be kept): [s]kip, skip e[v]erywhere, [q]uit?");
+    try testing.expect(!contains(got.out, "[k]eep"));
+    try testing.expect(!contains(got.out, "[n]ever"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "[s]kip"));
+    try testing.expect(contains(try kept.patterns.globalText(a, .{ .synced_root = f.ws.cfg.synced_root }, .skip, null), "\n.gitattributes\n"));
+    try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(try f.path(".gitattributes")));
+    try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(try fsutil.joinSlashy(a, other, ".gitattributes")));
 }
 
 test "keep --review: a candidate in a linked worktree is kept from that working tree" {
