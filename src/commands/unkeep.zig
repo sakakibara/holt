@@ -16,6 +16,7 @@ const projectlock = @import("../projectlock.zig");
 const hub_mod = @import("../hub.zig");
 const kept = @import("../kept.zig");
 const util = @import("kept_util.zig");
+const sync = @import("sync.zig");
 const testutil = @import("../testutil.zig");
 const testing = std.testing;
 
@@ -139,16 +140,21 @@ fn unkeepHub(ctx: *app.Ctx, p: project_mod.Project, abs: []const u8) !bool {
     var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
     defer lock.release();
 
+    if (!fsutil.exists(src)) {
+        try ctx.err.print("holt: cannot unkeep {s}: it is no longer in the project's synced content\n", .{shown});
+        return false;
+    }
     const docs = try std.fs.path.join(alloc, &.{ p.content_path, "docs" });
     const dest = try std.fs.path.join(alloc, &.{ docs, base });
-    if (fsutil.exists(dest)) {
-        try ctx.err.print("holt: cannot unkeep {s}: docs already has {s}; refusing to overwrite\n", .{ shown, base });
+    if (try fsutil.linkState(alloc, dest) != .missing or fsutil.hasIcloudPlaceholder(alloc, dest)) {
+        try ctx.err.print("holt: cannot unkeep {s}: docs already has {s}; refusing to overwrite\n", .{ shown, try ui.printable(alloc, base) });
         return false;
     }
     try fsutil.ensureDir(docs);
     try fsutil.moveTree(alloc, src, dest);
-    _ = try hub_mod.reconcile(alloc, &ctx.context.?.ws, &p, false);
-    try ctx.out.print("moved {s} into the project's docs: {s}\n", .{ base, try util.show(ctx, dest) });
+    const report = try hub_mod.reconcile(alloc, &ctx.context.?.ws, &p, false);
+    try ctx.out.print("moved {s} into the project's docs: {s}\n", .{ try ui.printable(alloc, base), try util.show(ctx, dest) });
+    try sync.printConflicts(ctx, report.conflicts);
     return true;
 }
 
@@ -161,21 +167,31 @@ fn isLayout(name: []const u8) bool {
 }
 
 /// The name the content directory `dir` spells its entry `name` with:
-/// `name` itself, or, on a case-insensitive filesystem, the entry equal to
-/// it ignoring ASCII case.
+/// `name` itself, or, on a filesystem that folds names, the entry equal to
+/// it under case folding and Unicode normalization (`kept.paths.foldKey`).
 fn contentSpelling(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) !?[]const u8 {
     var d = std.Io.Dir.openDirAbsolute(fsutil.io(), dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return null,
         else => return err,
     };
     defer d.close(fsutil.io());
+    const want = try foldOrNull(alloc, name);
     var found: ?[]const u8 = null;
     var it = d.iterate();
     while (try it.next(fsutil.io())) |e| {
         if (std.mem.eql(u8, e.name, name)) return try alloc.dupe(u8, e.name);
-        if (found == null and std.ascii.eqlIgnoreCase(e.name, name)) found = try alloc.dupe(u8, e.name);
+        if (found != null) continue;
+        const folded = if (want != null) try foldOrNull(alloc, e.name) else null;
+        const same = if (want != null and folded != null) std.mem.eql(u8, want.?, folded.?) else std.ascii.eqlIgnoreCase(e.name, name);
+        if (same) found = try alloc.dupe(u8, e.name);
     }
     return found;
+}
+
+/// `name`'s fold key, or null when it is not valid UTF-8.
+fn foldOrNull(alloc: std.mem.Allocator, name: []const u8) !?[]const u8 {
+    if (!std.unicode.utf8ValidateSlice(name)) return null;
+    return try kept.paths.foldKey(alloc, name);
 }
 
 /// Whether an auto pattern names the kept path `rel` of `c`, so unkeep
@@ -571,6 +587,83 @@ test "unkeep: a hub entry whose name docs already has is refused, and both stay"
     try testing.expectEqualStrings("old", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "docs/notes.md")));
     try testing.expectEqualStrings("new", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "notes.md")));
     try testing.expectEqualStrings("new", try kept.content.readSmall(a, entry));
+}
+
+test "unkeep: anything at the hub entry's name in docs, a dangling link included, is refused" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    try fsutil.ensureDir(try fsutil.joinSlashy(a, h.content, "docs"));
+    const dangling = try fsutil.joinSlashy(a, h.content, "docs/notes.md");
+    try kept.content.createLink(try fsutil.joinSlashy(a, h.content, "nowhere"), dangling, .file);
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "new" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try expectContains(got.err, "docs already has notes.md; refusing to overwrite");
+    try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(dangling));
+    try testing.expectEqualStrings("new", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "notes.md")));
+}
+
+test "unkeep: a hub link to anything but the content entry of its name is not kept" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    try fsutil.ensureDir(try fsutil.joinSlashy(a, h.content, "docs"));
+    const in_docs = try fsutil.joinSlashy(a, h.content, "docs/foo");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = in_docs, .data = "docs" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(a, h.content, "foo"), .data = "content" });
+    const entry = try fsutil.joinSlashy(a, h.hub, "foo");
+    try kept.content.createLink(in_docs, entry, .file);
+
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try expectContains(got.err, "it is not kept");
+    try testing.expectEqualStrings("docs", try kept.content.readSmall(a, in_docs));
+    try testing.expectEqualStrings("content", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "foo")));
+}
+
+test "unkeep: a hub entry kept under one Unicode normalization is unkept by another, and moves under the content's spelling" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    const nfd = "caf\u{0065}\u{0301}.md";
+    const nfc = "caf\u{00e9}.md";
+    const entry = try fsutil.joinSlashy(a, h.hub, nfd);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "accent" });
+    {
+        var d = try std.Io.Dir.openDirAbsolute(fsutil.io(), h.hub, .{ .iterate = true });
+        defer d.close(fsutil.io());
+        var it = d.iterate();
+        var kept_form = false;
+        while (try it.next(fsutil.io())) |e| {
+            if (std.mem.eql(u8, e.name, nfd)) kept_form = true;
+        }
+        if (!kept_form) return error.SkipZigTest;
+    }
+    if (!fsutil.exists(try fsutil.joinSlashy(a, h.hub, nfc))) return error.SkipZigTest;
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+
+    const got = try f.run(&.{try fsutil.joinSlashy(a, h.hub, nfc)});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    var d = try std.Io.Dir.openDirAbsolute(fsutil.io(), try fsutil.joinSlashy(a, h.content, "docs"), .{ .iterate = true });
+    defer d.close(fsutil.io());
+    var it = d.iterate();
+    var names: std.ArrayList([]const u8) = .empty;
+    while (try it.next(fsutil.io())) |e| try names.append(a, try a.dupe(u8, e.name));
+    try testing.expectEqual(@as(usize, 1), names.items.len);
+    try testing.expectEqualStrings(nfd, names.items[0]);
+    try testing.expectEqualStrings("accent", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, try std.mem.concat(a, u8, &.{ "docs/", nfd }))));
 }
 
 test "unkeep: the names of the project's layout are refused at a hub root" {

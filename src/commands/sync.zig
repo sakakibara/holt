@@ -78,7 +78,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         try ctx.out.print("{s}: created {d}, retargeted {d}, removed {d}, conflicts {d}\n", .{
             qualified, report.created, report.retargeted, report.removed, report.conflicts.len,
         });
-        for (report.conflicts) |c| try ctx.out.print("  conflict: {s}\n", .{try app.tilde(ctx, c)});
+        try printConflicts(ctx, report.conflicts);
         for (report.unresolved_members) |repo_name| try ctx.out.print(
             "  unresolved member: {s} (marker url is not a usable repo url; no hub link)\n",
             .{repo_name},
@@ -109,6 +109,11 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     // the user can resolve it, so surface it in the exit code (like doctor)
     // rather than reporting success.
     return if (unhealthy) 1 else 0;
+}
+
+/// A line for each hub conflict `hub.reconcile` reported.
+pub fn printConflicts(ctx: *app.Ctx, conflicts: []const []const u8) !void {
+    for (conflicts) |c| try ctx.out.print("  conflict: {s}\n", .{try app.tilde(ctx, c)});
 }
 
 /// Reconciles the kept files of every clone in the code tree (plan mode
