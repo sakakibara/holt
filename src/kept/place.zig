@@ -946,14 +946,16 @@ pub fn dropTempLine(a: std.mem.Allocator, c: clone.Clone, temp: []const u8) !voi
 const Added = struct { replaced: ?clone.Pending, line: bool = false, temp: bool = false };
 
 /// Undoes what `added` records this keep wrote before its fact: drops
-/// `rel`'s block line, then puts back the pending record it replaced or
-/// clears its own, then drops its temporary's line. When the line cannot
-/// be dropped it stops, leaving the pending record, so the path stays a
-/// keep that keeping again finishes.
+/// `rel`'s block line, then puts back the pending record of another
+/// operation it replaced, or clears its own when it replaced none, then
+/// drops its temporary's line. Its own record stays in place of an older
+/// keep's, which it supersedes. When the line cannot be dropped it stops,
+/// leaving the pending record, so the path stays a keep that keeping again
+/// finishes.
 fn rollBack(a: std.mem.Allocator, c: clone.Clone, rel: []const u8, temp: []const u8, added: Added) void {
     if (added.line) block.drop(a, c.common_dir, rel) catch return;
     if (added.replaced) |old| {
-        clone.addPending(a, c.common_dir, old) catch {};
+        if (old.op != .keep) clone.addPending(a, c.common_dir, old) catch {};
     } else clone.clearPending(a, c.common_dir, c.tree, rel) catch {};
     if (added.temp) dropTempLine(a, c, temp) catch {};
 }

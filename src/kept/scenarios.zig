@@ -3969,12 +3969,43 @@ test "a keep whose set-aside fails restores the pending record of another operat
 
     try m.write(".env", "mine");
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
-    try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = ".env", .op = .relink, .worktree = c.worktree });
+    const planted: clone.Pending = .{ .tree = c.tree, .rel = ".env", .op = .relink, .entry = "20260101T000000.000Z-000000000000000f-00000000", .worktree = c.worktree };
+    try clone.addPending(a, c.common_dir, planted);
     try keepAsideRefused(m, m.clone, ".env");
     const got = clone.findPending(try clone.readPending(a, c.common_dir), c.tree, ".env") orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(clone.Op.relink, got.op);
+    try expectSamePending(planted, got);
     try testing.expect(!paths.contains(try blockRels(m), ".env"));
     try testing.expectEqualStrings("mine", try m.read(".env"));
+}
+
+fn expectSamePending(want: clone.Pending, got: clone.Pending) !void {
+    try testing.expectEqualStrings(want.tree, got.tree);
+    try testing.expectEqualStrings(want.rel, got.rel);
+    try testing.expectEqual(want.op, got.op);
+    try testing.expectEqualStrings(want.entry orelse "", got.entry orelse "");
+    try testing.expectEqual(want.entry == null, got.entry == null);
+    try testing.expectEqualStrings(want.worktree orelse "", got.worktree orelse "");
+    try testing.expectEqual(want.worktree == null, got.worktree == null);
+}
+
+test "a keep whose set-aside fails over an older keep's pending record leaves its own, which names the working tree" {
+    try requireModesEnforced();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try m.write("seed", "creates the store");
+    _ = try m.keep("seed");
+
+    try m.write(".env", "mine");
+    const c = try clone.inspect(a, m.clone, m.ctx.code_root);
+    try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = ".env", .op = .keep });
+    try keepAsideRefused(m, m.clone, ".env");
+    const got = clone.findPending(try clone.readPending(a, c.common_dir), c.tree, ".env") orelse return error.TestUnexpectedResult;
+    try expectSamePending(.{ .tree = c.tree, .rel = ".env", .op = .keep, .worktree = c.worktree }, got);
 }
 
 test "a keep whose set-aside fails in a second working tree leaves the line another working tree's link needs" {
