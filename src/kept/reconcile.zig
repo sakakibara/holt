@@ -496,8 +496,9 @@ const Run = struct {
 
     fn visit(r: *Run, rel: []const u8) !void {
         const a = r.a;
-        // A released path git reads only unlinked still takes the released
-        // rule, which turns an older holt's link into a regular copy.
+        // A released path git reads only as a regular file still takes the
+        // released rule, which turns an older holt's link into a regular
+        // copy.
         if (paths.keepable(rel)) |inv| if (inv != .git_reads_unlinked or !r.ks.isReleased(rel)) {
             const at = if (paths.contained(rel)) try fsutil.joinSlashy(a, r.c.worktree, rel) else null;
             return r.noState(rel, at, .invalid, inv.describe(), inv);

@@ -238,8 +238,8 @@ pub const Listing = struct {
 /// `opts.auto`, each remaining ignored path outside a submodule that an
 /// auto pattern matches is kept through `place.keepPath` when `kept/`
 /// exists, no fact names it, and it holds at most `auto_max_bytes`;
-/// otherwise it stays with the reason, as a file git reads only unlinked
-/// (`Candidate.git_reads_unlinked`) always does. A pattern ending in `/`
+/// otherwise it stays with the reason, as a file git reads only as a
+/// regular file (`Candidate.git_reads_unlinked`) always does. A pattern ending in `/`
 /// keeps the shallowest directory it matches at or above the path, once for every
 /// path git listed below it, unless something below that directory is
 /// tracked, or untracked and not ignored, or it holds what keep refuses
@@ -469,6 +469,7 @@ fn listIn(ctx: Ctx, index: *const store.KeyIndex, c: clone.Clone, opts: Options)
         const p = hit orelse continue;
         if (!u.dir and underAny(u.rel, unignored_dirs.items)) continue;
         if (paths.contains(kept_set, u.rel)) continue;
+        if (paths.keepable(u.rel) == .git_reads_unlinked) continue;
         const neg = clone.negation(a, c, u.rel) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => null,
@@ -1940,7 +1941,7 @@ test "auto-keep: without kept/, the seed's auto patterns keep nothing and create
     try testing.expectEqual(content.Entry.absent, try content.entryAt(try m.ctx.layout.keptDir(a)));
 }
 
-test "auto-keep: a file git reads only unlinked is never kept, but listed with its flag and counted not kept; a directory holding one is kept whole" {
+test "auto-keep: a file git reads only as a regular file is never kept, but listed with its flag and counted not kept; a directory holding one is kept whole" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();

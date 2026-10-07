@@ -522,7 +522,8 @@ const Renderer = struct {
                 switch (miss.why) {
                     .too_large => try r.w.print("not kept automatically: {s} (matches '{s}'): larger than 10 MiB - run: holt keep {s}\n", .{ qp, miss.pattern, qp }),
                     .failed => try r.w.print("not kept automatically: {s} (matches '{s}'): {s}\n", .{ qp, miss.pattern, miss.detail orelse "failed" }),
-                    .store_absent, .has_fact, .released, .git_reads_unlinked => {},
+                    .git_reads_unlinked => try r.w.print("not kept automatically: {s} (matches '{s}'): {s} - run: holt keep --review {s}\n", .{ qp, miss.pattern, kept.paths.Invalid.git_reads_unlinked.describe(), try r.q(l.worktree) }),
+                    .store_absent, .has_fact, .released => {},
                 }
             }
         }

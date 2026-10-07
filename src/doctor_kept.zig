@@ -917,7 +917,7 @@ test "isReservedCopy: a conflict copy of a reserved name, never a name holt writ
     try std.testing.expect(!isReservedCopy("notes", &key_reserved));
 }
 
-test "checkStore: a released path git reads only unlinked is not reported invalid, an unreleased one is" {
+test "checkStore: a released path git reads only as a regular file is not reported invalid, an unreleased one is" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const testing = std.testing;
     const harness = @import("kept/harness.zig");

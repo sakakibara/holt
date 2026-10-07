@@ -108,9 +108,6 @@ pub const command = app.command(Spec, .{
 /// The most `holt keep <path>` keeps without asking.
 const ask_above: u64 = kept.candidates.auto_max_bytes;
 
-/// Why review can only skip a file git reads only as a regular file.
-const unlinked_words = "git reads it only as a regular file, never through a link";
-
 fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const value_mode = a.take_local != null or a.take_kept != null or a.take_aside != null;
     if (value_mode and a.paths.len > 0) return app.usageError(ctx, "--take-local, --take-kept, and --take-aside take no other path", .{});
@@ -882,7 +879,7 @@ fn review(ctx: *app.Ctx, raw_paths: []const []const u8, all: bool, yes: bool) !u
                 .repo => try ctx.out.print("not kept: {s} ({s}) - run: {s} {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), keep_cmd, try util.q(ctx, it.abs) }),
                 .hub => try ctx.out.print("not kept: {s} ({s}) - run: holt keep {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try util.q(ctx, it.abs) }),
                 .submodule => try ctx.out.print("not kept: {s} ({s}), inside a submodule, can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try util.q(ctx, it.root) }),
-                .unlinked => try ctx.out.print("not kept: {s} ({s}): {s}, so it can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), unlinked_words, try util.q(ctx, it.root) }),
+                .unlinked => try ctx.out.print("not kept: {s} ({s}), which git reads only as a regular file, can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try util.q(ctx, it.root) }),
                 .hidden => try printHiddenItem(ctx, it),
                 .unsettled => try printUnsettledItem(ctx, it),
             }
@@ -926,7 +923,7 @@ fn printHiddenItem(ctx: *app.Ctx, it: Item) !void {
         return;
     }
     if (untakeable(it)) {
-        try ctx.out.print("not kept: {s} ({s}) {s}; {s}, so it cannot be taken\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try heldWords(alloc, it), unlinked_words });
+        try ctx.out.print("not kept: {s} ({s}) {s}; {s}, so it cannot be taken\n", .{ try util.show(ctx, it.abs), try util.size(alloc, it.bytes), try heldWords(alloc, it), kept.paths.Invalid.git_reads_unlinked.describe() });
         return;
     }
     const qp = try util.q(ctx, it.abs);
@@ -1170,7 +1167,7 @@ fn askItem(r: *Review, it: *Item) !?u8 {
     }
     if (untakeable(it.*)) {
         it.done = true;
-        try ctx.out.print("{s} ({s}, {s}) {s}; {s}, so it cannot be taken; it is left as it is\n", .{ shown, kind, size, try heldWords(alloc, it.*), unlinked_words });
+        try ctx.out.print("{s} ({s}, {s}) {s}; {s}, so it cannot be taken; it is left as it is\n", .{ shown, kind, size, try heldWords(alloc, it.*), kept.paths.Invalid.git_reads_unlinked.describe() });
         return null;
     }
     if (it.kind == .submodule and !it.patternable()) {
@@ -1191,7 +1188,7 @@ fn askItem(r: *Review, it: *Item) !?u8 {
             others = try otherMatches(r, it.everywhere, mains);
             break :blk try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; keep everywhere also matches {d} other repo{s})", .{ shown, kind, size, others, if (others == 1) "" else "s" });
         } else try std.fmt.allocPrint(alloc, "{s} ({s}, {s})", .{ shown, kind, size }),
-        .unlinked => try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; {s}, so it cannot be kept)", .{ shown, kind, size, unlinked_words }),
+        .unlinked => try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; {s}, so it cannot be kept)", .{ shown, kind, size, kept.paths.Invalid.git_reads_unlinked.describe() }),
         else => try std.fmt.allocPrint(alloc, "{s} ({s}, {s})", .{ shown, kind, size }),
     };
     const choices: []const Answer = if (control) &.{ .skip, .quit } else switch (it.kind) {
@@ -2179,7 +2176,7 @@ test "keep --review: a file git reads only as a regular file is offered skip, sk
     ui.stdin_terminal_for_test = false;
     const listed = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 1), listed.code);
-    try expectContains(listed.out, try std.fmt.allocPrint(a, "not kept: {s} (1 B): git reads it only as a regular file, never through a link, so it can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), try f.path(".gitattributes")), try ui.quotePath(a, app.envOf_current(), f.clone) }));
+    try expectContains(listed.out, try std.fmt.allocPrint(a, "not kept: {s} (1 B), which git reads only as a regular file, can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), try f.path(".gitattributes")), try ui.quotePath(a, app.envOf_current(), f.clone) }));
 
     ui.stdin_terminal_for_test = true;
     ui.stdin_for_test = "v\n";

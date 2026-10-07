@@ -1415,6 +1415,27 @@ test "run: an auto-pattern match git does not ignore is named with what settles 
     try testing.expect(!has(kept_one.out, "neg/.clasp.json"));
 }
 
+test "run: a file git reads only as a regular file that an auto pattern matches and git does not ignore is offered no keep" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try kept_cmd.TestWorld.init(arena, &sb, true);
+    defer w.deinit();
+    const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
+    const auto_dir = try std.fs.path.join(arena, &.{ try layout.keptDir(arena), ".holt-auto.d" });
+    try fsutil.ensureDir(auto_dir);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ auto_dir, "1" }), .data = ".gitignore\n" });
+    const ignore = try w.write(arena, "sub/.gitignore", "*.tmp\n");
+
+    const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const q = try ui.quotePath(arena, app.envOf_current(), ignore);
+    try testing.expect(!has(got.out, try std.fmt.allocPrint(arena, "    {s}: matches an auto pattern", .{q})));
+    try testing.expect(!has(got.out, try std.fmt.allocPrint(arena, "holt keep {s}", .{q})));
+}
+
 test "run: an auto-pattern match a .gitignore negation un-ignores names that line and offers no keep; once the line is gone, sync keeps it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

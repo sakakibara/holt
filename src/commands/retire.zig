@@ -971,6 +971,31 @@ test "doctor --retire: fails on each planted risk with its command, and lists wh
     try std_testing.expectEqualStrings("saved by rename", try kept.content.readSmall(a, try f.path(".env.kept")));
 }
 
+test "doctor --retire: an ignored file git reads only as a regular file fails as one holt cannot keep, naming review" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(std_testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(std_testing.allocator);
+    defer sb.deinit();
+    const state = try testutil.EnvScope.install(a, &.{
+        .{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ sb.root, "state" }) },
+        .{ "XDG_CONFIG_HOME", try std.fs.path.join(a, &.{ sb.root, "config" }) },
+    });
+    defer state.restore();
+    const f = try Fixture.init(a, &sb, true);
+    try f.write(f.clone, ".env.kept", "kept secret");
+    try f.keep(f.clone, ".env.kept");
+    try f.ignore("/sub/.gitignore");
+    try f.write(f.clone, "sub/.gitignore", "*.tmp\n");
+
+    const got = try retireRun(&f);
+    try std_testing.expectEqual(@as(u8, 1), got.code);
+    const shown = try fsutil.contractTilde(a, app.envOf_current(), try f.path("sub/.gitignore"));
+    try expectFail(got.out, try std.fmt.allocPrint(a, "not kept, and git reads it only as a regular file, so holt cannot keep it: {s}", .{shown}), try std.fmt.allocPrint(a, "holt keep --review {s}", .{try ui.quotePath(a, app.envOf_current(), f.clone)}));
+    try std_testing.expect(!has(got.out, try std.fmt.allocPrint(a, "not kept: {s}", .{shown})));
+}
+
 test "doctor --retire: an unsettled kept file names the command every command gives for it, and that command settles it" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     var arena_state = std.heap.ArenaAllocator.init(std_testing.allocator);

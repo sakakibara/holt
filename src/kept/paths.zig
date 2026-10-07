@@ -596,7 +596,7 @@ test "gitReadsUnlinked: .gitignore, .gitattributes, and .mailmap under git's NTF
     }
 }
 
-test "keepable: check's refusals first, then a last component git reads only unlinked" {
+test "keepable: check's refusals first, then a last component git reads only as a regular file" {
     try testing.expectEqual(@as(?Invalid, .git_reads_unlinked), keepable("x/.gitignore"));
     try testing.expectEqual(@as(?Invalid, .git_reads_unlinked), keepable(".mailmap"));
     try testing.expectEqual(@as(?Invalid, .git_reads_unlinked), keepable("a/b/GITATT~1"));

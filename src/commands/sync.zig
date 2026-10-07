@@ -827,6 +827,29 @@ test "run: links kept files in every working tree, keeps what an auto pattern na
     try testing.expect(std.mem.indexOf(u8, again.out, "kept files") == null);
 }
 
+test "run: a file git reads only as a regular file that an auto pattern matches is named as not kept automatically, with why and a review hint" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var k = try keptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+    const exclude = try std.fs.path.join(arena, &.{ k.clone, ".git", "info", "exclude" });
+    const now = try kept.content.readSmall(arena, exclude);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = try std.mem.concat(arena, u8, &.{ "/sub/.gitignore\n", now }) });
+    try bed.write(k.clone, "sub/.gitignore", "*.tmp\n");
+    const layout: kept.store.Layout = .{ .synced_root = bed.ws.cfg.synced_root };
+    try bed.write(try layout.keptDir(arena), ".holt-auto.d/1", ".gitignore\n");
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const qp = try bed.shown(try std.fs.path.join(arena, &.{ k.clone, "sub", ".gitignore" }));
+    try testing.expect(hasText(got.out, try std.fmt.allocPrint(arena, "not kept automatically: {s} (matches '.gitignore'): {s} - run: holt keep --review {s}\n", .{ qp, kept.paths.Invalid.git_reads_unlinked.describe(), try bed.shown(k.clone) })));
+    try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(try std.fs.path.join(arena, &.{ k.clone, "sub", ".gitignore" })));
+}
+
 test "run: a kept path whose local copy differs is not linked, and not also a file not kept" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

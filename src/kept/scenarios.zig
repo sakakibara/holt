@@ -895,7 +895,7 @@ test "kept paths colliding with each other are invalid and their local content i
     try testing.expectEqualStrings("local", try content.readSmall(a, try aside.dataPath(a, m.ctx.layout, item.entry.?, "notes.md")));
 }
 
-test "a record naming a file git reads only unlinked is invalid: never linked, an older holt's link left in place, and once unkept the link becomes a regular copy" {
+test "a record naming a file git reads only as a regular file is invalid: never linked, an older holt's link left in place, and once unkept the link becomes a regular copy" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
