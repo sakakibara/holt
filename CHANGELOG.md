@@ -22,6 +22,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `*.freezed.dart`, `.fvm/`, `ios/.symlinks/`, `test-results/`, `dist-*/`
   and `zig-pkg/`, so `holt keep --review` no longer offers them. An
   existing store's `.holt-skip` is yours and is left as it is.
+- `holt doctor --retire` no longer names `<code_root>/local` itself as left
+  in the code tree to delete. That directory is where holt keeps clones
+  with no remote, whether it holds any or not; a file in it outside every
+  clone is still named.
 
 ## [0.10.1] - 2026-10-05
 

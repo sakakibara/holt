@@ -513,8 +513,9 @@ fn paths_contains(list: []const []const u8, s: []const u8) bool {
 /// outermost directories holding files, that no clone holds, what is left
 /// in a `<clone>@worktrees` directory beside the working trees git
 /// records, and clone staging an interrupted clone left (`*.holt-tmp`).
-/// A directory holding only directories is looked into; links, empty
-/// directories, and what the skip patterns name are passed over.
+/// A directory holding only directories, and `<code_root>/local`, are looked
+/// into; links, empty directories, and what the skip patterns name are
+/// passed over.
 fn checkCodeRoot(ctx: *app.Ctx, r: *Report, kctx: ?kept.Ctx, holders: []const []const u8) !void {
     const a = ctx.alloc;
     const ws = ctx.context.?.ws;
@@ -551,7 +552,10 @@ fn checkCodeRoot(ctx: *app.Ctx, r: *Report, kctx: ?kept.Ctx, holders: []const []
                 if (h.len > real.len and fsutil.pathIsInside(h, real)) break true;
             } else false;
             const bucket = here.bucket or std.mem.endsWith(u8, e.name, "@worktrees");
-            if (above or !try holdsFile(path)) {
+            // `<code_root>/local` is holt's place for clones with no remote,
+            // there whether it holds any or not.
+            const local_root = here.rel.len == 0 and std.mem.eql(u8, e.name, "local");
+            if (above or local_root or !try holdsFile(path)) {
                 try todo.append(a, .{ .path = path, .rel = rel, .bucket = bucket });
                 continue;
             }
@@ -1079,6 +1083,29 @@ test "doctor --retire: fails on what the code tree holds outside every clone, no
     try std_testing.expect(!has(out, "empty"));
     var lines = std.mem.splitScalar(u8, out, '\n');
     while (lines.next()) |line| try std_testing.expect(!(has(line, "inside no clone") and has(line, "holt-test.invalid")));
+}
+
+test "doctor --retire: never names <code_root>/local itself, only what it holds outside every clone" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(std_testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(std_testing.allocator);
+    defer sb.deinit();
+    const state = try retireEnv(a, &sb);
+    defer state.restore();
+    const f = try Fixture.init(a, &sb, true);
+    const code = f.ws.cfg.code_root;
+
+    try f.write(code, "local/.DS_Store", "skipped");
+    const quiet = try retireRun(&f);
+    try std_testing.expect(!has(quiet.out, "inside no clone"));
+
+    try f.write(code, "local/stray.txt", "only here");
+    const got = try retireRun(&f);
+    const shown = try fsutil.contractTilde(a, app.envOf_current(), try fsutil.joinSlashy(a, code, "local"));
+    try std_testing.expect(has(got.out, try std.fmt.allocPrint(a, "  in the code tree, inside no clone: {s}/stray.txt;", .{shown})));
+    try std_testing.expect(!has(got.out, try std.fmt.allocPrint(a, "inside no clone: {s};", .{shown})));
 }
 
 test "doctor --retire: the extension holt's worktrees make git write is not listed as state holt does not keep" {
