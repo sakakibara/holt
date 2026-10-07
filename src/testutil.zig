@@ -140,6 +140,11 @@ pub fn makeBareRepo(sb: *Sandbox, name: []const u8) ![]u8 {
 
 fn buildBareRepo(sb: *Sandbox, bare_path: []const u8, seed_name: []const u8) !void {
     try runGit(sb, null, &.{ "init", "--bare", bare_path });
+    // A push otherwise starts a detached `git maintenance run --auto`, whose
+    // lock comes and goes in the repository after the push returns. git
+    // clears config from the environment for receive-pack, so only the
+    // repository's own config reaches it.
+    try runGit(sb, null, &.{ "--git-dir", bare_path, "config", "receive.autogc", "false" });
 
     const seed_path = try sb.joinRoot(seed_name);
     defer sb.alloc.free(seed_path);
@@ -759,3 +764,17 @@ pub const LoopbackStub = struct {
         }
     }
 };
+
+test "makeBareRepo: every bare repository it makes runs no maintenance after a push, so nothing changes under a test" {
+    var sb = try Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    for ([_][]const u8{ "first.git", "second.git" }) |name| {
+        const bare = try makeBareRepo(&sb, name);
+        defer testing.allocator.free(bare);
+        const cfg = try std.fs.path.join(testing.allocator, &.{ bare, "config" });
+        defer testing.allocator.free(cfg);
+        const text = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), cfg, testing.allocator, .limited(1 << 16));
+        defer testing.allocator.free(text);
+        try testing.expect(std.mem.indexOf(u8, text, "[receive]\n\tautogc = false\n") != null);
+    }
+}
