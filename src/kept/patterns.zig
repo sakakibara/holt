@@ -51,15 +51,20 @@ pub const List = enum {
 
 /// The seed of `kept/.holt-skip`: regenerable or transient content only.
 pub const skip_seed = [_][]const u8{
-    "node_modules/",  ".pnpm-store/", ".venv/",       "venv/",          "__pycache__/",
-    ".pytest_cache/", ".ruff_cache/", ".mypy_cache/", ".tox/",          ".next/",
-    ".nuxt/",         ".svelte-kit/", ".angular/",    ".astro/",        ".docusaurus/",
-    ".output/",       ".vite/",       ".turbo/",      ".parcel-cache/", ".nx/",
-    ".cache/",        ".expo/",       ".gradle/",     ".cxx/",          ".dart_tool/",
-    "Pods/",          "DerivedData/", "xcuserdata/",  ".terraform/",    ".zig-cache/",
-    "zig-out/",       "target/",      "dist/",        "build/",         "coverage/",
-    "htmlcov/",       "*.egg-info/",  ".eslintcache", "*.tsbuildinfo",  "*.pyc",
-    "*.o",            "*.class",      "*.log",        ".DS_Store",      "Thumbs.db",
+    "node_modules/",                  ".pnpm-store/",           ".venv/",                                    "venv/",                       "__pycache__/",
+    ".pytest_cache/",                 ".ruff_cache/",           ".mypy_cache/",                              ".tox/",                       ".next/",
+    ".nuxt/",                         ".svelte-kit/",           ".angular/",                                 ".astro/",                     ".docusaurus/",
+    ".output/",                       ".vite/",                 ".turbo/",                                   ".parcel-cache/",              ".nx/",
+    ".cache/",                        ".expo/",                 ".gradle/",                                  ".cxx/",                       ".dart_tool/",
+    "Pods/",                          "DerivedData/",           "xcuserdata/",                               ".terraform/",                 ".zig-cache/",
+    "zig-out/",                       "target/",                "dist/",                                     "build/",                      "coverage/",
+    "htmlcov/",                       "*.egg-info/",            ".eslintcache",                              "*.tsbuildinfo",               "*.pyc",
+    "*.o",                            "*.class",                "*.log",                                     ".DS_Store",                   "Thumbs.db",
+    "tmp/",                           "public/packs*/",         ".yarn/cache/",                              ".yarn/install-state.gz",      "vendor/bundle/",
+    ".bundle/",                       ".ruby-lsp/",             ".husky/_/",                                 "app/assets/builds/",          "*.freezed.dart",
+    "*.g.dart",                       "*.mocks.dart",           ".flutter-plugins-dependencies",             ".fvm/",                       "ios/.symlinks/",
+    "ios/Flutter/Generated.xcconfig", "ios/Flutter/ephemeral/", "ios/Flutter/flutter_export_environment.sh", "ios/Flutter/Flutter.podspec", "GeneratedPluginRegistrant.*",
+    "android/local.properties",       "test-results/",          "dist-*/",                                   "zig-pkg/",
 };
 
 /// The seed of `kept/.holt-auto`.
@@ -439,10 +444,52 @@ fn testCtx(f: *Fixture) !Ctx {
 test "seed texts: headed by holt's comment, one pattern per line, exactly the seed" {
     try testing.expect(std.mem.startsWith(u8, skip_seed_text, "# Seeded by holt;"));
     try testing.expect(std.mem.indexOf(u8, skip_seed_text, "\nnode_modules/\n.pnpm-store/\n") != null);
-    try testing.expect(std.mem.endsWith(u8, skip_seed_text, "\n.DS_Store\nThumbs.db\n"));
-    try testing.expectEqual(@as(usize, 45), skip_seed.len);
+    try testing.expect(std.mem.endsWith(u8, skip_seed_text, "\ntest-results/\ndist-*/\nzig-pkg/\n"));
+    try testing.expectEqual(@as(usize, 69), skip_seed.len);
     try testing.expect(std.mem.indexOf(u8, skip_seed_text, "\n*.o\n*.class\n*.log\n") != null);
     try testing.expect(std.mem.endsWith(u8, auto_seed_text, "\n.clasp.json\n"));
+}
+
+test "skip seed: the caches and generated files of Rails, Flutter, and Zig projects are never offered" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const ctx = try testCtx(&f);
+    const qs = [_]Query{
+        .{ .path = "tmp", .dir = true },
+        .{ .path = "public/packs-test", .dir = true },
+        .{ .path = ".yarn/cache", .dir = true },
+        .{ .path = ".yarn/install-state.gz" },
+        .{ .path = "vendor/bundle", .dir = true },
+        .{ .path = ".bundle", .dir = true },
+        .{ .path = ".ruby-lsp", .dir = true },
+        .{ .path = ".husky/_", .dir = true },
+        .{ .path = "app/assets/builds", .dir = true },
+        .{ .path = "lib/model.freezed.dart" },
+        .{ .path = "lib/model.g.dart" },
+        .{ .path = "test/api.mocks.dart" },
+        .{ .path = ".flutter-plugins-dependencies" },
+        .{ .path = ".fvm", .dir = true },
+        .{ .path = "ios/.symlinks", .dir = true },
+        .{ .path = "ios/Flutter/Generated.xcconfig" },
+        .{ .path = "ios/Flutter/ephemeral", .dir = true },
+        .{ .path = "ios/Flutter/flutter_export_environment.sh" },
+        .{ .path = "ios/Flutter/Flutter.podspec" },
+        .{ .path = "ios/Runner/GeneratedPluginRegistrant.m" },
+        .{ .path = "android/local.properties" },
+        .{ .path = "test-results", .dir = true },
+        .{ .path = "dist-core", .dir = true },
+        .{ .path = "zig-pkg", .dir = true },
+    };
+    const got = try match(ctx, skip_seed_text, &qs);
+    for (qs, got) |q, g| if (g == null) {
+        std.debug.print("not skipped: {s}\n", .{q.path});
+        return error.TestUnexpectedResult;
+    };
+    const kept_ones = [_]Query{ .{ .path = ".clasp.json" }, .{ .path = "config/master.key" }, .{ .path = "ios/Flutter/Debug.xcconfig" } };
+    for (kept_ones, try match(ctx, skip_seed_text, &kept_ones)) |q, g| if (g) |p| {
+        std.debug.print("skipped by {s}: {s}\n", .{ p, q.path });
+        return error.TestUnexpectedResult;
+    };
 }
 
 test "createStore: seeds both lists once; an existing kept/ is never seeded again, and a removed list stays removed" {

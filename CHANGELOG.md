@@ -16,6 +16,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - When holt cannot match the skip and auto patterns, `holt sync` says why
   after `MatcherFailed`: which step failed, or git's own exit status and
   message. Before, the error said nothing more.
+- A new kept store's seeded `.holt-skip` also skips the caches and
+  generated files of Rails, Flutter and Dart, and Zig projects, among them
+  `tmp/`, `vendor/bundle/`, `.ruby-lsp/`, `.husky/_/`, `*.g.dart`,
+  `*.freezed.dart`, `.fvm/`, `ios/.symlinks/`, `test-results/`, `dist-*/`
+  and `zig-pkg/`, so `holt keep --review` no longer offers them. An
+  existing store's `.holt-skip` is yours and is left as it is.
 
 ## [0.10.1] - 2026-10-05
 
