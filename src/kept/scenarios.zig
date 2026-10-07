@@ -933,6 +933,77 @@ test "a record naming a file git reads only as a regular file is invalid: never 
     try testing.expectEqualStrings("A <a@example.com>\n", try m.read("a/.mailmap"));
 }
 
+/// A machine whose store exists, with `sub/.gitignore` written and held by
+/// a block line, its temporary's line, and, when `pending`, a keep of it
+/// pending in the clone's own working tree, as an older holt could leave.
+fn heldUnkeepable(m: *const Machine, pending: bool) !clone.Clone {
+    const a = m.ctx.alloc;
+    try m.write("seed", "creates the store");
+    _ = try m.keep("seed");
+    try m.write("sub/.gitignore", "*.tmp\n");
+    const c = try clone.inspect(a, m.clone, m.ctx.code_root);
+    if (pending) try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = "sub/.gitignore", .op = .keep });
+    try block.add(a, c.common_dir, &.{ "sub/.gitignore", try paths.tempRel(a, "sub/.gitignore") });
+    try testing.expectEqualStrings("", try gitStatus(m));
+    return c;
+}
+
+fn expectGivenUp(m: *const Machine, c: clone.Clone) !void {
+    const a = m.ctx.alloc;
+    const item = try expectItem(try m.reconcile(), "sub/.gitignore", .keep_abandoned);
+    try testing.expect(item.done and !item.unsettled and item.entry == null);
+    try testing.expectEqual(@as(usize, 0), (try clone.readPending(a, c.common_dir)).len);
+    const now = try block.read(a, c.common_dir);
+    try testing.expect(!paths.contains(now.rels, "sub/.gitignore"));
+    try testing.expectEqual(@as(usize, 0), now.temps.len);
+    try testing.expectEqual(@as(usize, 0), (try aside.findEntries(a, m.ctx.layout, key, "sub/.gitignore", null)).len);
+    try testing.expectEqualStrings("*.tmp\n", try m.read("sub/.gitignore"));
+    try testing.expectEqualStrings("?? sub/.gitignore\n", try gitStatus(m));
+    for ((try m.reconcile()).items) |i| try testing.expect(!std.mem.eql(u8, i.rel, "sub/.gitignore"));
+}
+
+test "an interrupted keep of a file git reads only as a regular file is given up: record and lines dropped, nothing set aside, and git sees the file" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try expectGivenUp(m, try heldUnkeepable(m, true));
+}
+
+test "a block line alone holding a file git reads only as a regular file is given up, and git sees the file" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try expectGivenUp(m, try heldUnkeepable(m, false));
+}
+
+test "a plan reports giving up a held file git reads only as a regular file, and changes nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    const c = try heldUnkeepable(m, true);
+    const report = try harness.reconcileIn(m.ctx, m.clone, .plan);
+    const item = try expectItem(report, "sub/.gitignore", .keep_abandoned);
+    try testing.expect(!item.done and !item.unsettled);
+    try testing.expectEqual(@as(usize, 0), report.unsettledCount());
+    try testing.expectEqual(@as(usize, 1), (try clone.readPending(a, c.common_dir)).len);
+    const now = try block.read(a, c.common_dir);
+    try testing.expect(paths.contains(now.rels, "sub/.gitignore"));
+    try testing.expectEqual(@as(usize, 1), now.temps.len);
+    try testing.expectEqualStrings("", try gitStatus(m));
+}
+
 test "a retarget never points a link at an online-only kept copy" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

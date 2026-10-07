@@ -28,9 +28,10 @@ pub const Mode = enum {
     apply,
     /// Act only where no content changes: create links (5), remove a
     /// dangling link no fact names (6), retarget when the old target is gone
-    /// or identical (8), replace identical local content (10), and remove
-    /// holt's links from a clone its `local/` key does not match. Only links
-    /// are removed, never content. Like `apply`, it may probe how the
+    /// or identical (8), replace identical local content (10), give up a
+    /// keep holt never holds (`keep_abandoned`), and remove holt's links
+    /// from a clone its `local/` key does not match. Only links are
+    /// removed, never content. Like `apply`, it may probe how the
     /// filesystem compares names (`clone.folding`).
     fix,
     /// Decide every action and write nothing but a file removed at once:
@@ -54,6 +55,12 @@ pub const Outcome = enum {
     /// directory. Local content reached there is set aside and left
     /// unsettled.
     parent_not_dir,
+    /// No state: a path git reads only as a regular file
+    /// (`paths.Invalid.git_reads_unlinked`), neither kept nor released,
+    /// that the block or a `pending` keep of this working tree still holds.
+    /// Outside `plan` the keep is given up: the record is cleared and the
+    /// block line dropped, so git sees the path again. Nothing is set aside.
+    keep_abandoned,
     /// 1: tracked in this working tree's HEAD or index.
     tracked,
     /// 1: tracked, and holt's link there was removed.
@@ -494,15 +501,42 @@ const Run = struct {
         try r.add(item);
     }
 
+    /// Whether `rel` is a path git reads only as a regular file that is
+    /// neither kept nor released, so holt never holds it.
+    fn abandons(r: *const Run, rel: []const u8) bool {
+        return paths.keepable(rel) == .git_reads_unlinked and !paths.contains(r.kept_set, rel) and !r.ks.isReleased(rel);
+    }
+
+    /// Gives up holding `rel` (`abandons`) when the block or a `pending`
+    /// keep of this working tree holds it: outside `plan`, clears that
+    /// keep, drops the path's block line, then drops its temporary's line
+    /// by `place.dropTempLine`'s rule.
+    fn abandonKeep(r: *Run, rel: []const u8) !void {
+        const a = r.a;
+        const keep_pending = if (clone.findPending(r.pending, r.c.tree, rel)) |p| p.op == .keep else false;
+        if (!keep_pending and !paths.contains(r.scope.block_rels, rel)) return;
+        var item: Item = .{ .rel = rel, .outcome = .keep_abandoned, .unsettled = false };
+        if (r.repairs()) {
+            if (keep_pending) try clone.clearPending(a, r.c.common_dir, r.c.tree, rel);
+            try block.drop(a, r.c.common_dir, rel);
+            try place.dropTempLine(a, r.c, try paths.tempRel(a, rel));
+            item.done = true;
+        }
+        try r.add(item);
+    }
+
     fn visit(r: *Run, rel: []const u8) !void {
         const a = r.a;
         // A released path git reads only as a regular file still takes the
         // released rule, which turns an older holt's link into a regular
         // copy.
-        if (paths.keepable(rel)) |inv| if (inv != .git_reads_unlinked or !r.ks.isReleased(rel)) {
-            const at = if (paths.contained(rel)) try fsutil.joinSlashy(a, r.c.worktree, rel) else null;
-            return r.noState(rel, at, .invalid, inv.describe(), inv);
-        };
+        if (paths.keepable(rel)) |inv| {
+            if (r.abandons(rel)) return r.abandonKeep(rel);
+            if (inv != .git_reads_unlinked or !r.ks.isReleased(rel)) {
+                const at = if (paths.contained(rel)) try fsutil.joinSlashy(a, r.c.worktree, rel) else null;
+                return r.noState(rel, at, .invalid, inv.describe(), inv);
+            }
+        }
         const cp = try fsutil.joinSlashy(a, r.c.worktree, rel);
         const collision = paths.Invalid.collision.describe();
         if (paths.contains(r.collisions, rel)) return r.noState(rel, cp, .invalid, collision, .collision);
@@ -1654,7 +1688,11 @@ pub fn reconcileHeld(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, m
     }
     var final = scope;
     const now = try block.read(a, c.common_dir);
-    final.block_rels = now.rels;
+    // A plan leaves the lines of the paths it gives up; what they hide is
+    // not set aside.
+    var swept: std.ArrayList([]const u8) = .empty;
+    for (now.rels) |rel| if (!run.abandons(rel)) try swept.append(a, rel);
+    final.block_rels = swept.items;
     final.block_temps = now.temps;
     final.block_foreign = now.foreign;
     try run.sweep(try final.hiddenByBlock(null));
@@ -1664,7 +1702,8 @@ pub fn reconcileHeld(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, m
     return report;
 }
 
-/// The block lines that must stay: kept paths; every line while the key's
+/// The block lines that must stay, never one of a path holt never holds
+/// (`Run.abandons`): kept paths; every line while the key's
 /// directory or any working tree cannot be read; a released path while a
 /// holt link is at it in any working tree; any other path while a working
 /// tree has a link or content at it; a temporary while it exists in any
@@ -1673,8 +1712,11 @@ pub fn reconcileHeld(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, m
 /// failure is that line's `failed` item. Before any line is dropped, git
 /// must be able to list what the block hides in every working tree; a
 /// working tree it cannot list is a `failed` item and holds every line.
-fn heldLines(r: *Run, candidates: []const []const u8, temps: []const []const u8) ![]const []const u8 {
+fn heldLines(r: *Run, given: []const []const u8, temps: []const []const u8) ![]const []const u8 {
     const a = r.a;
+    var holdable: std.ArrayList([]const u8) = .empty;
+    for (given) |rel| if (!r.abandons(rel)) try holdable.append(a, rel);
+    const candidates = holdable.items;
     const key_dir_ok = if (content.entryAt(try r.ctx.layout.keyDir(a, r.rk))) |e| e == .dir else |_| false;
     const trees = clone.worktrees(a, r.c) catch |err| switch (err) {
         error.OutOfMemory => return err,

@@ -132,7 +132,7 @@ pub const Report = struct {
 fn failsLinked(i: reconcile.Item) bool {
     if (i.unsettled) return true;
     return switch (i.outcome) {
-        .linked, .retargeted, .relinked, .dangling_removed, .purged_link_removed, .purged_restored, .tracked_link_removed, .mismatch_link_removed, .parent_not_dir => true,
+        .linked, .retargeted, .relinked, .dangling_removed, .keep_abandoned, .purged_link_removed, .purged_restored, .tracked_link_removed, .mismatch_link_removed, .parent_not_dir => true,
         else => false,
     };
 }

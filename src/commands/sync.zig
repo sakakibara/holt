@@ -855,6 +855,36 @@ test "run: a file git reads only as a regular file that an auto pattern matches 
     try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(try std.fs.path.join(arena, &.{ k.clone, "sub", ".gitignore" })));
 }
 
+test "run: an interrupted keep of a file git reads only as a regular file is given up once, and --dry-run says it would be" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var k = try keptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+    try bed.write(k.clone, "sub/.gitignore", "*.tmp\n");
+    const c = try kept.clone.inspect(arena, k.clone, bed.ws.cfg.code_root);
+    try kept.clone.addPending(arena, c.common_dir, .{ .tree = c.tree, .rel = "sub/.gitignore", .op = .keep });
+    try kept.block.add(arena, c.common_dir, &.{"sub/.gitignore"});
+    const qp = try bed.shown(try std.fs.path.join(arena, &.{ k.clone, "sub", ".gitignore" }));
+
+    const dry = try testutil.runCmd(arena, command.run, bed.ws, &.{"--dry-run"});
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, dry.out, try std.fmt.allocPrint(arena, "{s}: git reads it only as a regular file, so holt would give up keeping it; git would see it again\n", .{qp})));
+    try testing.expect(kept.paths.contains((try kept.block.read(arena, c.common_dir)).rels, "sub/.gitignore"));
+
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "git reads it only as a regular file, so holt gave up keeping it; git sees it again"));
+    try testing.expect(hasText(got.out, try std.fmt.allocPrint(arena, "{s}: git reads it only as a regular file, so holt gave up keeping it; git sees it again\n", .{qp})));
+    try testing.expect(!hasText(got.out, "unkeep"));
+    try testing.expect(!kept.paths.contains((try kept.block.read(arena, c.common_dir)).rels, "sub/.gitignore"));
+    try testing.expectEqual(@as(usize, 0), (try kept.clone.readPending(arena, c.common_dir)).len);
+
+    const again = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expect(!hasText(again.out, "gave up keeping"));
+}
+
 test "run: a kept path whose local copy differs is not linked, and not also a file not kept" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

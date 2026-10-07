@@ -303,7 +303,7 @@ fn reconcileTree(kc: kept.Ctx, index: *const kept.store.KeyIndex, path: []const 
 
 fn isAction(o: reconcile.Outcome) bool {
     return switch (o) {
-        .linked, .relinked, .retargeted, .old_differs, .dangling_removed, .tracked_link_removed, .released_converted, .purged_link_removed, .purged_restored, .temp_settled, .mismatch_link_removed => true,
+        .linked, .relinked, .retargeted, .old_differs, .dangling_removed, .keep_abandoned, .tracked_link_removed, .released_converted, .purged_link_removed, .purged_restored, .temp_settled, .mismatch_link_removed => true,
         else => false,
     };
 }
@@ -434,6 +434,11 @@ const Renderer = struct {
             .dangling_removed => {
                 if (!it.done and !r.dry()) return;
                 return w.print("{s} {s} (its kept copy is gone and no record names it)\n", .{ if (r.dry()) "would remove the dangling link" else "removed the dangling link", qp });
+            },
+            .keep_abandoned => {
+                if (!it.done and !r.dry()) return;
+                if (r.dry()) return w.print("{s}: git reads it only as a regular file, so holt would give up keeping it; git would see it again\n", .{qp});
+                return w.print("{s}: git reads it only as a regular file, so holt gave up keeping it; git sees it again\n", .{qp});
             },
             .tracked_link_removed => return w.print("{s} holt's link at {s}, which is tracked on this branch - run: git -C {s} restore -- {s}\n", .{ if (r.dry()) "would remove" else "removed", qp, try r.q(tree), try ui.shellQuote(a, it.rel) }),
             .purged_link_removed => {
