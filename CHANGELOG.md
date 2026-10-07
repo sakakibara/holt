@@ -13,6 +13,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ssh in batch mode, which fails rather than asks, and any that fail are
   cloned again one at a time, where ssh can ask. An ssh command you name in
   `GIT_SSH_COMMAND`, `GIT_SSH`, or `core.sshCommand` is used as it is.
+- When holt cannot match the skip and auto patterns, `holt sync` says why
+  after `MatcherFailed`: which step failed, or git's own exit status and
+  message. Before, the error said nothing more.
 
 ## [0.10.1] - 2026-10-05
 
