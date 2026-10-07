@@ -26,6 +26,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in the code tree to delete. That directory is where holt keeps clones
   with no remote, whether it holds any or not; a file in it outside every
   clone is still named.
+- Setting aside a directory of many files, such as a Rails `tmp/cache` or
+  `vendor/bundle`, no longer fails with `StreamTooLong`, and neither does
+  setting content aside in a clone that has done so thousands of times.
+  An aside manifest over 1 MiB fails lookups on an older holt, so every
+  machine sharing the synced root should run this release or later.
 
 ## [0.10.1] - 2026-10-05
 

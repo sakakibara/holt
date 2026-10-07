@@ -347,8 +347,8 @@ pub fn moveAside(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u
 /// key, is accepted, so content under names a kept path may not have can
 /// still be set aside; placing it back takes `unplaceable` first.
 pub fn readManifest(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !?Manifest {
-    const bytes = content.readSmall(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "manifest" })) catch |err| switch (err) {
-        error.FileNotFound, error.NotDir => return null,
+    const bytes = content.readLarge(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "manifest" })) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir, error.StreamTooLong => return null,
         else => return err,
     };
     const v = json.parse(alloc, bytes, .{}) catch return null;
@@ -624,11 +624,14 @@ pub fn findEntries(alloc: std.mem.Allocator, layout: Layout, key: []const u8, re
     var it = d.iterate();
     while (try it.next(io())) |e| {
         if (e.kind != .directory) continue;
-        const m = (try readManifest(alloc, layout, e.name)) orelse continue;
+        var scratch_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer scratch_state.deinit();
+        const scratch = scratch_state.allocator();
+        const m = (try readManifest(scratch, layout, e.name)) orelse continue;
         if (!std.mem.eql(u8, m.key, key) or !std.mem.eql(u8, m.rel, rel)) continue;
         if (m.index.len > 0) continue;
         if (hex) |want| {
-            const h = m.hash(alloc) catch continue;
+            const h = m.hash(scratch) catch continue;
             if (!std.mem.eql(u8, &h.hex, want)) continue;
         }
         try out.append(alloc, try alloc.dupe(u8, e.name));
@@ -667,7 +670,7 @@ fn donePath(alloc: std.mem.Allocator, common_dir: []const u8) ![]u8 {
 
 pub fn readDone(alloc: std.mem.Allocator, common_dir: []const u8) ![]const Done {
     var out: std.ArrayList(Done) = .empty;
-    const bytes = content.readSmall(alloc, try donePath(alloc, common_dir)) catch |err| switch (err) {
+    const bytes = content.readLarge(alloc, try donePath(alloc, common_dir)) catch |err| switch (err) {
         error.FileNotFound => return out.items,
         else => return err,
     };
@@ -1043,4 +1046,63 @@ test "unplaceable: a manifest is placed back only with a valid key, valid paths,
     windows_names_for_test = true;
     defer windows_names_for_test = false;
     try testing.expectEqual(Unplaceable.windows_name, unplaceable(bad).?);
+}
+
+test "setAside: a directory whose manifest passes 1 MiB is set aside, verifies, and is found" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = f.alloc();
+    const layout: Layout = .{ .synced_root = try f.path("synced") };
+    const rel = "d" ** 200;
+    for (0..2400) |i| _ = try f.write(try std.fmt.allocPrint(a, "clone/{s}/{d:0>4}{s}", .{ rel, i, "f" ** 196 }), "x");
+
+    const e = try setAside(a, layout, mid, "k/r", rel, try f.path("clone/" ++ rel), .keep);
+    const st = try std.Io.Dir.cwd().statFile(io(), try std.fs.path.join(a, &.{ try entryDir(a, layout, e.stamp), "manifest" }), .{});
+    try testing.expect(st.size > 1 << 20);
+    try testing.expectEqual(Check.ok, try verify(a, layout, e.stamp));
+    const found = try findEntries(a, layout, "k/r", rel, &e.hash.hex);
+    try testing.expectEqual(@as(usize, 1), found.len);
+    try testing.expectEqualStrings(e.stamp, found[0]);
+}
+
+test "ensureAside: an aside-done record past 1 MiB does not fail the next set-aside" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = f.alloc();
+    const layout: Layout = .{ .synced_root = try f.path("synced") };
+    const common = try f.path("clone/.git");
+    var buf: std.ArrayList(u8) = .empty;
+    for (0..6000) |i| try appendDoneLine(a, &buf, .{
+        .rel = try std.fmt.allocPrint(a, "old/{d}", .{i}),
+        .sha256 = "a" ** 64,
+        .synced_root = try f.path("elsewhere"),
+        .stamp = "20260101T000000.000Z-" ++ mid ++ "-00000000",
+    });
+    try testing.expect(buf.items.len > 1 << 20);
+    _ = try f.write("clone/.git/holt/aside-done", buf.items);
+    _ = try f.write("clone/.env", "one");
+
+    const e = try ensureAside(a, layout, common, mid, "k/r", ".env", try f.path("clone/.env"), .local_differs, .whole);
+    try testing.expectEqual(Check.ok, try verify(a, layout, e.stamp));
+    try testing.expectEqual(@as(usize, 6001), (try readDone(a, common)).len);
+}
+
+test "findEntries: a manifest that is not JSON, or too large to read, makes only its entry unreadable" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = f.alloc();
+    const layout: Layout = .{ .synced_root = try f.path("synced") };
+    const good = try setAside(a, layout, mid, "k/r", ".env", try f.write("clone/.env", "one"), .keep);
+    _ = try f.write("synced/kept/.holt-aside/garbage/manifest", "not json");
+    const big = try a.alloc(u8, (1 << 20) + 1);
+    @memset(big, 'x');
+    _ = try f.write("synced/kept/.holt-aside/large/manifest", big);
+
+    for ([_][]const u8{ "garbage", "large" }) |stamp| {
+        try testing.expect((try readManifest(a, layout, stamp)) == null);
+        try testing.expectEqual(Check.missing, try verify(a, layout, stamp));
+    }
+    const found = try findEntries(a, layout, "k/r", ".env", null);
+    try testing.expectEqual(@as(usize, 1), found.len);
+    try testing.expectEqualStrings(good.stamp, found[0]);
 }

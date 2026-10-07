@@ -966,6 +966,14 @@ pub fn readSmall(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io(), path, alloc, .limited(1 << 20));
 }
 
+pub const large_read_max = 256 << 20;
+
+/// Reads `path` whole, failing with `StreamTooLong` past `large_read_max`.
+/// For files that grow with what they record, such as an aside manifest.
+pub fn readLarge(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io(), path, alloc, .limited(large_read_max));
+}
+
 const Fixture = @import("harness.zig").Fixture;
 const testutil = @import("../testutil.zig");
 
