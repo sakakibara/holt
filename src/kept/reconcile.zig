@@ -57,9 +57,11 @@ pub const Outcome = enum {
     parent_not_dir,
     /// No state: a path git reads only as a regular file
     /// (`paths.Invalid.git_reads_unlinked`), neither kept nor released,
-    /// that the block or a `pending` keep of this working tree still holds.
-    /// Outside `plan` the keep is given up: the record is cleared and the
-    /// block line dropped, so git sees the path again. Nothing is set aside.
+    /// that holt's link, the block, or a `pending` keep of this working tree
+    /// still holds, while the store is whole (`Run.abandons`). Outside
+    /// `plan` the keep is given up: holt's link is removed
+    /// (`Item.link_removed`), the record cleared, and the block line
+    /// dropped, so git sees what is left there. Nothing is set aside.
     keep_abandoned,
     /// 1: tracked in this working tree's HEAD or index.
     tracked,
@@ -280,6 +282,9 @@ pub const Item = struct {
     /// given to the kept copy, whose filesystem refused it. Information
     /// only.
     exec_not_kept: bool = false,
+    /// For `keep_abandoned`: holt's link at the path is removed, or would
+    /// be in `plan`.
+    link_removed: bool = false,
     /// For `invalid`: why the path cannot be kept, when a `paths.Invalid`
     /// says it.
     invalid: ?paths.Invalid = null,
@@ -385,6 +390,9 @@ const Run = struct {
     scope: Scope,
     /// Whether this machine can create links, once probed.
     can_link: ?bool = null,
+    /// Whether the key's directory and every working tree could be read
+    /// when the run began, so a hold may be given up (`abandons`).
+    store_whole: bool = false,
     /// Whether the current synced root is recorded (`store.recordRoot`).
     root_recorded: bool = false,
     /// Whether `addLines` changed the block.
@@ -502,26 +510,64 @@ const Run = struct {
     }
 
     /// Whether `rel` is a path git reads only as a regular file that is
-    /// neither kept nor released, so holt never holds it.
+    /// neither kept nor released, so holt never holds it, judged only while
+    /// the store is whole (`store_whole`) and no record of `rel` in it is
+    /// unreadable or online-only.
     fn abandons(r: *const Run, rel: []const u8) bool {
-        return paths.keepable(rel) == .git_reads_unlinked and !paths.contains(r.kept_set, rel) and !r.ks.isReleased(rel);
+        if (!r.store_whole or paths.keepable(rel) != .git_reads_unlinked) return false;
+        if (paths.contains(r.kept_set, rel) or r.ks.isReleased(rel)) return false;
+        const sid = paths.id(rel);
+        for (r.ks.bad) |b| if (std.mem.indexOf(u8, b.path, &sid) != null) return false;
+        return true;
     }
 
-    /// Gives up holding `rel` (`abandons`) when the block or a `pending`
-    /// keep of this working tree holds it: outside `plan`, clears that
-    /// keep, drops the path's block line, then drops its temporary's line
-    /// by `place.dropTempLine`'s rule.
+    /// Whether some working tree of the clone needs the block line of a
+    /// path holt gives up: holt's link is at it there, or a parent
+    /// component there is not a real directory, or that cannot be read.
+    fn abandonedLineHeld(r: *Run, rel: []const u8) !bool {
+        const trees = clone.worktrees(r.a, r.c) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return true,
+        };
+        for (trees) |t| {
+            if (!t.readable()) return true;
+            if (r.holdsLine(t.path, rel, true) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => true,
+            }) return true;
+        }
+        return false;
+    }
+
+    /// Gives up holding `rel` (`abandons`) when holt's link is at it, or
+    /// the block or a `pending` keep of this working tree holds it:
+    /// outside `plan`, removes that link, clears that keep, drops the
+    /// path's block line unless another working tree still needs it
+    /// (`abandonedLineHeld`), then drops its temporary's line by
+    /// `place.dropTempLine`'s rule.
     fn abandonKeep(r: *Run, rel: []const u8) !void {
         const a = r.a;
         const keep_pending = if (clone.findPending(r.pending, r.c.tree, rel)) |p| p.op == .keep else false;
-        if (!keep_pending and !paths.contains(r.scope.block_rels, rel)) return;
-        var item: Item = .{ .rel = rel, .outcome = .keep_abandoned, .unsettled = false };
-        if (r.repairs()) {
-            if (keep_pending) try clone.clearPending(a, r.c.common_dir, r.c.tree, rel);
-            try block.drop(a, r.c.common_dir, rel);
-            try place.dropTempLine(a, r.c, try paths.tempRel(a, rel));
-            item.done = true;
-        }
+        const cp = try fsutil.joinSlashy(a, r.c.worktree, rel);
+        var raw: ?[]const u8 = null;
+        if (try link.parentsReal(a, r.c.worktree, rel)) switch (try link.classify(a, cp, try r.ctx.layout.copyPath(a, r.rk, rel), r.tree.chain, r.tree.roots, rel)) {
+            .right, .holt => |l| raw = l,
+            else => {},
+        };
+        if (raw == null and !keep_pending and !paths.contains(r.scope.block_rels, rel)) return;
+        var item: Item = .{ .rel = rel, .outcome = .keep_abandoned, .unsettled = false, .link_removed = raw != null };
+        if (!r.repairs()) return r.add(item);
+        if (raw) |l| if (!try content.removeLinkIf(a, cp, l)) {
+            item.outcome = .failed;
+            item.detail = "the link changed";
+            item.unsettled = true;
+            item.link_removed = false;
+            return r.add(item);
+        };
+        if (keep_pending) try clone.clearPending(a, r.c.common_dir, r.c.tree, rel);
+        if (!try r.abandonedLineHeld(rel)) try block.drop(a, r.c.common_dir, rel);
+        try place.dropTempLine(a, r.c, try paths.tempRel(a, rel));
+        item.done = true;
         try r.add(item);
     }
 
@@ -1665,6 +1711,10 @@ pub fn reconcileHeld(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, m
             else => null,
         },
     };
+    run.store_whole = if (content.entryAt(try ctx.layout.keyDir(a, rk))) |e| e == .dir else |_| false;
+    for (trees) |t| if (!t.readable()) {
+        run.store_whole = false;
+    };
 
     if (probed.failure) |err| if (mode != .plan) try run.add(.{ .rel = ".", .outcome = .fold_unknown, .unsettled = false, .detail = @errorName(err) });
     for (trees) |t| if (!t.recorded) try run.add(.{ .rel = ".", .outcome = .tree_unrecorded, .unsettled = false, .detail = t.shares });
@@ -1702,21 +1752,18 @@ pub fn reconcileHeld(ctx: Ctx, index: *const store.KeyIndex, path: []const u8, m
     return report;
 }
 
-/// The block lines that must stay, never one of a path holt never holds
-/// (`Run.abandons`): kept paths; every line while the key's
-/// directory or any working tree cannot be read; a released path while a
-/// holt link is at it in any working tree; any other path while a working
+/// The block lines that must stay: kept paths; every line while the key's
+/// directory or any working tree cannot be read; a released path, or one
+/// holt gives up (`Run.abandons`), while a holt link is at it in any
+/// working tree; any other path while a working
 /// tree has a link or content at it; a temporary while it exists in any
 /// working tree or a `pending` record of any working tree names its path.
 /// A line whose place in some working tree cannot be read stays, and the
 /// failure is that line's `failed` item. Before any line is dropped, git
 /// must be able to list what the block hides in every working tree; a
 /// working tree it cannot list is a `failed` item and holds every line.
-fn heldLines(r: *Run, given: []const []const u8, temps: []const []const u8) ![]const []const u8 {
+fn heldLines(r: *Run, candidates: []const []const u8, temps: []const []const u8) ![]const []const u8 {
     const a = r.a;
-    var holdable: std.ArrayList([]const u8) = .empty;
-    for (given) |rel| if (!r.abandons(rel)) try holdable.append(a, rel);
-    const candidates = holdable.items;
     const key_dir_ok = if (content.entryAt(try r.ctx.layout.keyDir(a, r.rk))) |e| e == .dir else |_| false;
     const trees = clone.worktrees(a, r.c) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -1746,7 +1793,7 @@ fn heldLines(r: *Run, given: []const []const u8, temps: []const []const u8) ![]c
             try out.append(a, rel);
             continue;
         }
-        const released = r.ks.isReleased(rel);
+        const released = r.ks.isReleased(rel) or r.abandons(rel);
         for (trees.?) |t| {
             const held = r.holdsLine(t.path, rel, released) catch |err| switch (err) {
                 error.OutOfMemory => return err,

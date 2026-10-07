@@ -437,8 +437,10 @@ const Renderer = struct {
             },
             .keep_abandoned => {
                 if (!it.done and !r.dry()) return;
-                if (r.dry()) return w.print("{s}: git reads it only as a regular file, so holt would give up keeping it; git would see it again\n", .{qp});
-                return w.print("{s}: git reads it only as a regular file, so holt gave up keeping it; git sees it again\n", .{qp});
+                const then: []const u8 = if (it.link_removed)
+                    (if (r.dry()) "would give up keeping it and remove its link" else "gave up keeping it and removed its link")
+                else if (r.dry()) "would give up keeping it; git would see it again" else "gave up keeping it; git sees it again";
+                return w.print("{s}: git reads it only as a regular file, so holt {s}\n", .{ qp, then });
             },
             .tracked_link_removed => return w.print("{s} holt's link at {s}, which is tracked on this branch - run: git -C {s} restore -- {s}\n", .{ if (r.dry()) "would remove" else "removed", qp, try r.q(tree), try ui.shellQuote(a, it.rel) }),
             .purged_link_removed => {

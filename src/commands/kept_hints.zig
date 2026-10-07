@@ -328,7 +328,7 @@ fn itemHint(ctx: *app.Ctx, tree: []const u8, key: ?[]const u8, synced_root: []co
         .old_unreadable => .{ .what = try std.fmt.allocPrint(a, "links to an old location that cannot be read ({s}); make it readable, then sync", .{detail}), .run = sync_only },
         .relinked => syncHint("local copy identical to the kept copy, not yet a link"),
         .dangling_removed => syncHint("a link to a kept copy no machine keeps"),
-        .keep_abandoned => syncHint("git reads it only as a regular file, so holt cannot keep it; sync gives it up, and git sees it again"),
+        .keep_abandoned => syncHint(if (i.link_removed) "git reads it only as a regular file, so holt cannot keep it; sync gives it up and removes its link" else "git reads it only as a regular file, so holt cannot keep it; sync gives it up, and git sees it again"),
         .tracked_link_removed => .{ .what = "holt's link at a path this branch tracks", .run = try cmds(a, &.{try std.fmt.allocPrint(a, "holt sync && git -C {s} restore -- {s}", .{ try util.q(ctx, i.worktree orelse tree), try ui.shellQuote(a, i.rel) })}) },
         .mismatch_link_removed => syncHint("a link into a local/ key this clone does not match"),
         .pending_move => try moveHint(ctx, "links into an earlier key whose kept copy has not moved yet", try moveCmd(ctx, i.worktree orelse tree, key, synced_root)),

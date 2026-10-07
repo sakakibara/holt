@@ -885,6 +885,32 @@ test "run: an interrupted keep of a file git reads only as a regular file is giv
     try testing.expect(!hasText(again.out, "gave up keeping"));
 }
 
+test "run: giving up a file git reads only as a regular file that holt's dangling link holds says the link is removed" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var k = try keptBed(arena, &sb);
+    defer k.bed.deinit();
+    const bed = &k.bed;
+    const layout: kept.store.Layout = .{ .synced_root = bed.ws.cfg.synced_root };
+    const lp = try std.fs.path.join(arena, &.{ k.clone, "sub", ".gitignore" });
+    try fsutil.ensureDir(std.fs.path.dirname(lp).?);
+    try kept.content.createLink(try layout.copyPath(arena, "github.com/acme/widget", "sub/.gitignore"), lp, .file);
+    const c = try kept.clone.inspect(arena, k.clone, bed.ws.cfg.code_root);
+    try kept.block.add(arena, c.common_dir, &.{"sub/.gitignore"});
+    const qp = try bed.shown(lp);
+
+    const dry = try testutil.runCmd(arena, command.run, bed.ws, &.{"--dry-run"});
+    try testing.expect(hasText(dry.out, try std.fmt.allocPrint(arena, "{s}: git reads it only as a regular file, so holt would give up keeping it and remove its link\n", .{qp})));
+    const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
+    try testing.expect(hasText(got.out, try std.fmt.allocPrint(arena, "{s}: git reads it only as a regular file, so holt gave up keeping it and removed its link\n", .{qp})));
+    try testing.expect(!hasText(got.out, "sees it again"));
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(lp));
+}
+
 test "run: a kept path whose local copy differs is not linked, and not also a file not kept" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

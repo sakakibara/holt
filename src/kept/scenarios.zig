@@ -1004,6 +1004,103 @@ test "a plan reports giving up a held file git reads only as a regular file, and
     try testing.expectEqualStrings("", try gitStatus(m));
 }
 
+test "fix mode gives up a held file git reads only as a regular file" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    const c = try heldUnkeepable(m, true);
+    const item = try expectItem(try harness.reconcileIn(m.ctx, m.clone, .fix), "sub/.gitignore", .keep_abandoned);
+    try testing.expect(item.done and !item.unsettled);
+    try testing.expectEqual(@as(usize, 0), (try clone.readPending(a, c.common_dir)).len);
+    try testing.expect(!paths.contains(try blockRels(m), "sub/.gitignore"));
+    try testing.expectEqualStrings("?? sub/.gitignore\n", try gitStatus(m));
+}
+
+/// A machine whose store exists, with an older holt's link to an absent
+/// kept copy at `sub/.gitignore`, no fact naming it, and, when `line`, its
+/// block line.
+fn danglingUnkeepable(m: *const Machine, line: bool) !clone.Clone {
+    const a = m.ctx.alloc;
+    try m.write("seed", "creates the store");
+    _ = try m.keep("seed");
+    try fsutil.ensureDir(try m.path("sub"));
+    try content.createLink(try m.keptPath("sub/.gitignore"), try m.path("sub/.gitignore"), .file);
+    const c = try clone.inspect(a, m.clone, m.ctx.code_root);
+    if (line) try block.add(a, c.common_dir, &.{"sub/.gitignore"});
+    return c;
+}
+
+test "giving up a held file git reads only as a regular file removes holt's dangling link there before dropping its line" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    _ = try danglingUnkeepable(m, true);
+    try testing.expectEqualStrings("", try gitStatus(m));
+
+    const plan = try harness.reconcileIn(m.ctx, m.clone, .plan);
+    const planned = try expectItem(plan, "sub/.gitignore", .keep_abandoned);
+    try testing.expect(!planned.done and planned.link_removed);
+    try testing.expectEqual(content.Entry.symlink, try m.entry("sub/.gitignore"));
+
+    const item = try expectItem(try m.reconcile(), "sub/.gitignore", .keep_abandoned);
+    try testing.expectEqual(content.Entry.absent, try m.entry("sub/.gitignore"));
+    try testing.expect(item.done and !item.unsettled and item.link_removed);
+    try testing.expect(!paths.contains(try blockRels(m), "sub/.gitignore"));
+    try testing.expectEqualStrings("", try gitStatus(m));
+}
+
+test "holt's link at a file git reads only as a regular file that only another working tree's pending keep names is removed" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    const c = try danglingUnkeepable(m, false);
+    const wt = try addWorktree(m, &sb, "feature");
+    const other = try clone.inspect(a, wt, m.ctx.code_root);
+    try clone.addPending(a, c.common_dir, .{ .tree = other.tree, .rel = "sub/.gitignore", .op = .keep });
+
+    const item = try expectItem(try m.reconcile(), "sub/.gitignore", .keep_abandoned);
+    try testing.expectEqual(content.Entry.absent, try m.entry("sub/.gitignore"));
+    try testing.expect(item.done and item.link_removed);
+    try testing.expectEqualStrings("", try gitStatus(m));
+}
+
+test "a held file git reads only as a regular file whose fact cannot be read is not given up" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    const c = try heldUnkeepable(m, true);
+    const sid = paths.id("sub/.gitignore");
+    const dir = try std.fs.path.join(a, &.{ try m.ctx.layout.reserved(a, key, ".holt-paths"), &sid });
+    try fsutil.ensureDir(dir);
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ dir, try std.fmt.allocPrint(a, ".{s}.icloud", .{m.ctx.machine_id}) }), .data = "placeholder" });
+
+    for ([_]reconcile_mod.Mode{ .plan, .apply }) |mode| {
+        const report = try harness.reconcileIn(m.ctx, m.clone, mode);
+        try testing.expect(report.find("sub/.gitignore", .keep_abandoned) == null);
+        _ = try expectItem(report, "sub/.gitignore", .invalid);
+        try testing.expectEqual(@as(usize, 1), (try clone.readPending(a, c.common_dir)).len);
+        try testing.expect(paths.contains(try blockRels(m), "sub/.gitignore"));
+    }
+}
+
 test "a retarget never points a link at an online-only kept copy" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

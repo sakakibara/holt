@@ -59,9 +59,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after recording the file, is still finished by running `holt keep` again.
 - An older holt's interrupted keep of a `.gitignore`, `.gitattributes`, or
   `.mailmap` file, or a leftover line hiding one from git, is given up at the
-  next `holt sync`: the keep and the line are dropped, nothing is set aside,
-  and git sees the file again. Before, holt suggested `holt unkeep <path>`,
-  which cannot release a file holt never recorded as kept.
+  next `holt sync`: the keep and the line are dropped, holt's link there, if
+  any, is removed, nothing is set aside, and git sees the path again. Before,
+  holt suggested `holt unkeep <path>`, which cannot release a file holt never
+  recorded as kept. While a record of the file in the kept store cannot be
+  read or is online-only, nothing is given up.
 
 ## [0.10.1] - 2026-10-05
 

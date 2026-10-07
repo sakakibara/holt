@@ -1114,6 +1114,31 @@ test "run: --fix judges the kept files after its repairs, so what it just linked
     try testing.expectEqual(@as(u8, 0), got.code);
 }
 
+test "run: kept files linked fails while sync would give up holding a file git reads only as a regular file, and passes once sync has" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try keptWorld(arena, &sb, true);
+    defer w.deinit();
+    try w.keep(arena, ".clasp.json", "{}\n");
+    const p = try w.write(arena, "sub/.gitignore", "*.tmp\n");
+    const c = try kept.clone.inspect(arena, w.clone, w.ws.cfg.code_root);
+    try kept.clone.addPending(arena, c.common_dir, .{ .tree = c.tree, .rel = "sub/.gitignore", .op = .keep });
+    try kept.block.add(arena, c.common_dir, &.{"sub/.gitignore"});
+
+    const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try testing.expect(has(got.out, "kept files linked: FAIL\n"));
+    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: git reads it only as a regular file, so holt cannot keep it; sync gives it up, and git sees it again (run: holt sync)\n", .{try quoted(arena, p)})));
+
+    _ = try testutil.runCmd(arena, @import("sync.zig").command.run, w.ws, &.{});
+    const after = try testutil.runCmd(arena, command.run, w.ws, &.{});
+    try testing.expect(has(after.out, "kept files linked: PASS\n"));
+    try testing.expectEqual(@as(u8, 0), after.code);
+}
+
 const kept = @import("../kept.zig");
 const kept_cmd = @import("../kept_cmd.zig");
 
