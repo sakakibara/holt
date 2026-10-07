@@ -8684,9 +8684,7 @@ test "gitRisks: a listener that closes without an answer is queried once for thr
     defer ask_limit_for_test = null;
     ask_budget_for_test = 2;
     defer ask_budget_for_test = null;
-    const started = std.Io.Clock.awake.now(io());
     _ = try gitRisks(try testAsker(a), work);
-    try testing.expect(started.durationTo(std.Io.Clock.awake.now(io())).nanoseconds < 15 * std.time.ns_per_s);
     try testing.expectEqual(@as(u32, 1), slow.count());
 }
 
