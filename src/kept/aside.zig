@@ -1094,8 +1094,12 @@ test "findEntries: a manifest that is not JSON, or too large to read, makes only
     const layout: Layout = .{ .synced_root = try f.path("synced") };
     const good = try setAside(a, layout, mid, "k/r", ".env", try f.write("clone/.env", "one"), .keep);
     _ = try f.write("synced/kept/.holt-aside/garbage/manifest", "not json");
-    const big = try a.alloc(u8, (1 << 20) + 1);
-    @memset(big, 'x');
+    content.large_read_max_for_test = 4096;
+    defer content.large_read_max_for_test = null;
+    const good_manifest = try content.readSmall(a, try std.fs.path.join(a, &.{ try entryDir(a, layout, good.stamp), "manifest" }));
+    const big = try a.alloc(u8, 4096 + 1);
+    @memset(big, ' ');
+    @memcpy(big[0..good_manifest.len], good_manifest);
     _ = try f.write("synced/kept/.holt-aside/large/manifest", big);
 
     for ([_][]const u8{ "garbage", "large" }) |stamp| {
