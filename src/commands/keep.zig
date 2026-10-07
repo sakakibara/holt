@@ -2183,7 +2183,7 @@ test "keep --review: a file git reads only as a regular file is offered skip, sk
     const got = try f.run(&.{ "--review", "--all" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(!contains(got.out, "in 2 repos"));
-    try expectContains(got.out, "/.gitattributes (file, 1 B; git reads it only as a regular file, never through a link, so it cannot be kept): [s]kip, skip e[v]erywhere, [q]uit?");
+    try expectContains(got.out, std.fs.path.sep_str ++ ".gitattributes (file, 1 B; git reads it only as a regular file, never through a link, so it cannot be kept): [s]kip, skip e[v]erywhere, [q]uit?");
     try testing.expect(!contains(got.out, "[k]eep"));
     try testing.expect(!contains(got.out, "[n]ever"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "[s]kip"));
