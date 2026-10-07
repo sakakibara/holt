@@ -2,13 +2,18 @@
 //! its link becomes a regular copy of the kept content, on this machine now
 //! and on every other at its next reconcile, and the kept content stays
 //! until `--purge` removes it into an aside entry. `--repo` releases every
-//! path of a repo no longer used.
+//! path of a repo no longer used. An entry directly at a project's hub root
+//! moves from the project's synced content into its `docs/`.
 
 const std = @import("std");
 const cli = @import("cli");
 const app = @import("../app.zig");
 const ui = @import("../ui.zig");
 const fsutil = @import("../fsutil.zig");
+const marker = @import("../marker.zig");
+const project_mod = @import("../project.zig");
+const projectlock = @import("../projectlock.zig");
+const hub_mod = @import("../hub.zig");
 const kept = @import("../kept.zig");
 const util = @import("kept_util.zig");
 const testutil = @import("../testutil.zig");
@@ -23,7 +28,7 @@ const Spec = struct {
 
 pub const command = app.command(Spec, .{
     .name = "unkeep",
-    .summary = "Stop keeping files of a clone; each becomes a regular copy",
+    .summary = "Stop keeping files: a clone's become regular copies, a hub root's move into docs",
     .usage = "holt unkeep <path>... | --purge <path> [--yes] | --repo <key>",
     .group = .create,
     .needs_context = true,
@@ -38,7 +43,13 @@ pub const command = app.command(Spec, .{
     \\the path; when another machine did, purge once each has run "holt
     \\sync", since a machine that has not still links the kept content and
     \\gets its copy back from the aside entry only while that entry is kept.
-    \\An entry kept at a hub root cannot be unkept.
+    \\
+    \\An entry directly at a project's hub root, which holt keep moved into
+    \\the project's synced content, moves into the content's docs/ and is
+    \\linked from the hub through docs. Any top-level content entry but the
+    \\project's layout (code, docs, assets, links, and the marker) can be
+    \\unkept this way, one placed in the cloud folder by hand included.
+    \\--purge has nothing to remove for one.
     ,
 }, run);
 
@@ -60,10 +71,7 @@ fn unkeepOne(ctx: *app.Ctx, raw: []const u8) !bool {
     const alloc = ctx.alloc;
     const r = switch (try util.locate(ctx, raw, "unkeep")) {
         .refused => return false,
-        .hub => |h| {
-            try ctx.err.print("holt: cannot unkeep {s}: it is kept at a hub root, which has no undo (move it back from the project's synced content by hand)\n", .{try util.show(ctx, h.abs)});
-            return false;
-        },
+        .hub => |h| return unkeepHub(ctx, h.project, h.abs),
         .repo => |r| r,
     };
     const k = try util.keptCtx(ctx);
@@ -101,6 +109,75 @@ fn unkeepOne(ctx: *app.Ctx, raw: []const u8) !bool {
     return !try util.reconcileAndShow(ctx, k, r.c.worktree, &.{r.rel});
 }
 
+/// Hub unkeep: moves the entry `abs` at `p`'s hub root, kept in the
+/// project's synced content, into the content's `docs/`, then reconciles
+/// the hub. Any top-level content entry but the layout's own qualifies,
+/// whether its hub link is there or not yet made.
+fn unkeepHub(ctx: *app.Ctx, p: project_mod.Project, abs: []const u8) !bool {
+    const alloc = ctx.alloc;
+    const shown = try util.show(ctx, abs);
+    const raw_base = std.fs.path.basename(abs);
+    const base = if (fsutil.exists(try std.fs.path.join(alloc, &.{ p.content_path, raw_base })))
+        try contentSpelling(alloc, p.content_path, raw_base) orelse raw_base
+    else
+        raw_base;
+    if (isLayout(raw_base) or isLayout(base)) {
+        try ctx.err.print("holt: cannot unkeep {s}: it is part of the project's layout\n", .{shown});
+        return false;
+    }
+    const src = try std.fs.path.join(alloc, &.{ p.content_path, base });
+    const linked = fsutil.exists(src) and switch (try fsutil.linkState(alloc, abs)) {
+        .missing => true,
+        .symlink => |t| try fsutil.targetsEqual(alloc, t, src),
+        .other => false,
+    };
+    if (!linked) {
+        try ctx.err.print("holt: cannot unkeep {s}: it is not kept (holt keep moves a hub-root entry into the project's synced content)\n", .{shown});
+        return false;
+    }
+
+    var lock = try projectlock.acquire(alloc, app.envOf(ctx), p.content_path);
+    defer lock.release();
+
+    const docs = try std.fs.path.join(alloc, &.{ p.content_path, "docs" });
+    const dest = try std.fs.path.join(alloc, &.{ docs, base });
+    if (fsutil.exists(dest)) {
+        try ctx.err.print("holt: cannot unkeep {s}: docs already has {s}; refusing to overwrite\n", .{ shown, base });
+        return false;
+    }
+    try fsutil.ensureDir(docs);
+    try fsutil.moveTree(alloc, src, dest);
+    _ = try hub_mod.reconcile(alloc, &ctx.context.?.ws, &p, false);
+    try ctx.out.print("moved {s} into the project's docs: {s}\n", .{ base, try util.show(ctx, dest) });
+    return true;
+}
+
+fn isLayout(name: []const u8) bool {
+    if (std.mem.eql(u8, name, "code") or std.mem.eql(u8, name, marker.marker_basename)) return true;
+    for (project_mod.content_dirs) |d| {
+        if (std.mem.eql(u8, name, d)) return true;
+    }
+    return false;
+}
+
+/// The name the content directory `dir` spells its entry `name` with:
+/// `name` itself, or, on a case-insensitive filesystem, the entry equal to
+/// it ignoring ASCII case.
+fn contentSpelling(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) !?[]const u8 {
+    var d = std.Io.Dir.openDirAbsolute(fsutil.io(), dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return null,
+        else => return err,
+    };
+    defer d.close(fsutil.io());
+    var found: ?[]const u8 = null;
+    var it = d.iterate();
+    while (try it.next(fsutil.io())) |e| {
+        if (std.mem.eql(u8, e.name, name)) return try alloc.dupe(u8, e.name);
+        if (found == null and std.ascii.eqlIgnoreCase(e.name, name)) found = try alloc.dupe(u8, e.name);
+    }
+    return found;
+}
+
 /// Whether an auto pattern names the kept path `rel` of `c`, so unkeep
 /// must also skip it or the next sync would keep it again.
 fn autoMatches(ctx: *app.Ctx, k: kept.Ctx, index: *const kept.store.KeyIndex, c: kept.clone.Clone, rel: []const u8) !bool {
@@ -120,7 +197,7 @@ fn purge(ctx: *app.Ctx, raw: []const u8, yes: bool) !u8 {
     const r = switch (try util.locate(ctx, raw, "purge")) {
         .refused => return 1,
         .hub => |h| {
-            try ctx.err.print("holt: cannot purge {s}: it is kept at a hub root, not in the kept store\n", .{try util.show(ctx, h.abs)});
+            try ctx.err.print("holt: cannot purge {s}: hub-root entries are never in the kept store, so there is nothing to purge\n", .{try util.show(ctx, h.abs)});
             return 1;
         },
         .repo => |r| r,
@@ -300,7 +377,8 @@ test "unkeep: refuses a path inside a kept directory naming it, a path not kept,
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "x" });
     const hubbed = try f.run(&.{entry});
     try testing.expectEqual(@as(u8, 1), hubbed.code);
-    try expectContains(hubbed.err, "no undo");
+    try expectContains(hubbed.err, "it is not kept (holt keep moves a hub-root entry into the project's synced content)");
+    try testing.expectEqualStrings("x", try kept.content.readSmall(a, entry));
     try testing.expectEqual(@as(u8, 2), (try f.run(&.{})).code);
 }
 
@@ -427,4 +505,122 @@ test "unkeep on a retired machine warns once; a kept copy already gone says it r
     const gone = try f.run(&.{"notes"});
     try testing.expectEqual(@as(u8, 0), gone.code);
     try expectContains(gone.out, "was already gone: removed its record\n");
+}
+
+/// The content and hub root of a new project `acme/proj`.
+const HubFx = struct { content: []const u8, hub: []const u8 };
+
+fn hubFixture(f: *Fx) !HubFx {
+    const a = f.a();
+    try testutil.writeMarker(a, try f.ws.projectsRoot(a), "acme", "proj", .empty, .empty);
+    const h: HubFx = .{
+        .content = try std.fs.path.join(a, &.{ f.ws.cfg.synced_root, "projects", "acme", "proj" }),
+        .hub = try std.fs.path.join(a, &.{ f.ws.cfg.hub_root, "acme", "proj" }),
+    };
+    try fsutil.ensureDir(h.hub);
+    return h;
+}
+
+fn reconcileHub(f: *Fx) !void {
+    const a = f.a();
+    const p = switch (try f.ws.find(a, "acme/proj")) {
+        .one => |p| p,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = try hub_mod.reconcile(a, &f.ws, &p, false);
+}
+
+test "unkeep: an entry kept at a hub root moves into the project's docs, and the hub links it only through docs" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    try fsutil.ensureDir(try fsutil.joinSlashy(a, h.content, "docs"));
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "hello\n" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    const moved = try fsutil.joinSlashy(a, h.content, "docs/notes.md");
+    try expectContains(got.out, try std.fmt.allocPrint(a, "moved notes.md into the project's docs: {s}\n", .{try fsutil.contractTilde(a, app.envOf_current(), moved)}));
+    try testing.expectEqualStrings("hello\n", try kept.content.readSmall(a, moved));
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try fsutil.joinSlashy(a, h.content, "notes.md")));
+    try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(a, entry));
+    try reconcileHub(&f);
+    try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(a, entry));
+    try testing.expectEqualStrings("hello\n", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.hub, "docs/notes.md")));
+}
+
+test "unkeep: a hub entry whose name docs already has is refused, and both stay" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    try fsutil.ensureDir(try fsutil.joinSlashy(a, h.content, "docs"));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(a, h.content, "docs/notes.md"), .data = "old" });
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "new" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try expectContains(got.err, "docs already has notes.md; refusing to overwrite");
+    try testing.expectEqualStrings("old", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "docs/notes.md")));
+    try testing.expectEqualStrings("new", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "notes.md")));
+    try testing.expectEqualStrings("new", try kept.content.readSmall(a, entry));
+}
+
+test "unkeep: the names of the project's layout are refused at a hub root" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    for (project_mod.content_dirs) |d| try fsutil.ensureDir(try fsutil.joinSlashy(a, h.content, d));
+    try reconcileHub(&f);
+    for ([_][]const u8{ "docs", "assets", "links", "code", marker.marker_basename }) |name| {
+        const got = try f.run(&.{try fsutil.joinSlashy(a, h.hub, name)});
+        try testing.expectEqual(@as(u8, 1), got.code);
+        try expectContains(got.err, "it is part of the project's layout");
+    }
+    for (project_mod.content_dirs) |d| try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try fsutil.joinSlashy(a, h.content, d)));
+    try testing.expect(fsutil.exists(try fsutil.joinSlashy(a, h.content, marker.marker_basename)));
+}
+
+test "unkeep: with no docs yet, the entry's move creates docs and the hub links it; a hub link not yet made is no obstacle" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "hello\n" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+    try fsutil.removePath(entry);
+
+    const got = try f.run(&.{entry});
+    try testing.expectEqual(@as(u8, 0), got.code);
+    try testing.expectEqualStrings("hello\n", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "docs/notes.md")));
+    switch (try fsutil.linkState(a, try fsutil.joinSlashy(a, h.hub, "docs"))) {
+        .symlink => |t| try testing.expect(try fsutil.targetsEqual(a, t, try fsutil.joinSlashy(a, h.content, "docs"))),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "unkeep --purge: a hub entry is refused, since the kept store never holds one" {
+    var f: Fx = undefined;
+    try fixture(&f);
+    defer f.deinit();
+    const a = f.a();
+    const h = try hubFixture(&f);
+    const entry = try fsutil.joinSlashy(a, h.hub, "notes.md");
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = entry, .data = "x" });
+    try testing.expectEqual(@as(u8, 0), (try f.keep(&.{entry})).code);
+    const got = try f.run(&.{ "--purge", entry });
+    try testing.expectEqual(@as(u8, 1), got.code);
+    try expectContains(got.err, "hub-root entries are never in the kept store, so there is nothing to purge");
+    try testing.expectEqualStrings("x", try kept.content.readSmall(a, try fsutil.joinSlashy(a, h.content, "notes.md")));
 }

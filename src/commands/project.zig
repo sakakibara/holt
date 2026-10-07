@@ -92,7 +92,7 @@ fn runNew(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     var lock = try projectlock.acquire(alloc, app.envOf(ctx), content_path);
     defer lock.release();
 
-    for ([_][]const u8{ "docs", "assets", "links" }) |sub| {
+    for (project_mod.content_dirs) |sub| {
         try fsutil.ensureDir(try std.fs.path.join(alloc, &.{ content_path, sub }));
     }
 
@@ -635,7 +635,7 @@ test "new: creates content dirs and marker, and names the next step on stderr" {
     try testing.expect(std.mem.indexOf(u8, got.err, "holt repo get") != null);
     try testing.expect(std.mem.indexOf(u8, got.err, "-p acme/widget") != null);
 
-    for ([_][]const u8{ "docs", "assets", "links" }) |sub| {
+    for (project_mod.content_dirs) |sub| {
         const dir_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", sub });
         try testing.expect(fsutil.exists(dir_path));
     }

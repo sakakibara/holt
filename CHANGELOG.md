@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `holt unkeep` on an entry directly at a project's hub root moves it from
+  the project's synced content into the content's `docs/`, which the hub
+  links, instead of refusing with no undo. Any top-level content entry but
+  the project's layout (`code`, `docs`, `assets`, `links`, and the marker)
+  can be unkept this way, one placed in the cloud folder by hand included.
+  It refuses when `docs/` already has the name, and every other machine's
+  next `holt sync` removes its stale hub link.
+
 ### Fixed
 
 - `holt restore` no longer lets the clones it runs side by side ask on one

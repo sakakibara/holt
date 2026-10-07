@@ -169,10 +169,12 @@ holt keep --from github.com/acme/old-name   # copy the kept files a renamed repo
 holt unkeep .env                            # stop keeping: the link becomes a regular copy
 holt unkeep --purge .env --yes              # remove a released path's kept copy (it stays in aside)
 holt unkeep --repo github.com/acme/gone     # release every kept path of a repo
+holt unkeep ~/Projects/acme/site/notes.md   # a hub-root entry: move it into the project's docs/
 ```
 
 A path directly at a hub root is kept as before: it moves into the project's
-synced content, and cannot be unkept. `keep` refuses a tracked path, a
+synced content. `unkeep` moves it on into the content's `docs/`, where the hub
+links it through `docs`. `keep` refuses a tracked path, a
 directory holding tracked files (naming the untracked ones to keep instead), a
 symlink holt did not make, a path inside a submodule or nested repository, a
 path another machine kept whose kept copy has not arrived yet, a
@@ -215,6 +217,15 @@ reported as not arrived yet; an entry that is here but does not hold a whole
 copy leaves the link too, reported for you to look at. Pruning the entry
 records it pruned first, in a file of its own (`kept/.holt-pruned/<entry>`),
 and only then does sync remove a link that points at nothing. `--repo` takes the key as `holt list --repos` prints it.
+
+`unkeep` on an entry directly at a hub root moves it from the project's synced
+content into the content's `docs/`, creating `docs/` if needed, and the hub
+links it through `docs`; every other machine's next `holt sync` removes its
+stale link. Any top-level content entry but the project's layout (`code`,
+`docs`, `assets`, `links`, and the marker) can be unkept this way, one placed
+in the cloud folder by hand included. It refuses an entry `docs/` already has
+and a hub-root entry that is not kept, and `--purge` refuses a hub-root entry,
+which the kept store never holds.
 
 ### Other commands
 
@@ -901,7 +912,7 @@ list, or `holt <command> --help` for one command's usage.
 | `holt keep --from <old key> [<path>]` | Copy the kept files a renamed or transferred repo left under its old key into the clone's key |
 | `holt keep --retire-machine [<machine-id>]` | Record this machine, or one that is gone, as retired (see [Retiring a machine](#retiring-a-machine)) |
 | `holt keep --unretire-machine [<machine-id>]` | Remove a machine's retirement (see [Retiring a machine](#retiring-a-machine)) |
-| `holt unkeep <path>...` | Stop keeping a clone's paths: each link becomes a regular copy on every machine; the kept copy stays |
+| `holt unkeep <path>...` | Stop keeping a clone's paths: each link becomes a regular copy on every machine; the kept copy stays. A hub-root entry moves into the project's `docs/` |
 | `holt unkeep --purge <path> [--yes]` | Remove a released path's kept copy into an aside entry; without `--yes`, lists the machines that kept it and refuses |
 | `holt unkeep --repo <key>` | Release every kept path of a repo |
 | `holt backup <project>` | Tar a project's content dir into synced `backups/` |

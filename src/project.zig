@@ -7,6 +7,9 @@ const marker = @import("marker.zig");
 const testutil = @import("testutil.zig");
 const testing = std.testing;
 
+/// The directories `project new` creates in a project's synced content.
+pub const content_dirs = [_][]const u8{ "docs", "assets", "links" };
+
 pub const Project = struct {
     org: []const u8,
     name: []const u8,
