@@ -734,20 +734,31 @@ pub fn keepPath(ctx: Ctx, index: *const store.KeyIndex, worktree_path: []const u
     const temp_line = try paths.tempRel(a, rel);
     const guarded = try guardLines(ctx, c, key, rel, temp_line, opts);
 
-    try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = rel, .op = .keep, .worktree = c.worktree });
-    try interrupt.check(.keep_pending);
+    // Writing the fact can fail once the fact is on disk, so the rollback
+    // covers only what comes before it; a later failure is an interrupted
+    // keep, finished by keeping again.
+    const entry = window: {
+        var added: Added = .{ .pending = pending == null };
+        errdefer |err| if (err != error.Interrupted and err != error.OutOfMemory) rollBack(a, c, rel, temp_line, added);
+        try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = rel, .op = .keep, .worktree = c.worktree });
+        try interrupt.check(.keep_pending);
 
-    _ = try store.ensureKey(a, ctx.layout, index, key, try clone.originUrl(a, c.main), default_root, roots);
-    try interrupt.check(.keep_key);
+        _ = try store.ensureKey(a, ctx.layout, index, key, try clone.originUrl(a, c.main), default_root, roots);
+        try interrupt.check(.keep_key);
 
-    try block.add(a, c.common_dir, &.{ rel, temp_line });
-    try interrupt.check(.keep_block);
+        const before = try block.read(a, c.common_dir);
+        added.line = !paths.contains(before.rels, rel);
+        added.temp = !paths.contains(before.temps, temp_line);
+        try block.add(a, c.common_dir, &.{ rel, temp_line });
+        try interrupt.check(.keep_block);
 
-    if (merge) |m| for (m.absorbed) |l| {
-        _ = try content.removeLinkIf(a, try fsutil.joinSlashy(a, src, l.sub), l.raw);
+        if (merge) |m| for (m.absorbed) |l| {
+            _ = try content.removeLinkIf(a, try fsutil.joinSlashy(a, src, l.sub), l.raw);
+        };
+        const got = try aside.ensureAside(a, ctx.layout, c.common_dir, ctx.machine_id, key, rel, src, .keep, .whole);
+        try interrupt.check(.keep_aside);
+        break :window got;
     };
-    const entry = try aside.ensureAside(a, ctx.layout, c.common_dir, ctx.machine_id, key, rel, src, .keep, .whole);
-    try interrupt.check(.keep_aside);
 
     if (merge) |m| {
         if (equalHash(m.merged_hash, m.kept_hash)) {
@@ -928,6 +939,19 @@ fn planMerge(t: Tree, rel: []const u8, src: []const u8, target: []const u8) !Mer
 pub fn dropTempLine(a: std.mem.Allocator, c: clone.Clone, temp: []const u8) !void {
     const trees = clone.worktrees(a, c) catch null;
     if (!try clone.tempInUse(a, trees, try clone.readPending(a, c.common_dir), temp)) try block.drop(a, c.common_dir, temp);
+}
+
+/// What a keep added before writing its fact.
+const Added = struct { pending: bool, line: bool = false, temp: bool = false };
+
+/// Undoes what a keep that failed before writing its fact `added`: `rel`'s
+/// block line, then its pending record, then its temporary's line. When
+/// the line cannot be dropped it stops, leaving the pending record, so the
+/// path stays a keep that keeping again finishes.
+fn rollBack(a: std.mem.Allocator, c: clone.Clone, rel: []const u8, temp: []const u8, added: Added) void {
+    if (added.line) block.drop(a, c.common_dir, rel) catch return;
+    if (added.pending) clone.clearPending(a, c.common_dir, c.tree, rel) catch {};
+    if (added.temp) dropTempLine(a, c, temp) catch {};
 }
 
 /// Whether `f` is the unit keep itself sets aside: `rel`, spelled as keep

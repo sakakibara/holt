@@ -3891,3 +3891,175 @@ test "replacing a directory of holt's links with the kept directory's link, inte
         try testing.expectEqual(content.Entry.absent, try b.entry(try paths.tempRel(a, "cfg")));
     }
 }
+
+/// Skips a test that relies on a directory's permissions refusing a
+/// write: Windows has no such modes, and root ignores them.
+fn requireModesEnforced() !void {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const euid = if (builtin.os.tag == .linux) std.os.linux.geteuid() else std.c.geteuid();
+    if (euid == 0) return error.SkipZigTest;
+}
+
+/// Whether the working tree `worktree` has a pending record for `rel`.
+fn hasPending(ctx: ctx_mod.Ctx, worktree: []const u8, rel: []const u8) !bool {
+    const c = try clone.inspect(ctx.alloc, worktree, ctx.code_root);
+    return clone.findPending(try clone.readPending(ctx.alloc, c.common_dir), c.tree, rel) != null;
+}
+
+fn blockTemps(m: *const Machine) ![]const []const u8 {
+    const c = try clone.inspect(m.ctx.alloc, m.clone, m.ctx.code_root);
+    return (try block.read(m.ctx.alloc, c.common_dir)).temps;
+}
+
+/// Keeps `rel` in `worktree` while the aside directory refuses writes,
+/// expecting a real error rather than an interruption.
+fn keepAsideRefused(m: *const Machine, worktree: []const u8, rel: []const u8) !void {
+    const asides = try m.ctx.layout.asideDir(m.ctx.alloc);
+    try fsutil.ensureDir(asides);
+    try chmod(asides, 0o555);
+    defer chmod(asides, 0o755) catch {};
+    if (harness.keepIn(m.ctx, worktree, rel)) |_| {
+        return error.TestUnexpectedResult;
+    } else |err| try testing.expect(err != error.Interrupted);
+}
+
+/// Removes every aside entry of `rel`, so set-aside cannot reuse one.
+fn removeAsideEntries(m: *const Machine, rel: []const u8) !void {
+    const a = m.ctx.alloc;
+    for (try aside.findEntries(a, m.ctx.layout, key, rel, null)) |stamp| {
+        try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ try m.ctx.layout.asideDir(a), stamp }));
+    }
+}
+
+test "a keep whose set-aside fails leaves the path as it was: no line, no pending record, and keeping again succeeds" {
+    try requireModesEnforced();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try m.write("seed", "creates the store");
+    _ = try m.keep("seed");
+
+    try m.write(".env", "mine");
+    try keepAsideRefused(m, m.clone, ".env");
+    try testing.expect(!paths.contains(try blockRels(m), ".env"));
+    try testing.expect(!paths.contains(try blockTemps(m), try paths.tempRel(a, ".env")));
+    try testing.expect(!try hasPending(m.ctx, m.clone, ".env"));
+    try testing.expectEqualStrings("mine", try m.read(".env"));
+
+    _ = try m.keep(".env");
+    try testing.expect(try m.linked(".env"));
+    try testing.expectEqualStrings("mine", try m.read(".env"));
+}
+
+test "a keep whose set-aside fails in a second working tree leaves the line another working tree's link needs" {
+    try requireModesEnforced();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try m.write(".env", "kept");
+    _ = try m.keep(".env");
+    const wt = try addWorktree(m, &sb, "feature");
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try fsutil.joinSlashy(a, wt, ".env"), .data = "kept" });
+
+    try removeAsideEntries(m, ".env");
+    try keepAsideRefused(m, wt, ".env");
+    try testing.expect(paths.contains(try blockRels(m), ".env"));
+    try testing.expect(!try hasPending(m.ctx, wt, ".env"));
+    try testing.expect(try m.linked(".env"));
+    try testing.expectEqualStrings("", try gitStatus(m));
+}
+
+test "a re-run keep whose set-aside fails after an interrupted keep wrote its fact leaves that keep's line and pending record" {
+    try requireModesEnforced();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    defer interrupt.at = null;
+    try m.write("seed", "creates the store");
+    _ = try m.keep("seed");
+
+    try m.write(".env", "mine");
+    interrupt.at = .keep_fact;
+    try testing.expectError(error.Interrupted, m.keep(".env"));
+    interrupt.at = null;
+
+    try removeAsideEntries(m, ".env");
+    try keepAsideRefused(m, m.clone, ".env");
+    try testing.expect(paths.contains(try blockRels(m), ".env"));
+    try testing.expect(paths.contains(try blockTemps(m), try paths.tempRel(a, ".env")));
+    try testing.expect(try hasPending(m.ctx, m.clone, ".env"));
+
+    _ = try m.keep(".env");
+    try testing.expect(try m.linked(".env"));
+    try testing.expectEqualStrings("mine", try m.read(".env"));
+}
+
+fn retiredWords(_: std.mem.Allocator, _: store.Retired) anyerror![]const u8 {
+    return "retired";
+}
+
+test "a keep that fails after writing its fact is left interrupted, and keeping again finishes it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try m.write("seed", "creates the store");
+    _ = try m.keep("seed");
+    try store.writeRetired(a, m.ctx.layout, &(try store.loadIndex(a, m.ctx.layout)), m.ctx.machine_id, "2026-01-01", "host", m.ctx.machine_id);
+
+    var failing: std.Io.Writer = .failing;
+    var notice: ctx_mod.RetiredNotice = .{ .err = &failing, .words = retiredWords };
+    m.ctx.retired_notice = &notice;
+    defer m.ctx.retired_notice = null;
+    try m.write(".env", "mine");
+    try testing.expectError(error.WriteFailed, m.keep(".env"));
+    m.ctx.retired_notice = null;
+
+    try testing.expectEqual(@as(usize, 1), (try store.loadKeyState(a, m.ctx.layout, key)).factsFor(".env").len);
+    try testing.expect(paths.contains(try blockRels(m), ".env"));
+    try testing.expect(try hasPending(m.ctx, m.clone, ".env"));
+    _ = try expectItem(try m.reconcile(), ".env", .interrupted);
+
+    _ = try m.keep(".env");
+    try testing.expect(try m.linked(".env"));
+    try testing.expectEqualStrings("mine", try m.read(".env"));
+}
+
+test "a merge whose set-aside fails: the next reconcile links the absorbed paths again" {
+    try requireModesEnforced();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try m.write("notes/a", "A");
+    _ = try m.keep("notes/a");
+    try m.write("notes/sub/b", "B");
+
+    try keepAsideRefused(m, m.clone, "notes");
+    try testing.expect(!try m.linked("notes/a"));
+    try testing.expect(!paths.contains(try blockRels(m), "notes"));
+    try testing.expect(!try hasPending(m.ctx, m.clone, "notes"));
+
+    _ = try m.reconcile();
+    try testing.expect(try m.linked("notes/a"));
+    try testing.expectEqualStrings("A", try m.read("notes/a"));
+    try testing.expectEqualStrings("B", try m.read("notes/sub/b"));
+}
