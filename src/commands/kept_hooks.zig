@@ -195,6 +195,9 @@ const CloneRun = struct {
     trees: []const TreeRun = &.{},
     listing: ?kept.candidates.AllListing = null,
     list_err: ?anyerror = null,
+    /// Why the patterns could not be matched, when `list_err` is
+    /// `MatcherFailed` and the matcher said.
+    list_why: []const u8 = "",
     err: ?anyerror = null,
 };
 
@@ -263,7 +266,9 @@ fn runOne(kc: kept.Ctx, index: *const kept.store.KeyIndex, opts: Options, target
     out.trees = trees;
     if (opts.candidates == .none) return out;
 
-    out.listing = kept.candidates.listAll(kc, index, c, .{ .auto = opts.candidates == .auto, .auto_plan = opts.candidates == .plan }) catch |err| {
+    var listing_kc = kc;
+    listing_kc.matcher_why = &out.list_why;
+    out.listing = kept.candidates.listAll(listing_kc, index, c, .{ .auto = opts.candidates == .auto, .auto_plan = opts.candidates == .plan }) catch |err| {
         if (err == error.OutOfMemory) return err;
         out.list_err = err;
         return out;
@@ -361,7 +366,11 @@ const Renderer = struct {
         }
         if (res.listing) |l| try r.listingLines(c, l);
         if (res.list_err) |err| {
-            if (!r.opts.actions_only) try r.w.print("could not list files not kept in {s}: {s}\n", .{ try r.q(c.worktree), @errorName(err) });
+            if (!r.opts.actions_only) {
+                try r.w.print("could not list files not kept in {s}: {s}", .{ try r.q(c.worktree), @errorName(err) });
+                if (res.list_why.len > 0) try r.w.print(": {s}", .{try ui.printable(r.ctx.alloc, res.list_why)});
+                try r.w.writeByte('\n');
+            }
         }
         if (r.summary.linked + r.summary.retargeted > before) r.summary.linked_repos += 1;
     }

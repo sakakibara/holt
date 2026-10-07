@@ -263,10 +263,10 @@ pub fn match(ctx: Ctx, patterns: []const u8, queries: []const Query) ![]const ?[
 
     const repo = try scratchRepo(ctx);
     const dirs = [_][]const u8{try sweep.scratchDir(a, ctx)};
-    fsutil.ensureDir(dirs[0]) catch return error.MatcherFailed;
-    const pattern_file = (try clone.writeRunFile(a, &dirs, ctx.machine_id, patterns)) orelse return error.MatcherFailed;
+    fsutil.ensureDir(dirs[0]) catch |err| return fail(ctx, "cannot make the scratch folder {s}: {t}", .{ dirs[0], err });
+    const pattern_file = (try clone.writeRunFile(a, &dirs, ctx.machine_id, patterns)) orelse return fail(ctx, "cannot write a file of patterns in {s}", .{dirs[0]});
     defer fsutil.removePath(pattern_file) catch {};
-    const input_file = (try clone.writeRunFile(a, &dirs, ctx.machine_id, input.items)) orelse return error.MatcherFailed;
+    const input_file = (try clone.writeRunFile(a, &dirs, ctx.machine_id, input.items)) orelse return fail(ctx, "cannot write a file of paths in {s}", .{dirs[0]});
     defer fsutil.removePath(input_file) catch {};
 
     const res = git.runInRepoScopedWith(a, &.{
@@ -282,23 +282,34 @@ pub fn match(ctx: Ctx, patterns: []const u8, queries: []const Query) ![]const ?[
         "-n",
     }, repo, .{ .set = &null_config, .stdin_path = input_file }) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => return error.MatcherFailed,
+        else => return fail(ctx, "cannot run git check-ignore in {s}: {t}", .{ repo, err }),
     };
-    if (res.status > 1) return error.MatcherFailed;
+    if (res.status > 1) return fail(ctx, "git check-ignore exited {d}: {s}", .{ res.status, std.mem.trim(u8, res.stderr, " \t\r\n") });
 
     var fields = std.mem.splitScalar(u8, res.stdout, 0);
     for (asked.items) |i| {
-        const source = fields.next() orelse return error.MatcherFailed;
-        _ = fields.next() orelse return error.MatcherFailed;
-        const pattern = fields.next() orelse return error.MatcherFailed;
-        const path = fields.next() orelse return error.MatcherFailed;
-        if (!std.mem.startsWith(u8, path, "./")) return error.MatcherFailed;
+        const source = fields.next() orelse return unread(ctx, queries[i].path);
+        _ = fields.next() orelse return unread(ctx, queries[i].path);
+        const pattern = fields.next() orelse return unread(ctx, queries[i].path);
+        const path = fields.next() orelse return unread(ctx, queries[i].path);
+        if (!std.mem.startsWith(u8, path, "./")) return unread(ctx, queries[i].path);
         const echoed = std.mem.trimEnd(u8, path[2..], "/");
-        if (!std.mem.eql(u8, echoed, queries[i].path)) return error.MatcherFailed;
+        if (!std.mem.eql(u8, echoed, queries[i].path)) return unread(ctx, queries[i].path);
         if (source.len == 0 or pattern.len == 0 or pattern[0] == '!') continue;
         out[i] = pattern;
     }
     return out;
+}
+
+/// `MatcherFailed`, with why in `ctx.matcher_why` when set.
+fn fail(ctx: Ctx, comptime fmt: []const u8, args: anytype) error{MatcherFailed} {
+    if (ctx.matcher_why) |w| w.* = std.fmt.allocPrint(ctx.alloc, fmt, args) catch "out of memory while saying why";
+    return error.MatcherFailed;
+}
+
+/// `fail` for an answer of git check-ignore holt cannot read, at `path`.
+fn unread(ctx: Ctx, path: []const u8) error{MatcherFailed} {
+    return fail(ctx, "git check-ignore answered for {s} in a form holt does not read", .{path});
 }
 
 const null_config = [_][2][]const u8{
@@ -331,19 +342,26 @@ fn scratchRepo(ctx: Ctx) ![]const u8 {
     const repo = try std.fs.path.join(a, &.{ state, "matcher" });
     const exclude = try std.fs.path.join(a, &.{ repo, ".git", "info", "exclude" });
     if (!try scratchReady(a, repo)) {
-        if (ctx.scratch) |s| return runScratchRepo(a, s);
-        fsutil.ensureDir(state) catch return error.MatcherFailed;
-        const lock = projectlock.acquireAt(try std.fs.path.join(a, &.{ state, "matcher.lock" })) catch return error.MatcherFailed;
+        if (ctx.scratch) |s| return runScratchRepo(a, s) catch |err| switch (err) {
+            error.MatcherFailed => fail(ctx, "cannot make the matcher's scratch repository in {s}", .{s.dir}),
+            else => err,
+        };
+        fsutil.ensureDir(state) catch |err| return fail(ctx, "cannot make holt's state folder {s}: {t}", .{ state, err });
+        const lock_path = try std.fs.path.join(a, &.{ state, "matcher.lock" });
+        const lock = projectlock.acquireAt(lock_path) catch |err| return fail(ctx, "cannot lock {s}: {t}", .{ lock_path, err });
         defer lock.release();
-        if (!try scratchReady(a, repo)) try makeScratch(a, state, repo);
+        if (!try scratchReady(a, repo)) makeScratch(a, state, repo) catch |err| switch (err) {
+            error.MatcherFailed => return fail(ctx, "cannot make the matcher's scratch repository {s}", .{repo}),
+            else => return err,
+        };
     }
     const current = content.readSmall(a, exclude) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => null,
     };
     if (current == null or current.?.len > 0) {
-        fsutil.ensureDir(std.fs.path.dirname(exclude).?) catch return error.MatcherFailed;
-        fsutil.writeFileAtomic(a, exclude, "") catch return error.MatcherFailed;
+        fsutil.ensureDir(std.fs.path.dirname(exclude).?) catch |err| return fail(ctx, "cannot empty {s}: {t}", .{ exclude, err });
+        fsutil.writeFileAtomic(a, exclude, "") catch |err| return fail(ctx, "cannot empty {s}: {t}", .{ exclude, err });
     }
     return repo;
 }
@@ -697,6 +715,32 @@ test "match: the scratch repository appears only whole; an interrupted one is ne
     try testing.expectEqualStrings("*.log", (try match(ctx, "*.log\n", &qs))[0].?);
     try testing.expectEqual(@as(usize, 0), try tmpSiblings(a, state, "matcher.holt-tmp-"));
     try testing.expectEqualStrings("*.log", (try match(ctx, "*.log\n", &qs))[0].?);
+}
+
+test "match: a failure says which step failed: holt's state folder cannot be made" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const ctx = try testCtx(&f);
+    _ = try f.write("state", "a file where the state folder goes");
+    var why: []const u8 = "";
+    var told = ctx;
+    told.matcher_why = &why;
+    try testing.expectError(error.MatcherFailed, match(told, "*.log\n", &.{.{ .path = "x.log" }}));
+    try testing.expect(std.mem.indexOf(u8, why, "cannot make holt's state folder") != null);
+    try testing.expect(std.mem.indexOf(u8, why, try machine.stateDir(ctx.alloc, ctx.env)) != null);
+}
+
+test "match: a failure says which step failed: git's own words when check-ignore fails" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const ctx = try testCtx(&f);
+    _ = try f.write("state/holt/matcher/.git/HEAD", "not a ref\n");
+    var why: []const u8 = "";
+    var told = ctx;
+    told.matcher_why = &why;
+    try testing.expectError(error.MatcherFailed, match(told, "*.log\n", &.{.{ .path = "x.log" }}));
+    try testing.expect(std.mem.startsWith(u8, why, "git check-ignore exited "));
+    try testing.expect(std.mem.indexOf(u8, why, "fatal:") != null);
 }
 
 test "globalText: a list file over the limit fails the matcher and names the file" {

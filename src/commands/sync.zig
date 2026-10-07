@@ -776,6 +776,24 @@ fn hasText(hay: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, hay, needle) != null;
 }
 
+test "run: a clone whose files not kept cannot be listed is named with why the patterns could not be matched" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var k = try keptBed(arena, &sb);
+    defer k.bed.deinit();
+    const head = try std.fs.path.join(arena, &.{ std.fs.path.dirname(k.bed.ws.cfg.synced_root).?, "state", "holt", "matcher", ".git", "HEAD" });
+    try fsutil.ensureDir(std.fs.path.dirname(head).?);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head, .data = "not a ref\n" });
+
+    const got = try testutil.runCmd(arena, command.run, k.bed.ws, &.{});
+    const all = try std.mem.concat(arena, u8, &.{ got.out, got.err });
+    try testing.expect(hasText(all, "could not list files not kept in "));
+    try testing.expect(hasText(all, ": MatcherFailed: git check-ignore exited "));
+}
+
 test "run: links kept files in every working tree, keeps what an auto pattern names, and counts the files not kept and only the repos it acted in" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

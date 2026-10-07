@@ -27,6 +27,9 @@ pub const Ctx = struct {
     /// Where a run tells a retired machine that the facts it writes count
     /// again (`writeOwnFact`); null runs say nothing.
     retired_notice: ?*RetiredNotice = null,
+    /// Where `patterns.match` says why it failed with `MatcherFailed`, in
+    /// `alloc`'s memory; null keeps the reason unsaid. One per thread.
+    matcher_why: ?*[]const u8 = null,
 };
 
 /// The warning a retired machine gets the first time a run writes one of
