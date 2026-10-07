@@ -738,7 +738,9 @@ pub fn keepPath(ctx: Ctx, index: *const store.KeyIndex, worktree_path: []const u
     // covers only what comes before it; a later failure is an interrupted
     // keep, finished by keeping again.
     const entry = window: {
-        var added: Added = .{ .pending = pending == null };
+        var added: Added = .{ .replaced = pending };
+        // Interrupted stands in for a kill, which runs no rollback; out of
+        // memory cannot run one.
         errdefer |err| if (err != error.Interrupted and err != error.OutOfMemory) rollBack(a, c, rel, temp_line, added);
         try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = rel, .op = .keep, .worktree = c.worktree });
         try interrupt.check(.keep_pending);
@@ -941,16 +943,20 @@ pub fn dropTempLine(a: std.mem.Allocator, c: clone.Clone, temp: []const u8) !voi
     if (!try clone.tempInUse(a, trees, try clone.readPending(a, c.common_dir), temp)) try block.drop(a, c.common_dir, temp);
 }
 
-/// What a keep added before writing its fact.
-const Added = struct { pending: bool, line: bool = false, temp: bool = false };
+/// What a keep wrote before its fact: the pending record its own replaced,
+/// if any, and whether it added `rel`'s block line and its temporary's.
+const Added = struct { replaced: ?clone.Pending, line: bool = false, temp: bool = false };
 
-/// Undoes what a keep that failed before writing its fact `added`: `rel`'s
-/// block line, then its pending record, then its temporary's line. When
-/// the line cannot be dropped it stops, leaving the pending record, so the
-/// path stays a keep that keeping again finishes.
+/// Undoes what `added` records this keep wrote before its fact: drops
+/// `rel`'s block line, then puts back the pending record it replaced or
+/// clears its own, then drops its temporary's line. When the line cannot
+/// be dropped it stops, leaving the pending record, so the path stays a
+/// keep that keeping again finishes.
 fn rollBack(a: std.mem.Allocator, c: clone.Clone, rel: []const u8, temp: []const u8, added: Added) void {
     if (added.line) block.drop(a, c.common_dir, rel) catch return;
-    if (added.pending) clone.clearPending(a, c.common_dir, c.tree, rel) catch {};
+    if (added.replaced) |old| {
+        clone.addPending(a, c.common_dir, old) catch {};
+    } else clone.clearPending(a, c.common_dir, c.tree, rel) catch {};
     if (added.temp) dropTempLine(a, c, temp) catch {};
 }
 

@@ -3955,6 +3955,28 @@ test "a keep whose set-aside fails leaves the path as it was: no line, no pendin
     try testing.expectEqualStrings("mine", try m.read(".env"));
 }
 
+test "a keep whose set-aside fails restores the pending record of another operation it replaced" {
+    try requireModesEnforced();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var sb = try testutil.Sandbox.init(testing.allocator);
+    defer sb.deinit();
+    var w = try World.init(a, &sb, 1);
+    const m = w.m(0);
+    try m.write("seed", "creates the store");
+    _ = try m.keep("seed");
+
+    try m.write(".env", "mine");
+    const c = try clone.inspect(a, m.clone, m.ctx.code_root);
+    try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = ".env", .op = .relink, .worktree = c.worktree });
+    try keepAsideRefused(m, m.clone, ".env");
+    const got = clone.findPending(try clone.readPending(a, c.common_dir), c.tree, ".env") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(clone.Op.relink, got.op);
+    try testing.expect(!paths.contains(try blockRels(m), ".env"));
+    try testing.expectEqualStrings("mine", try m.read(".env"));
+}
+
 test "a keep whose set-aside fails in a second working tree leaves the line another working tree's link needs" {
     try requireModesEnforced();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
