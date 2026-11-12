@@ -445,7 +445,7 @@ test "unkeep: another machine's path whose kept copy has not arrived is refused,
     try f.write(".env", "x");
     _ = try f.keep(&.{".env"});
     const layout: kept.store.Layout = .{ .synced_root = f.ws.cfg.synced_root };
-    try kept.store.writeFact(a, layout, "github.com/acme/widget", "000000000000000f", ".clasp.json", .file, "a" ** 64);
+    try kept.store.writeFact(a, layout, "github.com/acme/widget", "000000000000000f", ".clasp.json", .file, &@as([64]u8, @splat('a')));
     try kept.store.writeHost(a, layout, "000000000000000f", "laptop");
 
     const got = try f.run(&.{".clasp.json"});
@@ -489,7 +489,7 @@ test "unkeep --purge: without --yes, names the machines that have not run holt s
     _ = try f.keep(&.{".env"});
     _ = try f.run(&.{".env"});
     const layout: kept.store.Layout = .{ .synced_root = f.ws.cfg.synced_root };
-    try kept.store.writeFact(a, layout, "github.com/acme/widget", "000000000000000f", ".env", .file, "a" ** 64);
+    try kept.store.writeFact(a, layout, "github.com/acme/widget", "000000000000000f", ".env", .file, &@as([64]u8, @splat('a')));
     try kept.store.writeHost(a, layout, "000000000000000f", "laptop");
 
     const asked = try f.run(&.{ "--purge", ".env" });

@@ -106,7 +106,10 @@ fn hermetic(environ: std.process.Environ) !std.process.Environ {
 /// Runs the test at `index` in this process.
 fn runOne(args: std.process.Args, environ: std.process.Environ, index: usize) Result {
     testing.environ = environ;
-    testing.allocator_instance = .{};
+    testing.allocator_instance = .init(std.heap.page_allocator, .{
+        .canary = 0xc3a701ba,
+        .check_write_after_free = true,
+    });
     testing.io_instance = .init(testing.allocator, .{ .argv0 = .init(args), .environ = environ });
     testing.log_level = .warn;
     log_err_count = 0;
@@ -120,8 +123,7 @@ fn runOne(args: std.process.Args, environ: std.process.Environ, index: usize) Re
         },
     };
     testing.io_instance.deinit();
-    const leaks = testing.allocator_instance.detectLeaks();
-    testing.allocator_instance.deinitWithoutLeakChecks();
+    const leaks = testing.allocator_instance.deinit();
     return .{
         .status = status,
         .leaks = std.math.lossyCast(u32, leaks),
@@ -138,7 +140,7 @@ fn serveWorker(args: std.process.Args, environ: std.process.Environ) !void {
         const text = line orelse return;
         const index = try std.fmt.parseUnsigned(usize, text, 10);
         const r = runOne(args, environ, index);
-        std.debug.print("\n" ++ result_mark ++ "{d} {d} {d} {d}\n", .{ index, @intFromEnum(r.status), r.leaks, r.logged });
+        std.debug.print("\n" ++ result_mark ++ "{d} {d} {d} {d}\n", .{ index, @backingInt(r.status), r.leaks, r.logged });
     } else |err| return err;
 }
 
@@ -258,11 +260,11 @@ fn serve(args: std.process.Args, environ: std.process.Environ, jobs: usize) !voi
     var stdout_buffer: [4096]u8 = undefined;
     var stdin_reader: Io.File.Reader = .initStreaming(.stdin(), runner_io, &stdin_buffer);
     var stdout_writer: Io.File.Writer = .initStreaming(.stdout(), runner_io, &stdout_buffer);
-    var server = try std.zig.Server.init(.{
+    var server: std.zig.Server = .{
         .in = &stdin_reader.interface,
         .out = &stdout_writer.interface,
-        .zig_version = builtin.zig_version_string,
-    });
+    };
+    try server.serveStringMessage(.zig_version, builtin.zig_version_string);
 
     var results: ?[]Result = null;
     while (true) {
@@ -318,7 +320,7 @@ fn serve(args: std.process.Args, environ: std.process.Environ, jobs: usize) !voi
                 });
             },
             else => {
-                std.debug.print("unsupported message: {x}\n", .{@intFromEnum(hdr.tag)});
+                std.debug.print("unsupported message: {x}\n", .{@backingInt(hdr.tag)});
                 std.process.exit(1);
             },
         }
@@ -356,8 +358,8 @@ pub fn log(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    if (@intFromEnum(message_level) <= @intFromEnum(std.log.Level.err)) log_err_count +|= 1;
-    if (@intFromEnum(message_level) <= @intFromEnum(testing.log_level)) {
+    if (@backingInt(message_level) <= @backingInt(std.log.Level.err)) log_err_count +|= 1;
+    if (@backingInt(message_level) <= @backingInt(testing.log_level)) {
         std.debug.print("[" ++ @tagName(scope) ++ "] (" ++ @tagName(message_level) ++ "): " ++ format ++ "\n", args);
     }
 }

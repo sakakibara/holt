@@ -2255,10 +2255,10 @@ test "listAll: a foreign repository at a recorded working tree's path is no work
 /// such permissions).
 fn makeUnreadable(path: []const u8) !bool {
     if (builtin.os.tag == .windows) return false;
-    try std.Io.Dir.cwd().setFilePermissions(io(), path, @enumFromInt(0o000), .{});
+    try std.Io.Dir.cwd().setFilePermissions(io(), path, @fromBackingInt(0o000), .{});
     var d = std.Io.Dir.cwd().openDir(io(), path, .{ .iterate = true }) catch return true;
     d.close(io());
-    try std.Io.Dir.cwd().setFilePermissions(io(), path, @enumFromInt(0o755), .{});
+    try std.Io.Dir.cwd().setFilePermissions(io(), path, @fromBackingInt(0o755), .{});
     return false;
 }
 
@@ -2277,7 +2277,7 @@ test "list: a directory git warns it cannot open fails the listing, and the walk
     try m.write("node_modules/pkg/index.js", "only here");
     const pkg = try m.path("node_modules/pkg");
     if (!try makeUnreadable(pkg)) return error.SkipZigTest;
-    defer std.Io.Dir.cwd().setFilePermissions(io(), pkg, @enumFromInt(0o755), .{}) catch {};
+    defer std.Io.Dir.cwd().setFilePermissions(io(), pkg, @fromBackingInt(0o755), .{}) catch {};
     const l = try listOf(m, .{ .deep_nested = true });
     const c = find(l, "node_modules/pkg").?;
     try testing.expectEqual(@as(?WalkMiss, .unreadable_dir), c.walk);
@@ -2286,7 +2286,7 @@ test "list: a directory git warns it cannot open fails the listing, and the walk
     try m.write("work/draft.txt", "untracked work");
     const work = try m.path("work");
     try testing.expect(try makeUnreadable(work));
-    defer std.Io.Dir.cwd().setFilePermissions(io(), work, @enumFromInt(0o755), .{}) catch {};
+    defer std.Io.Dir.cwd().setFilePermissions(io(), work, @fromBackingInt(0o755), .{}) catch {};
     try testing.expectError(error.ListingFailed, listOf(m, .{}));
     const index = try store.loadIndex(a, m.ctx.layout);
     const all = try listAll(m.ctx, &index, try clone.inspect(a, m.clone, m.ctx.code_root), .{});
@@ -2343,7 +2343,7 @@ test "list: a flagged file whose executable bit differs from the index is an edi
     try m.git(&sb, &.{ "add", "run.sh", "same-link", "other-link" });
     try m.git(&sb, &.{ "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tracked" });
     try m.git(&sb, &.{ "update-index", "--skip-worktree", "run.sh", "same-link", "other-link" });
-    try std.Io.Dir.cwd().setFilePermissions(io(), try m.path("run.sh"), @enumFromInt(0o755), .{});
+    try std.Io.Dir.cwd().setFilePermissions(io(), try m.path("run.sh"), @fromBackingInt(0o755), .{});
     for ([_][]const u8{ "same-link", "other-link" }) |rel| try fsutil.removePath(try m.path(rel));
     try m.write("same-link", "target");
     try m.write("other-link", "an edit, only here");

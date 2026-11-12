@@ -771,7 +771,7 @@ test "run: a checksum mismatch is refused and the target binary is left untouche
     const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
     try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
     // A deliberately wrong digest: 64 zero hex nibbles.
-    try writeSums(arena, dl_dir, "SHA256SUMS", asset, "0" ** 64);
+    try writeSums(arena, dl_dir, "SHA256SUMS", asset, &@as([64]u8, @splat('0')));
 
     const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
     const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});

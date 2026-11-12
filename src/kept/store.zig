@@ -985,8 +985,8 @@ fn isAncestorOfAny(list: []const []const u8, dir: []const u8) bool {
 
 const Fixture = @import("harness.zig").Fixture;
 
-const hex_a = "a" ** 64;
-const hex_b = "b" ** 64;
+const hex_a = &@as([64]u8, @splat('a'));
+const hex_b = &@as([64]u8, @splat('b'));
 
 test "ensureKey: creates a record once, keeps unknown fields, fills a missing root" {
     var f = try Fixture.init();

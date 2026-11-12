@@ -173,7 +173,7 @@ const FileId = struct {
 fn fileId(alloc: std.mem.Allocator, path: []const u8) !?FileId {
     if (builtin.os.tag == .linux) {
         const linux = std.os.linux;
-        const z = try alloc.dupeZ(u8, path);
+        const z = try alloc.dupeSentinel(u8, path, 0);
         var sx: linux.Statx = undefined;
         const rc = linux.statx(linux.AT.FDCWD, z, linux.AT.SYMLINK_NOFOLLOW, .{ .INO = true }, &sx);
         return switch (linux.errno(rc)) {
@@ -183,7 +183,7 @@ fn fileId(alloc: std.mem.Allocator, path: []const u8) !?FileId {
             else => |e| std.posix.unexpectedErrno(e),
         };
     } else if (builtin.os.tag.isDarwin()) {
-        const z = try alloc.dupeZ(u8, path);
+        const z = try alloc.dupeSentinel(u8, path, 0);
         var st: std.c.Stat = undefined;
         if (std.c.fstatat(std.c.AT.FDCWD, z, &st, std.c.AT.SYMLINK_NOFOLLOW) == 0) {
             return .{ .dev = @as(u32, @bitCast(st.dev)), .ino = st.ino };
@@ -388,12 +388,12 @@ fn executableFile(from: []const u8, to: []const u8, how: ExecAction) !bool {
         else => return err,
     };
     if (src.kind != .file or dst.kind != .file) return true;
-    const want: u32 = @intCast(@intFromEnum(src.permissions) & 0o111);
-    const have: u32 = @intCast(@intFromEnum(dst.permissions) & 0o7777);
+    const want: u32 = @intCast(@backingInt(src.permissions) & 0o111);
+    const have: u32 = @intCast(@backingInt(dst.permissions) & 0o7777);
     if (have & want == want) return true;
     if (how == .check) return false;
     if (builtin.is_test and chmod_fails_for_test) return false;
-    cwd.setFilePermissions(io(), to, @enumFromInt(have | want), .{ .follow_symlinks = false }) catch return false;
+    cwd.setFilePermissions(io(), to, @fromBackingInt(@intCast(have | want)), .{ .follow_symlinks = false }) catch return false;
     return true;
 }
 
@@ -642,7 +642,7 @@ pub fn nestedRepos(alloc: std.mem.Allocator, root: []const u8, ignore_case: bool
 pub fn modeOf(path: []const u8) !u32 {
     if (!std.Io.File.Permissions.has_executable_bit) return 0;
     const st = try std.Io.Dir.cwd().statFile(io(), path, .{ .follow_symlinks = false });
-    return @intCast(@intFromEnum(st.permissions) & 0o777);
+    return @intCast(@backingInt(st.permissions) & 0o777);
 }
 
 /// Path order of tree files, for `std.mem.sort`.
@@ -730,8 +730,8 @@ pub fn renameNoReplace(alloc: std.mem.Allocator, from: []const u8, to: []const u
             else => err,
         };
     }
-    const from_z = try alloc.dupeZ(u8, from);
-    const to_z = try alloc.dupeZ(u8, to);
+    const from_z = try alloc.dupeSentinel(u8, from, 0);
+    const to_z = try alloc.dupeSentinel(u8, to, 0);
     if (builtin.os.tag.isDarwin()) {
         const rename_excl: c_uint = 0x00000004;
         if (renamex_np(from_z, to_z, rename_excl) == 0) return;
@@ -770,8 +770,8 @@ pub var no_exchange_for_test = false;
 /// platform or filesystem has neither, and nothing moves.
 pub fn renameExchange(alloc: std.mem.Allocator, a: []const u8, b: []const u8) !void {
     if (builtin.is_test and no_exchange_for_test) return error.Unsupported;
-    const a_z = try alloc.dupeZ(u8, a);
-    const b_z = try alloc.dupeZ(u8, b);
+    const a_z = try alloc.dupeSentinel(u8, a, 0);
+    const b_z = try alloc.dupeSentinel(u8, b, 0);
     if (builtin.os.tag.isDarwin()) {
         const rename_swap: c_uint = 0x00000002;
         if (renamex_np(a_z, b_z, rename_swap) == 0) return;

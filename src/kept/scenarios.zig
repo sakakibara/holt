@@ -738,7 +738,7 @@ test "a local key whose record is missing or names another repo: reconcile stops
     try testing.expectEqual(content.Entry.absent, try content.entryAt(try std.fs.path.join(a, &.{ lc, ".env" })));
     try testing.expectEqualStrings("e", try content.readSmall(a, try m.ctx.layout.copyPath(a, "local/scratch", ".env")));
 
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = rec_path, .data = "{\"root\": \"" ++ "0" ** 40 ++ "\", \"version\": 1}\n" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = rec_path, .data = "{\"root\": \"" ++ &@as([40]u8, @splat('0')) ++ "\", \"version\": 1}\n" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ lc, ".other" }), .data = "o" });
     try testing.expectError(error.LocalMismatch, harness.keepIn(m.ctx, lc, ".other"));
     try testing.expectEqual(reconcile_mod.Stop.local_mismatch, (try harness.reconcileIn(m.ctx, lc, .apply)).stop);
@@ -856,7 +856,7 @@ test "a path entering a nested key is refused by keep and never linked by reconc
     try m.write("sub/x", "local");
     try testing.expectError(error.NestedKey, m.keep("sub/x"));
 
-    try store.writeFact(a, m.ctx.layout, key, m.ctx.machine_id, "sub/x", .file, "a" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, m.ctx.machine_id, "sub/x", .file, &@as([64]u8, @splat('a')));
     const r = try m.reconcile();
     const item = try expectItem(r, "sub/x", .invalid);
     try testing.expectEqualStrings("inside the nested key " ++ nested, item.detail.?);
@@ -886,7 +886,7 @@ test "kept paths colliding with each other are invalid and their local content i
     _ = try expectItem(r1, "readme.txt", .ok);
     try testing.expect(!(try expectItem(r1, "Readme.txt", .invalid)).unsettled);
 
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "NOTES.md", .file, "b" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "NOTES.md", .file, &@as([64]u8, @splat('b')));
     try fsutil.removePath(try m.path("notes.md"));
     try m.write("notes.md", "local");
     const r2 = try m.reconcile();
@@ -1322,8 +1322,8 @@ test "a failure at one path is that path's item; the other paths are still recon
     const c = try clone.inspect(a, mb.clone, mb.ctx.code_root);
     try block.add(a, c.common_dir, &.{"ro/stale"});
     const ro = try mb.path("ro");
-    try std.Io.Dir.cwd().setFilePermissions(io(), ro, @enumFromInt(0o555), .{});
-    defer std.Io.Dir.cwd().setFilePermissions(io(), ro, @enumFromInt(0o755), .{}) catch {};
+    try std.Io.Dir.cwd().setFilePermissions(io(), ro, @fromBackingInt(0o555), .{});
+    defer std.Io.Dir.cwd().setFilePermissions(io(), ro, @fromBackingInt(0o755), .{}) catch {};
 
     const r = try mb.reconcile();
     const failed = try expectItem(r, "ro/stale", .failed);
@@ -1356,7 +1356,7 @@ test "a .holt- name inside a kept directory: keep refuses it, and reconcile neve
 }
 
 fn chmod(path: []const u8, mode: u32) !void {
-    try std.Io.Dir.cwd().setFilePermissions(io(), path, @enumFromInt(mode), .{});
+    try std.Io.Dir.cwd().setFilePermissions(io(), path, @fromBackingInt(@intCast(mode)), .{});
 }
 
 test "outcomes that reach no state, and the released path with nothing to copy" {
@@ -1372,9 +1372,9 @@ test "outcomes that reach no state, and the released path with nothing to copy" 
     _ = try m.keep("gone");
     try store.writeReleased(a, m.ctx.layout, key, "gone");
     try std.Io.Dir.cwd().deleteFile(io(), try m.keptPath("gone"));
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "a/../b", .file, "b" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "a/../b", .file, &@as([64]u8, @splat('b')));
     try m.write("f", "a file where a directory belongs");
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "f/x", .file, "b" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "f/x", .file, &@as([64]u8, @splat('b')));
 
     const r = try m.reconcile();
     const inv = try expectItem(r, "a/../b", .invalid);
@@ -1421,7 +1421,7 @@ test "a link into another key of the chain that still holds the copy is reported
     try fsutil.ensureDir(try m.ctx.layout.keyDir(a, successor));
     try fsutil.writeFileAtomic(a, try m.ctx.layout.reserved(a, successor, store.record_basename), try std.fmt.allocPrint(a, "{{\"root\": \"{s}\", \"version\": 1}}\n", .{root}));
     try store.writeFrom(a, m.ctx.layout, successor, key);
-    try store.writeFact(a, m.ctx.layout, successor, m.ctx.machine_id, ".clasp.json", .file, "a" ** 64);
+    try store.writeFact(a, m.ctx.layout, successor, m.ctx.machine_id, ".clasp.json", .file, &@as([64]u8, @splat('a')));
 
     const r = try m.reconcile();
     try testing.expectEqualStrings(successor, r.resolved.?);
@@ -1913,7 +1913,7 @@ test "a directory holding a nested key is refused by keep, and once a fact names
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
     try testing.expectEqual(@as(usize, 0), (try clone.readPending(a, c.common_dir)).len);
 
-    try store.writeFact(a, m.ctx.layout, key, m.ctx.machine_id, "sub", .dir, "a" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, m.ctx.machine_id, "sub", .dir, &@as([64]u8, @splat('a')));
     try fsutil.removePath(try m.path("sub/x"));
     try std.Io.Dir.cwd().deleteDir(io(), try m.path("sub"));
     const item = try expectItem(try m.reconcile(), "sub", .kept_reserved);
@@ -2012,7 +2012,7 @@ test "relinking identical content keeps its executable bit in the kept copy" {
     try m.saveByRename("run.sh", "#!/bin/sh\n");
     try chmod(try m.path("run.sh"), 0o755);
     try testing.expect((try expectItem(try m.reconcile(), "run.sh", .relinked)).done);
-    const mode = @intFromEnum((try std.Io.Dir.cwd().statFile(io(), try m.keptPath("run.sh"), .{})).permissions);
+    const mode = @backingInt((try std.Io.Dir.cwd().statFile(io(), try m.keptPath("run.sh"), .{})).permissions);
     try testing.expectEqual(@as(@TypeOf(mode), 0o755), mode & 0o777);
 }
 
@@ -2053,8 +2053,8 @@ test "an invalid visited path: local content there is set aside and unsettled, a
 
     try m.write("seed", "s");
     _ = try m.keep("seed");
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "a\\b", .file, "b" ** 64);
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "../outside", .file, "b" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "a\\b", .file, &@as([64]u8, @splat('b')));
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "../outside", .file, &@as([64]u8, @splat('b')));
     try m.write("a\\b", "only here");
     const outside = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "outside" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = outside, .data = "not the tree's" });
@@ -2604,7 +2604,7 @@ test "the closing sweep: a temporary a state never reached is set aside" {
         try m.write(rel, "kept");
         _ = try m.keep(rel);
     }
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "NOTES.md", .file, "b" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "NOTES.md", .file, &@as([64]u8, @splat('b')));
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
     try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = "cfg", .op = .take_local });
     for ([_][]const u8{ "notes.md", "cfg" }) |rel| {
@@ -2689,8 +2689,8 @@ test "unprotected: holt's link of another spelling, content under a symlinked pa
     try fsutil.ensureDir(elsewhere);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ elsewhere, "a\\b" }), .data = "not the tree's" });
     try content.createLink(elsewhere, try m.path("ln"), .dir);
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "ln/a\\b", .file, "b" ** 64);
-    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", ".git/config", .file, "b" ** 64);
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "ln/a\\b", .file, &@as([64]u8, @splat('b')));
+    try store.writeFact(a, m.ctx.layout, key, "000000000000000b", ".git/config", .file, &@as([64]u8, @splat('b')));
 
     const index = try store.loadIndex(a, m.ctx.layout);
     const got = try reconcile_mod.unprotected(m.ctx, &index, m.clone);

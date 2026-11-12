@@ -255,8 +255,10 @@ pub fn setAside(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8
 fn create(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8, key: []const u8, rel: []const u8, source: []const u8, reason: Reason, src: Source) !Entry {
     const stamp = try createEntry(alloc, layout, machine_id);
     const edir = try entryDir(alloc, layout, stamp);
-    errdefer |err| if (err != error.Interrupted) std.Io.Dir.cwd().deleteTree(io(), edir) catch {};
+    return fill(alloc, layout, key, rel, source, reason, src, stamp) catch |err| return discard(edir, err);
+}
 
+fn fill(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const u8, source: []const u8, reason: Reason, src: Source, stamp: []const u8) !Entry {
     const dest = try dataPath(alloc, layout, stamp, rel);
     try fsutil.ensureDir(std.fs.path.dirname(dest).?);
     if (src.skipped.len == 0) {
@@ -287,7 +289,10 @@ pub fn setAsideStaged(alloc: std.mem.Allocator, layout: Layout, machine_id: []co
     const hex = try content.hashFile(alloc, staged);
     const stamp = try createEntry(alloc, layout, machine_id);
     const edir = try entryDir(alloc, layout, stamp);
-    errdefer |err| if (err != error.Interrupted) std.Io.Dir.cwd().deleteTree(io(), edir) catch {};
+    return fillStaged(alloc, layout, key, rel, staged, reason, hex, stamp, edir) catch |err| return discard(edir, err);
+}
+
+fn fillStaged(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const u8, staged: []const u8, reason: Reason, hex: [64]u8, stamp: []const u8, edir: []const u8) !Entry {
     const dest = try fsutil.joinSlashy(alloc, try std.fs.path.join(alloc, &.{ edir, "index" }), rel);
     try fsutil.ensureDir(std.fs.path.dirname(dest).?);
     try content.copyRegular(alloc, staged, dest);
@@ -327,18 +332,26 @@ pub fn moveAside(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u
     const stamp = try createEntry(alloc, layout, machine_id);
     const edir = try entryDir(alloc, layout, stamp);
     const dest = try dataPath(alloc, layout, stamp, rel);
-    {
-        errdefer |err| if (err != error.Interrupted) std.Io.Dir.cwd().deleteTree(io(), edir) catch {};
-        try writeManifest(alloc, layout, stamp, .{ .key = key, .rel = rel, .reason = @tagName(reason), .files = src.files, .modes = src.modes });
-        try interrupt.check(.move_manifest);
-        try fsutil.ensureDir(std.fs.path.dirname(dest).?);
-        try content.renameNoReplace(alloc, source, dest);
-    }
+    moveIn(alloc, layout, key, rel, source, reason, src, stamp, dest) catch |err| return discard(edir, err);
     switch (try verify(alloc, layout, stamp)) {
         .ok => {},
         else => return error.AsideVerifyFailed,
     }
     return .{ .stamp = stamp, .hash = src.hash };
+}
+
+fn moveIn(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const u8, source: []const u8, reason: Reason, src: Source, stamp: []const u8, dest: []const u8) !void {
+    try writeManifest(alloc, layout, stamp, .{ .key = key, .rel = rel, .reason = @tagName(reason), .files = src.files, .modes = src.modes });
+    try interrupt.check(.move_manifest);
+    try fsutil.ensureDir(std.fs.path.dirname(dest).?);
+    try content.renameNoReplace(alloc, source, dest);
+}
+
+/// `err`, after removing the partial entry at `edir` unless `err` stands in
+/// for a kill, which removes nothing.
+fn discard(edir: []const u8, err: anytype) @TypeOf(err) {
+    if (err != error.Interrupted) std.Io.Dir.cwd().deleteTree(io(), edir) catch {};
+    return err;
 }
 
 /// The manifest of `stamp`, or null when the entry or its manifest is gone
@@ -780,7 +793,7 @@ test "readManifest: a path that escapes the entry, or a file outside rel, makes 
     defer f.deinit();
     const a = f.alloc();
     const layout: Layout = .{ .synced_root = try f.path("synced") };
-    const h = "a" ** 64;
+    const h = &@as([64]u8, @splat('a'));
     for ([_][]const u8{
         "{\"files\": {\"../x\": \"" ++ h ++ "\"}, \"key\": \"k/r\", \"reason\": \"keep\", \"rel\": \"../x\"}",
         "{\"files\": {\"d/../../y\": \"" ++ h ++ "\"}, \"key\": \"k/r\", \"reason\": \"keep\", \"rel\": \"d\"}",
@@ -857,8 +870,8 @@ test "a partial aside holds every file it can copy and names the rest; a whole o
     try testing.expectEqualStrings(e.stamp, (try ensureAside(a, layout, common, mid, "k/r", "d", src, .blocked, .{ .partial = .{ .ignore_case = false } })).stamp);
 
     const unreadable = try f.write("clone/d/secret", "secret");
-    try std.Io.Dir.cwd().setFilePermissions(io(), unreadable, @enumFromInt(0o000), .{});
-    defer std.Io.Dir.cwd().setFilePermissions(io(), unreadable, @enumFromInt(0o644), .{}) catch {};
+    try std.Io.Dir.cwd().setFilePermissions(io(), unreadable, @fromBackingInt(0o000), .{});
+    defer std.Io.Dir.cwd().setFilePermissions(io(), unreadable, @fromBackingInt(0o644), .{}) catch {};
     if (std.Io.Dir.cwd().openFile(io(), unreadable, .{})) |file| {
         file.close(io());
         return;
@@ -925,7 +938,7 @@ test "an entry records each file's executable bits: verify checks them, and an e
     const cwd = std.Io.Dir.cwd();
     const src = try f.write("clone/d/run.sh", "#!/bin/sh\n");
     _ = try f.write("clone/d/plain", "plain");
-    try cwd.setFilePermissions(io(), src, @enumFromInt(0o755), .{});
+    try cwd.setFilePermissions(io(), src, @fromBackingInt(0o755), .{});
     const dir = try f.path("clone/d");
 
     const e1 = try ensureAside(a, layout, common, mid, "k/r", "d", dir, .blocked, .{ .partial = .{ .ignore_case = false } });
@@ -933,12 +946,12 @@ test "an entry records each file's executable bits: verify checks them, and an e
     for (m.modes.?) |md| try testing.expectEqual(@as(u32, if (std.mem.eql(u8, md.path, "d/run.sh")) 0o111 else 0), md.mode & 0o111);
     try testing.expectEqualStrings(e1.stamp, (try ensureAside(a, layout, common, mid, "k/r", "d", dir, .blocked, .{ .partial = .{ .ignore_case = false } })).stamp);
 
-    try cwd.setFilePermissions(io(), src, @enumFromInt(0o644), .{});
+    try cwd.setFilePermissions(io(), src, @fromBackingInt(0o644), .{});
     const e2 = try ensureAside(a, layout, common, mid, "k/r", "d", dir, .blocked, .{ .partial = .{ .ignore_case = false } });
     try testing.expect(!std.mem.eql(u8, e1.stamp, e2.stamp));
     try testing.expectEqual(Check.ok, try verify(a, layout, e2.stamp));
 
-    try cwd.setFilePermissions(io(), try dataPath(a, layout, e1.stamp, "d/run.sh"), @enumFromInt(0o644), .{});
+    try cwd.setFilePermissions(io(), try dataPath(a, layout, e1.stamp, "d/run.sh"), @fromBackingInt(0o644), .{});
     try testing.expectEqual(Check.mismatch, try verify(a, layout, e1.stamp));
 }
 
@@ -1028,7 +1041,7 @@ test "verify: with Windows' rules, an entry naming a device or a stream is not v
 }
 
 test "unplaceable: a manifest is placed back only with a valid key, valid paths, and on Windows no device or stream name" {
-    const h = "a" ** 64;
+    const h = &@as([64]u8, @splat('a'));
     const good: Manifest = .{ .key = "github.com/acme/widget", .rel = "d", .reason = "keep", .files = &.{.{ .path = "d/x", .hex = h.* }} };
     try testing.expect(unplaceable(good) == null);
     var bad = good;
@@ -1053,8 +1066,8 @@ test "setAside: a directory whose manifest passes 1 MiB is set aside, verifies, 
     defer f.deinit();
     const a = f.alloc();
     const layout: Layout = .{ .synced_root = try f.path("synced") };
-    const rel = "d" ** 200;
-    for (0..2400) |i| _ = try f.write(try std.fmt.allocPrint(a, "clone/{s}/{d:0>4}{s}", .{ rel, i, "f" ** 196 }), "x");
+    const rel = &@as([200]u8, @splat('d'));
+    for (0..2400) |i| _ = try f.write(try std.fmt.allocPrint(a, "clone/{s}/{d:0>4}{s}", .{ rel, i, &@as([196]u8, @splat('f')) }), "x");
 
     const e = try setAside(a, layout, mid, "k/r", rel, try f.path("clone/" ++ rel), .keep);
     const st = try std.Io.Dir.cwd().statFile(io(), try std.fs.path.join(a, &.{ try entryDir(a, layout, e.stamp), "manifest" }), .{});
@@ -1074,7 +1087,7 @@ test "ensureAside: an aside-done record past 1 MiB does not fail the next set-as
     var buf: std.ArrayList(u8) = .empty;
     for (0..6000) |i| try appendDoneLine(a, &buf, .{
         .rel = try std.fmt.allocPrint(a, "old/{d}", .{i}),
-        .sha256 = "a" ** 64,
+        .sha256 = &@as([64]u8, @splat('a')),
         .synced_root = try f.path("elsewhere"),
         .stamp = "20260101T000000.000Z-" ++ mid ++ "-00000000",
     });

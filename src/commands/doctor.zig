@@ -1485,7 +1485,7 @@ test "run: a clone that does not match its local/ key fails kept store valid" {
     const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
     const key_dir = try layout.keyDir(arena, "local/scratch");
     try fsutil.ensureDir(key_dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, kept.store.record_basename }), .data = "{\"version\": 1, \"root\": \"" ++ "0" ** 40 ++ "\"}\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, kept.store.record_basename }), .data = "{\"version\": 1, \"root\": \"" ++ &@as([40]u8, @splat('0')) ++ "\"}\n" });
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -1917,7 +1917,7 @@ test "statusLine: a long path keeps its end, leaving the last two columns free" 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const path = "/synced/" ++ "a/" ** 40 ++ "refs/heads";
+    const path = "/synced/" ++ &@as([80]u8, @bitCast(@as([40][2]u8, @splat("a/".*)))) ++ "refs/heads";
     try testing.expectEqualStrings("holt: doctor: scanned 1234 folders, now in ...a/a/a/a/a/a/a/refs/heads (1h02m)", try statusLine(arena, try lineEnv(arena), .workspace, 1234, path, "/synced", 80, .fromSeconds(3725)));
 }
 
@@ -1925,7 +1925,7 @@ test "statusLine: wide characters are counted as two columns, and a cut never sp
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const path = "/synced/projects/" ++ "\u{30de}\u{30a4}\u{30c9}\u{30e9}\u{30a4}\u{30d6}/" ** 8 ++ "refs/heads";
+    const path = "/synced/projects/" ++ &@as([152]u8, @bitCast(@as([8][19]u8, @splat("\u{30de}\u{30a4}\u{30c9}\u{30e9}\u{30a4}\u{30d6}/".*)))) ++ "refs/heads";
     const line = try statusLine(arena, try lineEnv(arena), .workspace, 1234, path, "/synced", 80, .fromSeconds(3725));
     try testing.expect(std.unicode.utf8ValidateSlice(line));
     var width: usize = 0;

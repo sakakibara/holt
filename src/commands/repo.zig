@@ -3005,8 +3005,8 @@ test "remove: -p and --clone whose delete fails leave the member in the project"
     const stuck = try std.fs.path.join(arena, &.{ clone_path, ".git", "stuck" });
     try fsutil.ensureDir(stuck);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ stuck, "f" }), .data = "x" });
-    try std.Io.Dir.cwd().setFilePermissions(fsutil.io(), stuck, @enumFromInt(0o500), .{});
-    defer std.Io.Dir.cwd().setFilePermissions(fsutil.io(), stuck, @enumFromInt(0o755), .{}) catch {};
+    try std.Io.Dir.cwd().setFilePermissions(fsutil.io(), stuck, @fromBackingInt(0o500), .{});
+    defer std.Io.Dir.cwd().setFilePermissions(fsutil.io(), stuck, @fromBackingInt(0o755), .{}) catch {};
     if (std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ stuck, "probe" }), .data = "x" })) |_| return error.SkipZigTest else |_| {}
 
     const got = try testutil.runCmd(arena, remove_command.run, ws, &.{ "widget", "-p", "only", "--clone", "--yes" });

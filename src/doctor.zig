@@ -861,7 +861,7 @@ test "checkD1: counts each folder it lists into the progress, and names none onc
 test "Progress: a path longer than it holds keeps its end, cut at a character boundary" {
     var progress: Progress = .{};
     // The last `path_max` bytes begin inside the three-byte character.
-    const tail = "x" ** (Progress.path_max - 2);
+    const tail = &@as([Progress.path_max - 2]u8, @splat('x'));
     progress.enter("ab\u{30de}" ++ tail);
     var buf: [Progress.path_max]u8 = undefined;
     const seen = progress.snapshot(&buf);

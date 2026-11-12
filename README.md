@@ -749,7 +749,7 @@ curl -fsSL https://raw.githubusercontent.com/sakakibara/holt/main/scripts/instal
 Prefer a manual install? Grab the tarball for your platform from the
 [latest release](https://github.com/sakakibara/holt/releases/latest)
 (`holt-{macos,linux}-{aarch64,x86_64}.tar.gz`) and put `holt` on your `PATH`, or
-build from source with Zig 0.16 (`zig build`, binary at `zig-out/bin/holt`).
+build from source with Zig 0.17 (`zig build`, binary at `zig-out/bin/holt`).
 Either way, `holt upgrade` self-updates afterward.
 
 On Windows (PowerShell):

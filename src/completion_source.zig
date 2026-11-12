@@ -765,7 +765,7 @@ test "resolveCompletion: kept paths below the working directory, released ones f
 
     const layout: kept.store.Layout = .{ .synced_root = ws.cfg.synced_root };
     const key = "github.com/acme/widget";
-    const hex = "a" ** 64;
+    const hex = &@as([64]u8, @splat('a'));
     try kept.store.createExclusive(arena, try layout.reserved(arena, key, kept.store.record_basename), "{\"version\": 1}\n");
     try kept.store.writeFact(arena, layout, key, "000000000000000a", ".env", .file, hex);
     try kept.store.writeFact(arena, layout, key, "000000000000000a", "app/config/local.json", .file, hex);

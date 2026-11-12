@@ -906,7 +906,7 @@ pub fn stampTime(stamp: []const u8) ?i64 {
     var y: u32 = 1970;
     while (y < year) : (y += 1) days += if (std.time.epoch.isLeapYear(@intCast(y))) 366 else 365;
     var mo: u4 = 1;
-    while (mo < month) : (mo += 1) days += std.time.epoch.getDaysInMonth(@intCast(year), @enumFromInt(mo));
+    while (mo < month) : (mo += 1) days += std.time.epoch.getDaysInMonth(@intCast(year), @fromBackingInt(@intCast(mo)));
     days += day - 1;
     return ((days * 24 + hour) * 60 + min) * 60 * 1000 + @as(i64, sec) * 1000 + ms;
 }

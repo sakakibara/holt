@@ -113,7 +113,7 @@ pub fn runEnvLimited(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[
                 timed_out = true;
                 if (builtin.os.tag == .windows) {
                     const windows = std.os.windows;
-                    _ = windows.ntdll.NtTerminateProcess(child.id.?, @enumFromInt(1));
+                    _ = windows.ntdll.NtTerminateProcess(child.id.?, @fromBackingInt(1));
                 } else posix.kill(child.id.?);
                 drain = now.addDuration(.fromSeconds(1));
             } else if (pending) |n| {
@@ -428,7 +428,7 @@ test "runEnvLimited: a child that outlives the limit is killed at it, with every
     const pid = try std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, res.stdout, " \n"), 10);
     var tries: usize = 0;
     while (tries < 100) : (tries += 1) {
-        std.posix.kill(pid, @enumFromInt(0)) catch |err| switch (err) {
+        std.posix.kill(pid, @fromBackingInt(0)) catch |err| switch (err) {
             error.ProcessNotFound => return,
             else => return err,
         };
@@ -526,7 +526,7 @@ fn expectChildEndsWith(sig: std.posix.SIG, fed: bool) !void {
         if (builtin.link_libc) std.c._exit(3) else std.os.linux.exit_group(3);
     }
     const holt: posix.pid_t = @intCast(rc);
-    var status: if (builtin.link_libc) c_int else u32 = 0;
+    var status: c_int = 0;
     var reaped = false;
     defer if (!reaped) {
         _ = sys.kill(holt, .KILL);
@@ -563,7 +563,7 @@ fn expectChildEndsWith(sig: std.posix.SIG, fed: bool) !void {
 
     tries = 0;
     while (tries < 250) : (tries += 1) {
-        posix.kill(q, @enumFromInt(0)) catch |err| switch (err) {
+        posix.kill(q, @fromBackingInt(0)) catch |err| switch (err) {
             error.ProcessNotFound => {
                 query = null;
                 return;
@@ -683,7 +683,7 @@ test "runEnvLimited: child exit bounds inherited pipe draining" {
     const pid = try std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, result.stderr, " \n"), 10);
     var gone = false;
     for (0..100) |_| {
-        std.posix.kill(pid, @enumFromInt(0)) catch |err| switch (err) {
+        std.posix.kill(pid, @fromBackingInt(0)) catch |err| switch (err) {
             error.ProcessNotFound => {
                 gone = true;
                 break;
@@ -738,7 +738,7 @@ test "runEnvLimited: notice failure cleans up the child" {
     const pid_text = try tmp.dir.readFileAlloc(testing.io, "pid", testing.allocator, .limited(100));
     defer testing.allocator.free(pid_text);
     const pid = try std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, pid_text, " \n"), 10);
-    try testing.expectError(error.ProcessNotFound, std.posix.kill(pid, @enumFromInt(0)));
+    try testing.expectError(error.ProcessNotFound, std.posix.kill(pid, @fromBackingInt(0)));
 }
 
 test "runEnvLimited: query leader has its own session" {
@@ -844,5 +844,5 @@ test "runEnvLimited: pending cancellation cannot interrupt reaping" {
     var future = try io.concurrent(Worker.run, .{ io, &spawned.child, &ready });
     try ready.wait(io);
     try future.cancel(io);
-    try testing.expectError(error.ProcessNotFound, std.posix.kill(pid, @enumFromInt(0)));
+    try testing.expectError(error.ProcessNotFound, std.posix.kill(pid, @fromBackingInt(0)));
 }

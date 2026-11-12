@@ -2374,7 +2374,7 @@ const failure_reasons = [_]struct { phrases: []const []const u8, failure: Failur
 /// <status>)`, transient.
 fn queryFailure(a: std.mem.Allocator, stderr: []const u8, status: u8) !Failure {
     for (failure_reasons) |r| {
-        for (r.phrases) |phrase| if (std.ascii.indexOfIgnoreCase(stderr, phrase) != null) return r.failure;
+        for (r.phrases) |phrase| if (std.ascii.findIgnoreCase(stderr, phrase) != null) return r.failure;
     }
     return .{ .why = try std.fmt.allocPrint(a, "git ls-remote failed (exit {d})", .{status}), .class = .transient };
 }

@@ -735,29 +735,12 @@ pub fn keepPath(ctx: Ctx, index: *const store.KeyIndex, worktree_path: []const u
     // Writing the fact can fail once the fact is on disk, so the rollback
     // covers only what comes before it; a later failure is an interrupted
     // keep, finished by keeping again.
-    const entry = window: {
-        var added: Added = .{ .replaced = pending };
+    var added: Added = .{ .replaced = pending };
+    const entry = keepWindow(ctx, index, c, key, rel, temp_line, src, merge, default_root, roots, &added) catch |err| {
         // Interrupted stands in for a kill, which runs no rollback; out of
         // memory cannot run one.
-        errdefer |err| if (err != error.Interrupted and err != error.OutOfMemory) rollBack(a, c, rel, temp_line, added);
-        try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = rel, .op = .keep, .worktree = c.worktree });
-        try interrupt.check(.keep_pending);
-
-        _ = try store.ensureKey(a, ctx.layout, index, key, try clone.originUrl(a, c.main), default_root, roots);
-        try interrupt.check(.keep_key);
-
-        const before = try block.read(a, c.common_dir);
-        added.line = !paths.contains(before.rels, rel);
-        added.temp = !paths.contains(before.temps, temp_line);
-        try block.add(a, c.common_dir, &.{ rel, temp_line });
-        try interrupt.check(.keep_block);
-
-        if (merge) |m| for (m.absorbed) |l| {
-            _ = try content.removeLinkIf(a, try fsutil.joinSlashy(a, src, l.sub), l.raw);
-        };
-        const got = try aside.ensureAside(a, ctx.layout, c.common_dir, ctx.machine_id, key, rel, src, .keep, .whole);
-        try interrupt.check(.keep_aside);
-        break :window got;
+        if (err != error.Interrupted and err != error.OutOfMemory) rollBack(a, c, rel, temp_line, added);
+        return err;
     };
 
     if (merge) |m| {
@@ -943,6 +926,30 @@ pub fn dropTempLine(a: std.mem.Allocator, c: clone.Clone, temp: []const u8) !voi
 
 /// What a keep wrote before its fact: the pending record its own replaced,
 /// if any, and whether it added `rel`'s block line and its temporary's.
+/// The part of `keepPath` before its fact, recording in `added` what it
+/// wrote so `rollBack` can undo it.
+fn keepWindow(ctx: Ctx, index: *const store.KeyIndex, c: clone.Clone, key: []const u8, rel: []const u8, temp_line: []const u8, src: []const u8, merge: ?Merge, default_root: ?[]const u8, roots: []const []const u8, added: *Added) !aside.Entry {
+    const a = ctx.alloc;
+    try clone.addPending(a, c.common_dir, .{ .tree = c.tree, .rel = rel, .op = .keep, .worktree = c.worktree });
+    try interrupt.check(.keep_pending);
+
+    _ = try store.ensureKey(a, ctx.layout, index, key, try clone.originUrl(a, c.main), default_root, roots);
+    try interrupt.check(.keep_key);
+
+    const before = try block.read(a, c.common_dir);
+    added.line = !paths.contains(before.rels, rel);
+    added.temp = !paths.contains(before.temps, temp_line);
+    try block.add(a, c.common_dir, &.{ rel, temp_line });
+    try interrupt.check(.keep_block);
+
+    if (merge) |m| for (m.absorbed) |l| {
+        _ = try content.removeLinkIf(a, try fsutil.joinSlashy(a, src, l.sub), l.raw);
+    };
+    const got = try aside.ensureAside(a, ctx.layout, c.common_dir, ctx.machine_id, key, rel, src, .keep, .whole);
+    try interrupt.check(.keep_aside);
+    return got;
+}
+
 const Added = struct { replaced: ?clone.Pending, line: bool = false, temp: bool = false };
 
 /// Undoes what `added` records this keep wrote before its fact: drops
@@ -1276,13 +1283,13 @@ test "replaceWithLink: the kept copy gains the executable bits of the content it
     const d = try f.write("clone/bin/tool", "tool");
     const target = try f.write("synced/kept/k/r/run.sh", "#!/bin/sh\n");
     const dtarget = try f.write("synced/kept/k/r/bin/tool", "tool");
-    for ([_][]const u8{ p, d }) |x| try cwd.setFilePermissions(io(), x, @enumFromInt(0o755), .{});
-    for ([_][]const u8{ target, dtarget }) |x| try cwd.setFilePermissions(io(), x, @enumFromInt(0o644), .{});
+    for ([_][]const u8{ p, d }) |x| try cwd.setFilePermissions(io(), x, @fromBackingInt(0o755), .{});
+    for ([_][]const u8{ target, dtarget }) |x| try cwd.setFilePermissions(io(), x, @fromBackingInt(0o644), .{});
 
     try testing.expect(try replaceWithLink(t, "run.sh", target, try content.hashPath(a, p)));
     try testing.expect(try replaceWithLink(t, "bin", std.fs.path.dirname(dtarget).?, try content.hashPath(a, try f.path("clone/bin"))));
     for ([_][]const u8{ target, dtarget }) |x| {
-        const mode = @intFromEnum((try cwd.statFile(io(), x, .{})).permissions);
+        const mode = @backingInt((try cwd.statFile(io(), x, .{})).permissions);
         try testing.expectEqual(@as(@TypeOf(mode), 0o755), mode & 0o777);
     }
 }
@@ -1503,15 +1510,15 @@ test "clearStaging: a slot whose swapped-out copy cannot be set aside is left in
 
     try fsutil.ensureDir(try layout.asideDir(a));
     const asides = try layout.asideDir(a);
-    try std.Io.Dir.cwd().setFilePermissions(io(), asides, @enumFromInt(0o555), .{});
-    defer std.Io.Dir.cwd().setFilePermissions(io(), asides, @enumFromInt(0o755), .{}) catch {};
+    try std.Io.Dir.cwd().setFilePermissions(io(), asides, @fromBackingInt(0o555), .{});
+    defer std.Io.Dir.cwd().setFilePermissions(io(), asides, @fromBackingInt(0o755), .{}) catch {};
     const left = try clearStaging(a, layout, mid, test_key);
     try testing.expectEqual(@as(usize, 1), left.len);
     try testing.expectEqualStrings(std.fs.path.dirname(staged.path).?, left[0].slot);
     try testing.expectEqualStrings("old", try content.readSmall(a, try std.fs.path.join(a, &.{ left[0].slot, "old", "old" })));
     try testing.expectEqual(content.Entry.absent, try content.entryAt(std.fs.path.dirname(other.path).?));
 
-    try std.Io.Dir.cwd().setFilePermissions(io(), asides, @enumFromInt(0o755), .{});
+    try std.Io.Dir.cwd().setFilePermissions(io(), asides, @fromBackingInt(0o755), .{});
     try testing.expectEqual(@as(usize, 0), (try clearStaging(a, layout, mid, test_key)).len);
     try testing.expect(try asideHolds(a, layout, "d", "d/old", "old"));
 }

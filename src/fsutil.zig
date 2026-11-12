@@ -204,7 +204,7 @@ pub fn pathIsInside(child: []const u8, parent: []const u8) bool {
 pub fn isOnlineOnly(alloc: std.mem.Allocator, path: []const u8) bool {
     if (builtin.is_test) if (online_only_for_test) |p| if (std.mem.eql(u8, p, path)) return true;
     if (builtin.os.tag.isDarwin()) {
-        const z = alloc.dupeZ(u8, path) catch return false;
+        const z = alloc.dupeSentinel(u8, path, 0) catch return false;
         var st: std.c.Stat = undefined;
         if (std.c.fstatat(std.c.AT.FDCWD, z, &st, std.c.AT.SYMLINK_NOFOLLOW) == 0) {
             const sf_dataless: u32 = 0x40000000;

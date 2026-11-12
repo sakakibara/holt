@@ -242,7 +242,7 @@ pub fn processRunning(pid: u32) bool {
         return code == still_active;
     }
     if (pid == 0 or pid > std.math.maxInt(std.posix.pid_t)) return false;
-    std.posix.kill(@intCast(pid), @enumFromInt(0)) catch |err| return err != error.ProcessNotFound;
+    std.posix.kill(@intCast(pid), @fromBackingInt(0)) catch |err| return err != error.ProcessNotFound;
     return true;
 }
 

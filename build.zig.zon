@@ -1,24 +1,24 @@
 .{
     .name = .holt,
     .version = "0.10.2",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .fingerprint = 0x27d1d63bb90f450,
     .dependencies = .{
         .json = .{
-            .url = "https://github.com/sakakibara/json-zig/archive/refs/tags/v0.3.0.tar.gz",
-            .hash = "json-0.3.0-YtF7JetzBwAFwsuTXCOdDJweONb0496nU39LEU8EC1rk",
+            .url = "https://github.com/sakakibara/json-zig/archive/refs/tags/v0.5.1.tar.gz",
+            .hash = "json-0.5.1-YtF7JRpNCQBdTL7h4Jil0ehssZYTjl6swidRUWIFrEaL",
         },
         .toml = .{
-            .url = "https://github.com/sakakibara/toml-zig/archive/refs/tags/v0.6.0.tar.gz",
-            .hash = "toml-0.6.0-L7MJe3OzCwA3XOqr_osjlm3RKU-wMgeeap3oKpgdfuYw",
+            .url = "https://github.com/sakakibara/toml-zig/archive/refs/tags/v0.7.0.tar.gz",
+            .hash = "toml-0.7.0-L7MJe0rQCwB8LBHX4e5pxtixNerbBqh-L9JqpkbZ5KpV",
         },
         .env = .{
-            .url = "https://github.com/sakakibara/env-zig/archive/refs/tags/v0.2.1.tar.gz",
-            .hash = "env-0.2.1-sTEXssiOAACFP4MSdU4PdaA1p4FT7zdliMFEMZEJVG2x",
+            .url = "https://github.com/sakakibara/env-zig/archive/refs/tags/v0.3.0.tar.gz",
+            .hash = "env-0.3.0-sTEXskSTAADfNfqIW4xy9teqxpMqGfF3_-rMbt2PH389",
         },
         .cli = .{
-            .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.3.0.tar.gz",
-            .hash = "cli-0.3.0-xmo03wjtBABDlKZlNQdlehkrYXuXAf_hkEjFB0QrRAC3",
+            .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.4.0.tar.gz",
+            .hash = "cli-0.4.0-xmo03-H_BACDPbF9VusTGeo1lyKKIz48_sHOhmBd_oFb",
         },
     },
     .paths = .{

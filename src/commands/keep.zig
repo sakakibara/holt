@@ -2387,7 +2387,7 @@ test "sync: a path another machine kept whose copy has not arrived names the asi
     try f.write(".env", "x");
     _ = try f.run(&.{".env"});
     const k = try keptCtxOf(&f);
-    try kept.store.writeFact(a, k.layout, "github.com/acme/widget", "000000000000000f", "a.local", .file, "a" ** 64);
+    try kept.store.writeFact(a, k.layout, "github.com/acme/widget", "000000000000000f", "a.local", .file, &@as([64]u8, @splat('a')));
     try kept.store.writeHost(a, k.layout, "000000000000000f", "laptop");
     try f.write("a.local", "mine");
 
@@ -2432,7 +2432,7 @@ test "keep: another machine's path whose kept copy has not arrived is refused, -
     try f.write(".env", "x");
     _ = try f.run(&.{".env"});
     const k = try keptCtxOf(&f);
-    try kept.store.writeFact(a, k.layout, "github.com/acme/widget", "000000000000000f", "a.local", .file, "a" ** 64);
+    try kept.store.writeFact(a, k.layout, "github.com/acme/widget", "000000000000000f", "a.local", .file, &@as([64]u8, @splat('a')));
     try kept.store.writeHost(a, k.layout, "000000000000000f", "laptop");
     try f.write("a.local", "mine");
 

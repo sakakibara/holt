@@ -97,13 +97,13 @@ pub fn spawn(alloc: std.mem.Allocator, io: std.Io, argv: []const []const u8, cwd
     defer arena.deinit();
     const a = arena.allocator();
     const args = try a.allocSentinel(?[*:0]const u8, argv.len, null);
-    for (argv, 0..) |arg, i| args[i] = (try a.dupeZ(u8, arg)).ptr;
-    const directory = if (cwd) |c| try a.dupeZ(u8, c) else null;
+    for (argv, 0..) |arg, i| args[i] = (try a.dupeSentinel(u8, arg, 0)).ptr;
+    const directory = if (cwd) |c| try a.dupeSentinel(u8, c, 0) else null;
     const environ = Threaded.global_single_threaded.environ.process_environ;
     const env = if (environ_map) |map| try map.createPosixBlock(a, .{}) else try environ.createPosixBlock(a, .{});
     var paths: std.ArrayList([:0]const u8) = .empty;
     if (std.mem.indexOfScalar(u8, argv[0], '/') != null) {
-        try paths.append(a, try a.dupeZ(u8, argv[0]));
+        try paths.append(a, try a.dupeSentinel(u8, argv[0], 0));
     } else {
         var it = std.mem.tokenizeScalar(u8, environ.getPosix("PATH") orelse Threaded.default_PATH, ':');
         while (it.next()) |entry| try paths.append(a, try std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ entry, argv[0] }, 0));
@@ -135,7 +135,7 @@ pub fn spawn(alloc: std.mem.Allocator, io: std.Io, argv: []const []const u8, cwd
         for (guarded, &previous) |sig, *old| posix.sigaction(sig, old, null);
         if (builtin.os.tag == .linux) {
             const linux = std.os.linux;
-            _ = linux.prctl(@intFromEnum(linux.PR.SET_PDEATHSIG), @intFromEnum(posix.SIG.KILL), 0, 0, 0);
+            _ = linux.prctl(@backingInt(linux.PR.SET_PDEATHSIG), @backingInt(posix.SIG.KILL), 0, 0, 0);
             if (sys.getppid() != parent) linux.exit_group(127);
         }
         posix.sigprocmask(posix.SIG.SETMASK, &mask, null);
