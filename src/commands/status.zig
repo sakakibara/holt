@@ -49,7 +49,7 @@ const KeptView = struct {
         scratch.* = kept.RunScratch.init(alloc, ws.env) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
-                v.unjudged = try std.fmt.allocPrint(alloc, "cannot judge kept files: {s}", .{@errorName(err)});
+                v.unjudged = try alloc.print("cannot judge kept files: {s}", .{@errorName(err)});
                 return v;
             },
         };
@@ -57,7 +57,7 @@ const KeptView = struct {
         const ctx = kept_cmd.reportCtx(alloc, ws, scratch) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
-                v.unjudged = try std.fmt.allocPrint(alloc, "cannot judge kept files: {s}", .{@errorName(err)});
+                v.unjudged = try alloc.print("cannot judge kept files: {s}", .{@errorName(err)});
                 return v;
             },
         };
@@ -72,7 +72,7 @@ const KeptView = struct {
         v.index = kept.store.loadIndex(alloc, ctx.layout) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
-                v.unjudged = try std.fmt.allocPrint(alloc, "cannot judge kept files: kept/ cannot be read ({s})", .{@errorName(err)});
+                v.unjudged = try alloc.print("cannot judge kept files: kept/ cannot be read ({s})", .{@errorName(err)});
                 return v;
             },
         };
@@ -695,7 +695,7 @@ fn report(ctx: *app.Ctx, ws: *const workspace.Workspace, view: *const KeptView, 
             for (locals) |name| {
                 if (util.hasControl(name)) {
                     try ctx.out.print("    {s}: {s}\n", .{ try ui.printable(alloc, name), util.controlWords(name) });
-                } else try ctx.out.print("    {s} (run: holt keep {s})\n", .{ name, try util.q(ctx, try std.fs.path.join(alloc, &.{ p.hub_path, name })) });
+                } else try ctx.out.print("    {s} (run: holt keep {s})\n", .{ name, try util.q(ctx, try std.Io.Dir.path.join(alloc, &.{ p.hub_path, name })) });
             }
         }
     }
@@ -747,21 +747,21 @@ test "run: lists loose local files and skips the ignore-list" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    const repos: std.array_hash_map.String([]const u8) = .empty;
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    const hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ hub, ".claude" })); // ignored
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, ".DS_Store" }), .data = "x\n" }); // ignored
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ hub, ".claude" })); // ignored
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ hub, ".DS_Store" }), .data = "x\n" }); // ignored
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "local-only") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "notes.md") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, ".claude") == null);
-    try testing.expect(std.mem.indexOf(u8, got.out, ".DS_Store") == null);
+    try testing.expect(std.mem.find(u8, got.out, "local-only") != null);
+    try testing.expect(std.mem.find(u8, got.out, "notes.md") != null);
+    try testing.expect(std.mem.find(u8, got.out, ".claude") == null);
+    try testing.expect(std.mem.find(u8, got.out, ".DS_Store") == null);
 }
 
 test "run: lists a real loose file but skips a symlink entry (the keep round-trip)" {
@@ -775,23 +775,23 @@ test "run: lists a real loose file but skips a symlink entry (the keep round-tri
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    const repos: std.array_hash_map.String([]const u8) = .empty;
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    const hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
 
-    const content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    const content = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(content);
-    const link_path = try std.fs.path.join(arena, &.{ hub, "docs" });
+    const link_path = try std.Io.Dir.path.join(arena, &.{ hub, "docs" });
     try fsutil.replaceSymlink(content, link_path);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "local-only") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "notes.md") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "docs") == null);
+    try testing.expect(std.mem.find(u8, got.out, "local-only") != null);
+    try testing.expect(std.mem.find(u8, got.out, "notes.md") != null);
+    try testing.expect(std.mem.find(u8, got.out, "docs") == null);
 }
 
 test "run: flags a dirty repo and an unpushed repo, a missing clone is shown, not a crash" {
@@ -808,14 +808,14 @@ test "run: flags a dirty repo and an unpushed repo, a missing clone is shown, no
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "dirty-repo", "https://holt-test.invalid/acme/dirty-repo");
     try repos.put(arena, "unpushed-repo", "https://holt-test.invalid/acme/unpushed-repo");
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const dirty_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "dirty-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(dirty_path).?);
+    const dirty_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "dirty-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(dirty_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_a, dirty_path });
     {
         var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), dirty_path, .{});
@@ -823,8 +823,8 @@ test "run: flags a dirty repo and an unpushed repo, a missing clone is shown, no
         try dir.writeFile(fsutil.io(), .{ .sub_path = "untracked.txt", .data = "hi\n" });
     }
 
-    const unpushed_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "unpushed-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(unpushed_path).?);
+    const unpushed_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "unpushed-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(unpushed_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_b, unpushed_path });
     {
         var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), unpushed_path, .{});
@@ -833,21 +833,21 @@ test "run: flags a dirty repo and an unpushed repo, a missing clone is shown, no
     }
     try testutil.runGit(&sb, unpushed_path, &.{ "commit", "-am", "local change" });
 
-    const gone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "gone" });
+    const gone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "gone" });
     try testing.expect(!fsutil.exists(gone_path));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "dirty-repo: branch=main dirty\n") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "unpushed-repo: branch=main unpushed\n") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "gone: missing\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/proj") != null);
+    try testing.expect(std.mem.find(u8, got.out, "dirty-repo: branch=main dirty\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "unpushed-repo: branch=main unpushed\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "gone: missing\n") != null);
 
     const filtered = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--dirty" });
     try testing.expectEqual(@as(u8, 0), filtered.code);
-    try testing.expect(std.mem.indexOf(u8, filtered.out, "dirty-repo") != null);
-    try testing.expect(std.mem.indexOf(u8, filtered.out, "unpushed-repo") != null);
-    try testing.expect(std.mem.indexOf(u8, filtered.out, "gone") == null);
+    try testing.expect(std.mem.find(u8, filtered.out, "dirty-repo") != null);
+    try testing.expect(std.mem.find(u8, filtered.out, "unpushed-repo") != null);
+    try testing.expect(std.mem.find(u8, filtered.out, "gone") == null);
 }
 
 test "run: a corrupted clone reports unreadable instead of a benign branch" {
@@ -861,21 +861,21 @@ test "run: a corrupted clone reports unreadable instead of a benign branch" {
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "corrupt-repo", "https://holt-test.invalid/acme/corrupt-repo");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const corrupt_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "corrupt-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(corrupt_path).?);
+    const corrupt_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "corrupt-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(corrupt_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, corrupt_path });
 
-    const head_path = try std.fs.path.join(arena, &.{ corrupt_path, ".git", "HEAD" });
+    const head_path = try std.Io.Dir.path.join(arena, &.{ corrupt_path, ".git", "HEAD" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "corrupt-repo: unreadable") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "branch=") == null);
+    try testing.expect(std.mem.find(u8, got.out, "corrupt-repo: unreadable") != null);
+    try testing.expect(std.mem.find(u8, got.out, "branch=") == null);
 }
 
 test "probe: probes a present clone with exactly one git subprocess (was four)" {
@@ -912,18 +912,18 @@ test "run: with no project argument, every project gets its own section" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_a: std.array_hash_map.String([]const u8) = .empty;
     try repos_a.put(arena, "missing-repo", "https://holt-test.invalid/acme/missing-repo");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_a, .empty);
 
-    var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_b: std.array_hash_map.String([]const u8) = .empty;
     try repos_b.put(arena, "other-missing", "https://holt-test.invalid/acme/other-missing");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_b, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/first") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/second") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/first") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/second") != null);
 }
 
 test "run: --dirty with nothing to report omits the project section entirely" {
@@ -937,12 +937,12 @@ test "run: --dirty with nothing to report omits the project section entirely" {
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "clean-repo", "https://holt-test.invalid/acme/clean-repo");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const clean_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(clean_path).?);
+    const clean_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(clean_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, clean_path });
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--dirty" });
@@ -963,7 +963,7 @@ test "run: no matching project exits 1 and reports on stderr" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
 }
 
 test "run: an empty workspace prints a helpful hint on stderr, stdout stays clean, exit 0" {
@@ -980,7 +980,7 @@ test "run: an empty workspace prints a helpful hint on stderr, stdout stays clea
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings("", got.out);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no projects yet") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no projects yet") != null);
 }
 
 test "run: a project with zero member repos reports so instead of printing nothing" {
@@ -999,7 +999,7 @@ test "run: a project with zero member repos reports so instead of printing nothi
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/empty-proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings("", got.out);
-    try testing.expect(std.mem.indexOf(u8, got.err, "acme/empty-proj has no member repos") != null);
+    try testing.expect(std.mem.find(u8, got.err, "acme/empty-proj has no member repos") != null);
 }
 
 test "run: --org filters to a single org's projects" {
@@ -1013,18 +1013,18 @@ test "run: --org filters to a single org's projects" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos_acme: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_acme: std.array_hash_map.String([]const u8) = .empty;
     try repos_acme.put(arena, "gone", "https://holt-test.invalid/acme/gone");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_acme, .empty);
 
-    var repos_other: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_other: std.array_hash_map.String([]const u8) = .empty;
     try repos_other.put(arena, "gone", "https://holt-test.invalid/other/gone");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "second", repos_other, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--org", "other" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "other/second") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/first") == null);
+    try testing.expect(std.mem.find(u8, got.out, "other/second") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/first") == null);
 }
 
 test "run: colors the dirty/unpushed/missing/clean tokens when the destination is color-enabled" {
@@ -1038,13 +1038,13 @@ test "run: colors the dirty/unpushed/missing/clean tokens when the destination i
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "clean-repo", "https://holt-test.invalid/acme/clean-repo");
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const clean_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(clean_path).?);
+    const clean_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(clean_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, clean_path });
 
     var out: std.Io.Writer.Allocating = .init(arena);
@@ -1053,8 +1053,8 @@ test "run: colors the dirty/unpushed/missing/clean tokens when the destination i
     const code = try command.run(&ctx);
 
     try testing.expectEqual(@as(u8, 0), code);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[32mclean\x1b[0m") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[31mmissing\x1b[0m") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\x1b[32mclean\x1b[0m") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\x1b[31mmissing\x1b[0m") != null);
 }
 
 test "run: --json reports each repo's state as a string, no ANSI escapes" {
@@ -1070,18 +1070,18 @@ test "run: --json reports each repo's state as a string, no ANSI escapes" {
     defer testing.allocator.free(bare_dirty);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "clean-repo", "https://holt-test.invalid/acme/clean-repo");
     try repos.put(arena, "dirty-repo", "https://holt-test.invalid/acme/dirty-repo");
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const clean_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(clean_path).?);
+    const clean_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "clean-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(clean_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_clean, clean_path });
 
-    const dirty_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "dirty-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(dirty_path).?);
+    const dirty_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "dirty-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(dirty_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_dirty, dirty_path });
     {
         var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), dirty_path, .{});
@@ -1091,7 +1091,7 @@ test "run: --json reports each repo's state as a string, no ANSI escapes" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--json" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "\x1b[") == null);
+    try testing.expect(std.mem.find(u8, got.out, "\x1b[") == null);
 
     const Repo = struct { name: []const u8, state: []const u8, branch: ?[]const u8, not_linked: [][]const u8, not_restored: [][]const u8, not_kept: ?u64, will_keep: ?u64, nested: ?u64, unlisted: ?u64 };
     const Entry = struct { project: []const u8, repos: []Repo, local_only: [][]const u8, unjudged: [][]const u8 };
@@ -1121,16 +1121,16 @@ test "runJson: includes a local_only array per project" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    const repos: std.array_hash_map.String([]const u8) = .empty;
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
-    const hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    const hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ hub, "notes.md" }), .data = "x\n" });
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--json" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "\"local_only\"") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "notes.md") != null);
+    try testing.expect(std.mem.find(u8, got.out, "\"local_only\"") != null);
+    try testing.expect(std.mem.find(u8, got.out, "notes.md") != null);
 }
 
 test "run: --json on an empty workspace emits [] on stdout, not the human hint" {
@@ -1162,10 +1162,10 @@ fn buildManyRepoWorkspace(arena: std.mem.Allocator, sb: *testutil.Sandbox) !work
 
     const projects = [_][]const u8{ "alpha", "beta", "gamma" };
     for (projects, 0..) |proj, pi| {
-        var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        var repos: std.array_hash_map.String([]const u8) = .empty;
         for (0..4) |ri| {
-            const repo_name = try std.fmt.allocPrint(arena, "repo-{d}-{d}", .{ pi, ri });
-            const url = try std.fmt.allocPrint(arena, "https://holt-test.invalid/acme/{s}", .{repo_name});
+            const repo_name = try arena.print("repo-{d}-{d}", .{ pi, ri });
+            const url = try arena.print("https://holt-test.invalid/acme/{s}", .{repo_name});
             try repos.put(arena, repo_name, url);
         }
         try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", proj, repos, .empty);
@@ -1174,13 +1174,13 @@ fn buildManyRepoWorkspace(arena: std.mem.Allocator, sb: *testutil.Sandbox) !work
     // Materialize clones with a deterministic variety of states.
     for (projects, 0..) |_, pi| {
         for (0..4) |ri| {
-            const repo_name = try std.fmt.allocPrint(arena, "repo-{d}-{d}", .{ pi, ri });
-            const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", repo_name });
+            const repo_name = try arena.print("repo-{d}-{d}", .{ pi, ri });
+            const path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", repo_name });
 
             // Every 4th repo (ri==3) stays missing on disk.
             if (ri == 3) continue;
 
-            try fsutil.ensureDir(std.fs.path.dirname(path).?);
+            try fsutil.ensureDir(std.Io.Dir.path.dirname(path).?);
             try testutil.runGit(sb, null, &.{ "clone", bare, path });
 
             if (ri == 1) {
@@ -1190,7 +1190,7 @@ fn buildManyRepoWorkspace(arena: std.mem.Allocator, sb: *testutil.Sandbox) !work
                 try dir.writeFile(fsutil.io(), .{ .sub_path = "untracked.txt", .data = "hi\n" });
             } else if (ri == 2 and pi == 0) {
                 // Unreadable: corrupt HEAD in exactly one clone.
-                const head_path = try std.fs.path.join(arena, &.{ path, ".git", "HEAD" });
+                const head_path = try std.Io.Dir.path.join(arena, &.{ path, ".git", "HEAD" });
                 try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
             } else if (ri == 2) {
                 // Unpushed: a local commit ahead of upstream.
@@ -1223,11 +1223,11 @@ test "run: -j 1 and -j 8 produce byte-identical human output across many repos" 
     try testing.expectEqualStrings(serial.out, parallel_run.out);
 
     // The oracle must actually be exercising every state, not empty output.
-    try testing.expect(std.mem.indexOf(u8, serial.out, "dirty") != null);
-    try testing.expect(std.mem.indexOf(u8, serial.out, "unpushed") != null);
-    try testing.expect(std.mem.indexOf(u8, serial.out, "missing") != null);
-    try testing.expect(std.mem.indexOf(u8, serial.out, "unreadable") != null);
-    try testing.expect(std.mem.indexOf(u8, serial.out, "clean") != null);
+    try testing.expect(std.mem.find(u8, serial.out, "dirty") != null);
+    try testing.expect(std.mem.find(u8, serial.out, "unpushed") != null);
+    try testing.expect(std.mem.find(u8, serial.out, "missing") != null);
+    try testing.expect(std.mem.find(u8, serial.out, "unreadable") != null);
+    try testing.expect(std.mem.find(u8, serial.out, "clean") != null);
 }
 
 test "run: --json is byte-identical at -j 1 and -j 8 across many repos" {
@@ -1246,7 +1246,7 @@ test "run: --json is byte-identical at -j 1 and -j 8 across many repos" {
     try testing.expectEqual(@as(u8, 0), serial.code);
     try testing.expectEqual(@as(u8, 0), parallel_run.code);
     try testing.expectEqualStrings(serial.out, parallel_run.out);
-    try testing.expect(std.mem.indexOf(u8, serial.out, "unreadable") != null);
+    try testing.expect(std.mem.find(u8, serial.out, "unreadable") != null);
 }
 
 test "run: an unreadable clone among many under -j 8 is reported, not a crash or deadlock" {
@@ -1261,7 +1261,7 @@ test "run: an unreadable clone among many under -j 8 is reported, not a crash or
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "-j", "8" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "unreadable (not a git repository)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "unreadable (not a git repository)") != null);
 }
 
 test "jobsOption: -j 0 and a non-integer are usage errors" {
@@ -1296,19 +1296,19 @@ test "run: a member whose marker value never parsed is reported and the rest sti
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
     try repos.put(arena, "broken", "not a url");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "good") != null);
+    try testing.expect(std.mem.find(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.find(u8, got.out, "good") != null);
 }
 
 fn has(hay: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, hay, needle) != null;
+    return std.mem.find(u8, hay, needle) != null;
 }
 
 /// `path` as a hint prints it (`ui.quotePath`).
@@ -1329,15 +1329,15 @@ test "run: without kept/, the not-set-up line on stderr while a clone holds a fi
     try testing.expectEqual(@as(u8, 0), none.code);
     try testing.expect(!has(none.err, "no kept/ here yet"));
 
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.clone, ".git", "info", "exclude" }), .data = "/secret.txt\n" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.clone, "secret.txt" }), .data = "only here" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "info", "exclude" }), .data = "/secret.txt\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.clone, "secret.txt" }), .data = "only here" });
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(has(got.err, "no kept/ here yet: if another machine keeps files, wait for your cloud client to download it, then run holt sync; otherwise run holt keep --review --all\n"));
     try testing.expect(!has(got.out, "not kept"));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, "kept" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, "kept" })));
 
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, kept_cmd.off_basename }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, kept_cmd.off_basename }), .data = "" });
     const off = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     try testing.expect(!has(off.err, "not set up"));
 }
@@ -1353,13 +1353,13 @@ test "run: links into a kept/ under another synced root print the copy hint, nev
     try w.keep(arena, ".clasp.json", "{\"scriptId\":\"x\"}\n");
 
     var moved = w.ws;
-    moved.cfg.synced_root = try std.fs.path.join(arena, &.{ sb.root, "new-synced" });
+    moved.cfg.synced_root = try std.Io.Dir.path.join(arena, &.{ sb.root, "new-synced" });
     try fsutil.ensureDir(moved.cfg.synced_root);
-    try fsutil.copyTree(arena, try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, "projects" }), try std.fs.path.join(arena, &.{ moved.cfg.synced_root, "projects" }));
+    try fsutil.copyTree(arena, try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, "projects" }), try std.Io.Dir.path.join(arena, &.{ moved.cfg.synced_root, "projects" }));
 
     const got = try testutil.runCmd(arena, command.run, moved, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    const want = try std.fmt.allocPrint(arena, "kept/ is at {s}: copy it to {s}\n", .{ try quoted(arena, w.ws.cfg.synced_root), try quoted(arena, moved.cfg.synced_root) });
+    const want = try arena.print("kept/ is at {s}: copy it to {s}\n", .{ try quoted(arena, w.ws.cfg.synced_root), try quoted(arena, moved.cfg.synced_root) });
     try testing.expect(has(got.err, want));
     try testing.expect(!has(got.err, "not set up"));
 }
@@ -1373,12 +1373,12 @@ test "run: the candidates line counts ignored files and hub-root entries, a file
     var w = try kept_cmd.TestWorld.init(arena, &sb, true);
     defer w.deinit();
 
-    const exclude = try std.fs.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = ".env\nnode_modules/\n.clasp.json\n" });
     _ = try w.write(arena, ".env", "SECRET=1\n");
     _ = try w.write(arena, "node_modules/x/index.js", "x\n");
     _ = try w.write(arena, ".clasp.json", "{}\n");
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.hub, "notes.md" }), .data = "n\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.hub, "notes.md" }), .data = "n\n" });
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -1407,7 +1407,7 @@ test "run: an auto-pattern match git does not ignore is named with what settles 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
     const q = try ui.quotePath(arena, app.envOf_current(), auto);
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "    {s}: matches an auto pattern (.clasp.json) but git does not ignore it; add it to .gitignore, or keep it (run: holt keep {s})\n", .{ q, q })));
+    try testing.expect(has(got.out, try arena.print("    {s}: matches an auto pattern (.clasp.json) but git does not ignore it; add it to .gitignore, or keep it (run: holt keep {s})\n", .{ q, q })));
 
     try w.keep(arena, "neg/.clasp.json", "{}\n");
     _ = try w.write(arena, "neg/.gitignore", "!.clasp.json\n");
@@ -1424,16 +1424,16 @@ test "run: a file git reads only as a regular file that an auto pattern matches 
     var w = try kept_cmd.TestWorld.init(arena, &sb, true);
     defer w.deinit();
     const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
-    const auto_dir = try std.fs.path.join(arena, &.{ try layout.keptDir(arena), ".holt-auto.d" });
+    const auto_dir = try std.Io.Dir.path.join(arena, &.{ try layout.keptDir(arena), ".holt-auto.d" });
     try fsutil.ensureDir(auto_dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ auto_dir, "1" }), .data = ".gitignore\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ auto_dir, "1" }), .data = ".gitignore\n" });
     const ignore = try w.write(arena, "sub/.gitignore", "*.tmp\n");
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
     const q = try ui.quotePath(arena, app.envOf_current(), ignore);
-    try testing.expect(!has(got.out, try std.fmt.allocPrint(arena, "    {s}: matches an auto pattern", .{q})));
-    try testing.expect(!has(got.out, try std.fmt.allocPrint(arena, "holt keep {s}", .{q})));
+    try testing.expect(!has(got.out, try arena.print("    {s}: matches an auto pattern", .{q})));
+    try testing.expect(!has(got.out, try arena.print("holt keep {s}", .{q})));
 }
 
 test "run: an auto-pattern match a .gitignore negation un-ignores names that line and offers no keep; once the line is gone, sync keeps it" {
@@ -1449,9 +1449,9 @@ test "run: an auto-pattern match a .gitignore negation un-ignores names that lin
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     const q = try ui.quotePath(arena, app.envOf_current(), auto);
-    const line = try std.fmt.allocPrint(arena, "{s}:2:!.clasp.json", .{try fsutil.contractTilde(arena, app.envOf_current(), ignore)});
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "    {s}: matches an auto pattern (.clasp.json) but {s} un-ignores it, so holt cannot keep it; remove or narrow that line, or leave it for a commit\n", .{ q, line })));
-    try testing.expect(!has(got.out, try std.fmt.allocPrint(arena, "holt keep {s}", .{q})));
+    const line = try arena.print("{s}:2:!.clasp.json", .{try fsutil.contractTilde(arena, app.envOf_current(), ignore)});
+    try testing.expect(has(got.out, try arena.print("    {s}: matches an auto pattern (.clasp.json) but {s} un-ignores it, so holt cannot keep it; remove or narrow that line, or leave it for a commit\n", .{ q, line })));
+    try testing.expect(!has(got.out, try arena.print("holt keep {s}", .{q})));
 
     _ = try w.write(arena, "neg/.gitignore", "*.json\n");
     try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(arena, @import("sync.zig").command.run, w.ws, &.{})).code);
@@ -1469,12 +1469,12 @@ test "run: once kept/ exists the hub root hides only .git and skip matches, so .
     var w = try kept_cmd.TestWorld.init(arena, &sb, false);
     defer w.deinit();
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ w.hub, ".claude" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.hub, ".claude", "settings.local.json" }), .data = "{}\n" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.hub, ".DS_Store" }), .data = "x" });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ w.hub, "node_modules" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ w.hub, ".git" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.hub, "draft.md~" }), .data = "x" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ w.hub, ".claude" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.hub, ".claude", "settings.local.json" }), .data = "{}\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.hub, ".DS_Store" }), .data = "x" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ w.hub, "node_modules" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ w.hub, ".git" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.hub, "draft.md~" }), .data = "x" });
 
     const before = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     try testing.expect(!has(before.out, ".claude"));
@@ -1483,7 +1483,7 @@ test "run: once kept/ exists the hub root hides only .git and skip matches, so .
 
     _ = try kept.patterns.createStore(arena, .{ .synced_root = w.ws.cfg.synced_root });
     const after = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
-    const claude = try std.fmt.allocPrint(arena, "    .claude (run: holt keep {s})\n", .{try quoted(arena, try std.fs.path.join(arena, &.{ w.hub, ".claude" }))});
+    const claude = try arena.print("    .claude (run: holt keep {s})\n", .{try quoted(arena, try std.Io.Dir.path.join(arena, &.{ w.hub, ".claude" }))});
     try testing.expect(has(after.out, claude));
     try testing.expect(has(after.out, "draft.md~"));
     try testing.expect(!has(after.out, ".DS_Store"));
@@ -1522,7 +1522,7 @@ test "run: a kept path whose link is gone is one line hinting holt sync; differi
     const differs = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     const p = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "local.json"));
     const clasp = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, ".clasp.json"));
-    const want = try std.fmt.allocPrint(arena, "    2 not linked:\n      {s} (run: holt sync)\n      {s}: local copy differs from the kept copy (run: holt keep --take-local {s}, or holt keep --take-kept {s})\n", .{ clasp, p, p, p });
+    const want = try arena.print("    2 not linked:\n      {s} (run: holt sync)\n      {s}: local copy differs from the kept copy (run: holt keep --take-local {s}, or holt keep --take-kept {s})\n", .{ clasp, p, p, p });
     try testing.expect(has(differs.out, want));
     try testing.expect(has(differs.out, "widget: branch=main clean\n"));
 
@@ -1542,7 +1542,7 @@ test "run: a kept path git reads only as a regular file is not linked, hinting u
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
     const kp = try w.keptPath(arena, "a/.gitignore");
-    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(kp).?);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = kp, .data = "*.tmp\n" });
     const h = try kept.content.hashPath(arena, kp);
     const c = try w.ctx(arena);
@@ -1550,7 +1550,7 @@ test "run: a kept path git reads only as a regular file is not linked, hinting u
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     const p = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "a/.gitignore"));
-    const want = try std.fmt.allocPrint(arena, "    1 not linked:\n      {s}: git reads it only as a regular file, so holt never links it (run: holt unkeep {s})\n", .{ p, p });
+    const want = try arena.print("    1 not linked:\n      {s}: git reads it only as a regular file, so holt never links it (run: holt unkeep {s})\n", .{ p, p });
     if (!has(got.out, want)) {
         std.debug.print("expected:\n{s}\nin:\n{s}\n", .{ want, got.out });
         return error.TestUnexpectedResult;
@@ -1607,7 +1607,7 @@ test "run: kept files cost no git call per repo while they are declined, and a b
     const arena = arena_state.allocator();
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
-    const scope = try testutil.EnvScope.install(arena, &.{.{ "XDG_STATE_HOME", try std.fs.path.join(arena, &.{ sb.root, "state" }) }});
+    const scope = try testutil.EnvScope.install(arena, &.{.{ "XDG_STATE_HOME", try std.Io.Dir.path.join(arena, &.{ sb.root, "state" }) }});
     defer scope.restore();
     const ws = try buildManyRepoWorkspace(arena, &sb);
 
@@ -1619,7 +1619,7 @@ test "run: kept files cost no git call per repo while they are declined, and a b
         }
     }
 
-    const off = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, kept_cmd.off_basename });
+    const off = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, kept_cmd.off_basename });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = off, .data = "" });
     const before = proc.spawn_count.load(.monotonic);
     _ = try testutil.runCmd(arena, command.run, ws, &.{ "-j", "1" });
@@ -1651,10 +1651,10 @@ test "run: a holt link into an old synced root is not linked, hinting holt sync"
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{\"a\":1}\n");
     var moved = w.ws;
-    moved.cfg.synced_root = try std.fs.path.join(arena, &.{ sb.root, "new-synced" });
+    moved.cfg.synced_root = try std.Io.Dir.path.join(arena, &.{ sb.root, "new-synced" });
     try fsutil.ensureDir(moved.cfg.synced_root);
-    try fsutil.copyTree(arena, try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, "projects" }), try std.fs.path.join(arena, &.{ moved.cfg.synced_root, "projects" }));
-    try fsutil.copyTree(arena, try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, "kept" }), try std.fs.path.join(arena, &.{ moved.cfg.synced_root, "kept" }));
+    try fsutil.copyTree(arena, try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, "projects" }), try std.Io.Dir.path.join(arena, &.{ moved.cfg.synced_root, "projects" }));
+    try fsutil.copyTree(arena, try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, "kept" }), try std.Io.Dir.path.join(arena, &.{ moved.cfg.synced_root, "kept" }));
 
     const got = try testutil.runCmd(arena, command.run, moved, &.{"proj"});
     try testing.expect(has(got.out, "widget: branch=main clean\n    1 not linked (run: holt sync)\n"));
@@ -1697,22 +1697,22 @@ test "run: a worktree record whose gitdir cannot be read is named with what is s
     var w = try kept_cmd.TestWorld.init(arena, &sb, true);
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
-    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees/feat", .{w.clone});
+    const linked = try arena.print("{s}@worktrees/feat", .{w.clone});
     try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
-    const record = try std.fs.path.join(arena, &.{ w.clone, ".git", "worktrees", "feat" });
-    const gitdir = try std.fs.path.join(arena, &.{ record, "gitdir" });
+    const record = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "worktrees", "feat" });
+    const gitdir = try std.Io.Dir.path.join(arena, &.{ record, "gitdir" });
     try fsutil.removePath(gitdir);
     try fsutil.ensureDir(gitdir);
     const recs = try kept_hooks.snapshot(arena, record, null);
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     const rq = try quoted(arena, record);
-    const want = try std.fmt.allocPrint(arena, "      {s}: a linked working tree whose record git cannot read, which git worktree list leaves out; holt does not change it: resolve it with git (the record is {s}), then run again\n", .{ rq, rq });
+    const want = try arena.print("      {s}: a linked working tree whose record git cannot read, which git worktree list leaves out; holt does not change it: resolve it with git (the record is {s}), then run again\n", .{ rq, rq });
     if (!has(got.out, want) or has(got.out, " worktree list)")) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ want, got.out });
         return error.TestUnexpectedResult;
     }
-    const res = try proc.runEnv(arena, &.{ "sh", "-c", try std.fmt.allocPrint(arena, "ls -d {s}", .{rq}) }, null, &sb.git_env.map);
+    const res = try proc.runEnv(arena, &.{ "sh", "-c", try arena.print("ls -d {s}", .{rq}) }, null, &sb.git_env.map);
     try testing.expectEqual(@as(u8, 0), res.status);
     try testing.expectEqualStrings(recs, try kept_hooks.snapshot(arena, record, null));
 }
@@ -1729,33 +1729,33 @@ test "run: a working tree status cannot list is named with commands reaching tha
         var w = try kept_cmd.TestWorld.init(arena, &sb, true);
         defer w.deinit();
         try w.keep(arena, ".clasp.json", "{}\n");
-        const linked = try std.fmt.allocPrint(arena, "{s}@worktrees/feat", .{w.clone});
-        const other = try std.fmt.allocPrint(arena, "{s}@worktrees/other", .{w.clone});
-        const also = try std.fmt.allocPrint(arena, "{s}@worktrees/also", .{w.clone});
+        const linked = try arena.print("{s}@worktrees/feat", .{w.clone});
+        const other = try arena.print("{s}@worktrees/other", .{w.clone});
+        const also = try arena.print("{s}@worktrees/also", .{w.clone});
         try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
         try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "other", other });
         try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "also", also });
         try std.Io.Dir.cwd().deleteTree(fsutil.io(), also);
-        const records = try std.fs.path.join(arena, &.{ w.clone, ".git", "worktrees" });
-        const other_gitdir = try std.fs.path.join(arena, &.{ records, "other", "gitdir" });
-        const other_link = try std.fs.path.join(arena, &.{ other, ".git" });
+        const records = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "worktrees" });
+        const other_gitdir = try std.Io.Dir.path.join(arena, &.{ records, "other", "gitdir" });
+        const other_link = try std.Io.Dir.path.join(arena, &.{ other, ".git" });
         try std.Io.Dir.cwd().deleteTree(fsutil.io(), other);
         try fsutil.ensureDir(other);
         try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = other_link, .data = "gitdir: /nowhere/at/all\n" });
         const before = try kept.content.readSmall(arena, other_gitdir);
         switch (case) {
             .absent_back, .absent_removed, .locked_removed => try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked),
-            .unlinked => try fsutil.removePath(try std.fs.path.join(arena, &.{ linked, ".git" })),
-            .dangling => try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ linked, ".git" }), .data = "gitdir: /moved/away/.git/worktrees/feat\n" }),
+            .unlinked => try fsutil.removePath(try std.Io.Dir.path.join(arena, &.{ linked, ".git" })),
+            .dangling => try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ linked, ".git" }), .data = "gitdir: /moved/away/.git/worktrees/feat\n" }),
             .foreign => {
                 try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked);
-                const theirs = try std.fs.path.join(arena, &.{ sb.root, "theirs" });
+                const theirs = try std.Io.Dir.path.join(arena, &.{ sb.root, "theirs" });
                 try testutil.runGit(&sb, null, &.{ "clone", "-q", w.clone, theirs });
                 try testutil.runGit(&sb, theirs, &.{ "worktree", "add", "-q", "--detach", linked });
             },
             .nowhere => {
                 try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked);
-                try kept.content.createLink(try std.fs.path.join(arena, &.{ sb.root, "no-such-dir" }), linked, .dir);
+                try kept.content.createLink(try std.Io.Dir.path.join(arena, &.{ sb.root, "no-such-dir" }), linked, .dir);
             },
         }
         if (case == .locked_removed) try testutil.runGit(&sb, w.clone, &.{ "worktree", "lock", linked });
@@ -1771,13 +1771,13 @@ test "run: a working tree status cannot list is named with commands reaching tha
             const trees = try std.mem.concat(arena, u8, &.{ try kept_hooks.snapshot(arena, linked, null), (try kept.content.readLink(arena, linked)) orelse "" });
             const recs = try kept_hooks.snapshot(arena, records, null);
             const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
-            const git_in = try std.fmt.allocPrint(arena, "git -C {s}", .{try quoted(arena, w.clone)});
-            const want = try std.fmt.allocPrint(arena, "      {s}: {s}; holt does not change it: resolve it with git ({s} worktree list), then run again\n", .{ try quoted(arena, linked), s, git_in });
+            const git_in = try arena.print("git -C {s}", .{try quoted(arena, w.clone)});
+            const want = try arena.print("      {s}: {s}; holt does not change it: resolve it with git ({s} worktree list), then run again\n", .{ try quoted(arena, linked), s, git_in });
             if (!has(got.out, want)) {
                 std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ @tagName(case), want, got.out });
                 return error.TestUnexpectedResult;
             }
-            const res = try proc.runEnv(arena, &.{ "sh", "-c", try std.fmt.allocPrint(arena, "{s} worktree list", .{git_in}) }, null, &sb.git_env.map);
+            const res = try proc.runEnv(arena, &.{ "sh", "-c", try arena.print("{s} worktree list", .{git_in}) }, null, &sb.git_env.map);
             try testing.expectEqual(@as(u32, 0), res.status);
             try testing.expectEqualStrings(trees, try std.mem.concat(arena, u8, &.{ try kept_hooks.snapshot(arena, linked, null), (try kept.content.readLink(arena, linked)) orelse "" }));
             try testing.expectEqualStrings(recs, try kept_hooks.snapshot(arena, records, null));
@@ -1786,18 +1786,18 @@ test "run: a working tree status cannot list is named with commands reaching tha
         }
 
         const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
-        const lead = try std.fmt.allocPrint(arena, "      {s}: a working tree that cannot be read (", .{try quoted(arena, linked)});
-        const at = std.mem.indexOf(u8, got.out, lead) orelse {
+        const lead = try arena.print("      {s}: a working tree that cannot be read (", .{try quoted(arena, linked)});
+        const at = std.mem.find(u8, got.out, lead) orelse {
             std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ @tagName(case), lead, got.out });
             return error.TestUnexpectedResult;
         };
-        const line = got.out[at..std.mem.indexOfScalarPos(u8, got.out, at, '\n').?];
+        const line = got.out[at..std.mem.findScalarPos(u8, got.out, at, '\n').?];
         try testing.expect(!has(line, "worktree repair") and !has(line, "worktree prune"));
-        const open = std.mem.indexOf(u8, line, "(run: ").? + "(run: ".len;
+        const open = std.mem.find(u8, line, "(run: ").? + "(run: ".len;
         const cmds = line[open .. line.len - 1];
         const cmd = switch (case) {
-            .absent_back => cmds[0..std.mem.indexOf(u8, cmds, ", or ").?],
-            else => cmds[std.mem.indexOf(u8, cmds, ", or ").? + ", or ".len ..],
+            .absent_back => cmds[0..std.mem.find(u8, cmds, ", or ").?],
+            else => cmds[std.mem.find(u8, cmds, ", or ").? + ", or ".len ..],
         };
         const res = try proc.runEnv(arena, &.{ "sh", "-c", cmd }, null, &sb.git_env.map);
         if (res.status != 0) {
@@ -1811,8 +1811,8 @@ test "run: a working tree status cannot list is named with commands reaching tha
         }
         try testing.expectEqualStrings(before, try kept.content.readSmall(arena, other_gitdir));
         try testing.expectEqualStrings("gitdir: /nowhere/at/all\n", try kept.content.readSmall(arena, other_link));
-        try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try std.fs.path.join(arena, &.{ records, "also" })));
-        try testing.expectEqual(case != .absent_back, try kept.content.entryAt(try std.fs.path.join(arena, &.{ records, "feat" })) == .absent);
+        try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try std.Io.Dir.path.join(arena, &.{ records, "also" })));
+        try testing.expectEqual(case != .absent_back, try kept.content.entryAt(try std.Io.Dir.path.join(arena, &.{ records, "feat" })) == .absent);
     }
 }
 
@@ -1826,34 +1826,34 @@ test "run: a working tree whose path lies under a file is named with what is see
     var w = try kept_cmd.TestWorld.init(arena, &sb, true);
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
-    const blk = try std.fmt.allocPrint(arena, "{s}@worktrees/nest", .{w.clone});
-    const linked = try std.fs.path.join(arena, &.{ blk, "feat" });
+    const blk = try arena.print("{s}@worktrees/nest", .{w.clone});
+    const linked = try std.Io.Dir.path.join(arena, &.{ blk, "feat" });
     try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "nest/feat", linked });
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), blk);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = blk, .data = "not a tree\n" });
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
-    const git_in = try std.fmt.allocPrint(arena, "git -C {s}", .{try quoted(arena, w.clone)});
-    const want = try std.fmt.allocPrint(arena, "      {s}: a linked working tree whose path lies under something that is not a directory; holt does not change it: resolve it with git ({s} worktree list), then run again\n", .{ try quoted(arena, linked), git_in });
+    const git_in = try arena.print("git -C {s}", .{try quoted(arena, w.clone)});
+    const want = try arena.print("      {s}: a linked working tree whose path lies under something that is not a directory; holt does not change it: resolve it with git ({s} worktree list), then run again\n", .{ try quoted(arena, linked), git_in });
     if (!has(got.out, want) or has(got.out, "mkdir")) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ want, got.out });
         return error.TestUnexpectedResult;
     }
-    const res = try proc.runEnv(arena, &.{ "sh", "-c", try std.fmt.allocPrint(arena, "{s} worktree list", .{git_in}) }, null, &sb.git_env.map);
+    const res = try proc.runEnv(arena, &.{ "sh", "-c", try arena.print("{s} worktree list", .{git_in}) }, null, &sb.git_env.map);
     try testing.expectEqual(@as(u8, 0), res.status);
     try testing.expectEqualStrings("not a tree\n", try kept.content.readSmall(arena, blk));
 
     try fsutil.removePath(blk);
     const gone = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
-    const lead = try std.fmt.allocPrint(arena, "      {s}: a working tree that cannot be read (absent)", .{try quoted(arena, linked)});
-    const at = std.mem.indexOf(u8, gone.out, lead) orelse {
+    const lead = try arena.print("      {s}: a working tree that cannot be read (absent)", .{try quoted(arena, linked)});
+    const at = std.mem.find(u8, gone.out, lead) orelse {
         std.debug.print("wanted {s} in:\n{s}\n", .{ lead, gone.out });
         return error.TestUnexpectedResult;
     };
-    const line = gone.out[at..std.mem.indexOfScalarPos(u8, gone.out, at, '\n').?];
-    const open = std.mem.indexOf(u8, line, "(run: ").? + "(run: ".len;
+    const line = gone.out[at..std.mem.findScalarPos(u8, gone.out, at, '\n').?];
+    const open = std.mem.find(u8, line, "(run: ").? + "(run: ".len;
     const cmds = line[open .. line.len - 1];
-    const cmd = cmds[0 .. std.mem.indexOf(u8, cmds, ", or ") orelse cmds.len];
+    const cmd = cmds[0 .. std.mem.find(u8, cmds, ", or ") orelse cmds.len];
     const back = try proc.runEnv(arena, &.{ "sh", "-c", cmd }, null, &sb.git_env.map);
     if (back.status != 0) {
         std.debug.print("hint failed: {s}\n{s}\n", .{ cmd, back.stderr });
@@ -1880,27 +1880,27 @@ test "run: a working tree whose directory is gone and whose record holds staged 
         defer w.deinit();
         try w.keep(arena, ".clasp.json", "{}\n");
         const linked = switch (case) {
-            .holt => try std.fmt.allocPrint(arena, "{s}@worktrees/feat", .{w.clone}),
-            .elsewhere => try std.fs.path.join(arena, &.{ sb.root, "elsewhere" }),
+            .holt => try arena.print("{s}@worktrees/feat", .{w.clone}),
+            .elsewhere => try std.Io.Dir.path.join(arena, &.{ sb.root, "elsewhere" }),
         };
         try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
-        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ linked, "staged.txt" }), .data = "only in the index\n" });
+        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ linked, "staged.txt" }), .data = "only in the index\n" });
         try testutil.runGit(&sb, linked, &.{ "add", "staged.txt" });
         try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked);
-        const record = try std.fs.path.join(arena, &.{ w.clone, ".git", "worktrees", "feat" });
+        const record = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "worktrees", "feat" });
 
         const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
         const wq = try quoted(arena, linked);
-        const lead = try std.fmt.allocPrint(arena, "      {s}: a working tree that cannot be read (absent)", .{wq});
-        const at = std.mem.indexOf(u8, got.out, lead) orelse {
+        const lead = try arena.print("      {s}: a working tree that cannot be read (absent)", .{wq});
+        const at = std.mem.find(u8, got.out, lead) orelse {
             std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ @tagName(case), lead, got.out });
             return error.TestUnexpectedResult;
         };
-        const line = got.out[at..std.mem.indexOfScalarPos(u8, got.out, at, '\n').?];
+        const line = got.out[at..std.mem.findScalarPos(u8, got.out, at, '\n').?];
         try testing.expect(!has(line, " worktree remove ") and !has(line, "worktree prune"));
         const relink = switch (case) {
             .holt => blk: {
-                const open = std.mem.indexOf(u8, line, "(run: ").? + "(run: ".len;
+                const open = std.mem.find(u8, line, "(run: ").? + "(run: ".len;
                 const cmds = line[open .. line.len - 1];
                 const holt = ", or holt worktree acme/proj/widget feat -r";
                 try testing.expect(std.mem.endsWith(u8, cmds, holt));
@@ -1912,10 +1912,10 @@ test "run: a working tree whose directory is gone and whose record holds staged 
             },
             .elsewhere => blk: {
                 try testing.expect(has(line, "removing the record destroys what it holds: "));
-                try testing.expect(std.mem.endsWith(u8, line, try std.fmt.allocPrint(arena, "commit or stash them there (run: git -C {s} stash push)", .{wq})));
+                try testing.expect(std.mem.endsWith(u8, line, try arena.print("commit or stash them there (run: git -C {s} stash push)", .{wq})));
                 const first = "its directory is gone; bring it back from its record first (run: ";
-                const open = std.mem.indexOf(u8, line, first).? + first.len;
-                break :blk line[open..std.mem.indexOfPos(u8, line, open, "); ").?];
+                const open = std.mem.find(u8, line, first).? + first.len;
+                break :blk line[open..std.mem.findPos(u8, line, open, "); ").?];
             },
         };
         const res = try proc.runEnv(arena, &.{ "sh", "-c", relink }, null, &sb.git_env.map);
@@ -1925,8 +1925,8 @@ test "run: a working tree whose directory is gone and whose record holds staged 
         }
         const after = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
         try testing.expect(!has(after.out, lead));
-        try testing.expectEqualStrings("only in the index\n", try kept.content.readSmall(arena, try std.fs.path.join(arena, &.{ linked, "staged.txt" })));
-        const stash = try proc.runEnv(arena, &.{ "sh", "-c", try std.fmt.allocPrint(arena, "git -C {s} stash push", .{wq}) }, null, &sb.git_env.map);
+        try testing.expectEqualStrings("only in the index\n", try kept.content.readSmall(arena, try std.Io.Dir.path.join(arena, &.{ linked, "staged.txt" })));
+        const stash = try proc.runEnv(arena, &.{ "sh", "-c", try arena.print("git -C {s} stash push", .{wq}) }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), stash.status);
         const stashed = try git.runInRepo(arena, &.{ "stash", "list" }, w.clone);
         try testing.expect(stashed.stdout.len > 0);
@@ -1945,31 +1945,31 @@ test "run: a working tree two records name, as a copied record leaves, is named 
         var w = try kept_cmd.TestWorld.init(arena, &sb, true);
         defer w.deinit();
         try w.keep(arena, ".clasp.json", "{}\n");
-        const linked = try std.fs.path.join(arena, &.{ sb.root, "shared" });
+        const linked = try std.Io.Dir.path.join(arena, &.{ sb.root, "shared" });
         try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
-        const records = try fsutil.realPathOrSelf(arena, try std.fs.path.join(arena, &.{ w.clone, ".git", "worktrees" }));
-        const copy = try std.fs.path.join(arena, &.{ records, "z-copy" });
-        const cp = try proc.runEnv(arena, &.{ "cp", "-R", try std.fs.path.join(arena, &.{ records, "shared" }), copy }, null, &sb.git_env.map);
+        const records = try fsutil.realPathOrSelf(arena, try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "worktrees" }));
+        const copy = try std.Io.Dir.path.join(arena, &.{ records, "z-copy" });
+        const cp = try proc.runEnv(arena, &.{ "cp", "-R", try std.Io.Dir.path.join(arena, &.{ records, "shared" }), copy }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), cp.status);
         if (case == .gone) try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked);
         const recs = try kept_hooks.snapshot(arena, records, null);
 
         const got = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
-        const git_in = try std.fmt.allocPrint(arena, "git -C {s}", .{try quoted(arena, w.clone)});
-        const want = try std.fmt.allocPrint(arena, "      {s}: a linked working tree whose path more than one worktree record names; holt does not change it: resolve it with git ({s} worktree list), then run again\n", .{ try quoted(arena, linked), git_in });
+        const git_in = try arena.print("git -C {s}", .{try quoted(arena, w.clone)});
+        const want = try arena.print("      {s}: a linked working tree whose path more than one worktree record names; holt does not change it: resolve it with git ({s} worktree list), then run again\n", .{ try quoted(arena, linked), git_in });
         if (!has(got.out, want)) {
             std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ @tagName(case), want, got.out });
             return error.TestUnexpectedResult;
         }
         for ([_][]const u8{ " worktree remove ", "worktree prune", "rm -rf", "printf" }) |cmd| try testing.expect(!has(got.out, cmd));
-        const res = try proc.runEnv(arena, &.{ "sh", "-c", try std.fmt.allocPrint(arena, "{s} worktree list", .{git_in}) }, null, &sb.git_env.map);
+        const res = try proc.runEnv(arena, &.{ "sh", "-c", try arena.print("{s} worktree list", .{git_in}) }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u32, 0), res.status);
         try testing.expectEqualStrings(recs, try kept_hooks.snapshot(arena, records, null));
 
         try std.Io.Dir.cwd().deleteTree(fsutil.io(), copy);
         const after = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
         try testing.expect(!has(after.out, "more than one worktree record"));
-        const gone = try std.fmt.allocPrint(arena, "      {s}: a working tree that cannot be read (absent)", .{try quoted(arena, linked)});
+        const gone = try arena.print("      {s}: a working tree that cannot be read (absent)", .{try quoted(arena, linked)});
         try testing.expectEqual(case == .gone, has(after.out, gone));
     }
 }
@@ -1983,7 +1983,7 @@ test "run: a clone status cannot judge is named in the JSON, and one with a work
     var w = try kept_cmd.TestWorld.init(arena, &sb, true);
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
-    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees{c}feat", .{ w.clone, std.fs.path.sep });
+    const linked = try arena.print("{s}@worktrees{c}feat", .{ w.clone, std.Io.Dir.path.sep });
     try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked);
 
@@ -1991,19 +1991,19 @@ test "run: a clone status cannot judge is named in the JSON, and one with a work
     const lq = try quoted(arena, linked);
     const cq = try quoted(arena, w.clone);
     const rq = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, ".git/worktrees/feat"));
-    const gq = try quoted(arena, try std.fs.path.join(arena, &.{ linked, ".git" }));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "    1 not listed, so what it holds only here is unknown:\n      {s}: a working tree that cannot be read (absent): nothing is at its path; move it back or remount its volume, bring it back from its record, or remove the record once it is gone for good (run: ", .{lq})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, ", or git -C {s} worktree remove {s})\n", .{ cq, lq })));
-    if (ui.native_shell == .posix) try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "(run: mkdir -p {s} && printf 'gitdir: %s\\n' {s} > {s} && git -C {s} checkout-index -a, or ", .{ lq, rq, gq, lq })));
+    const gq = try quoted(arena, try std.Io.Dir.path.join(arena, &.{ linked, ".git" }));
+    try testing.expect(has(got.out, try arena.print("    1 not listed, so what it holds only here is unknown:\n      {s}: a working tree that cannot be read (absent): nothing is at its path; move it back or remount its volume, bring it back from its record, or remove the record once it is gone for good (run: ", .{lq})));
+    try testing.expect(has(got.out, try arena.print(", or git -C {s} worktree remove {s})\n", .{ cq, lq })));
+    if (ui.native_shell == .posix) try testing.expect(has(got.out, try arena.print("(run: mkdir -p {s} && printf 'gitdir: %s\\n' {s} > {s} && git -C {s} checkout-index -a, or ", .{ lq, rq, gq, lq })));
     const js = try testutil.runCmd(arena, command.run, w.ws, &.{ "proj", "--json" });
     try testing.expect(has(js.out, "\"unlisted\":1"));
 
-    try std.Io.Dir.cwd().deleteTree(fsutil.io(), try std.fs.path.join(arena, &.{ w.clone, ".git", "worktrees" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.clone, ".git", "worktrees" }), .data = "not a directory" });
+    try std.Io.Dir.cwd().deleteTree(fsutil.io(), try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "worktrees" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "worktrees" }), .data = "not a directory" });
     const broken = try testutil.runCmd(arena, command.run, w.ws, &.{ "proj", "--json" });
-    try testing.expect(has(broken.out, try std.fmt.allocPrint(arena, "\"not_kept\":null,\"will_keep\":null,\"nested\":null,\"unlisted\":null", .{})));
+    try testing.expect(has(broken.out, try arena.print("\"not_kept\":null,\"will_keep\":null,\"nested\":null,\"unlisted\":null", .{})));
     const esc = try std.mem.replaceOwned(u8, arena, w.clone, "\\", "\\\\");
-    try testing.expect(has(broken.out, try std.fmt.allocPrint(arena, "\"unjudged\":[\"{s}\"]", .{esc})));
+    try testing.expect(has(broken.out, try arena.print("\"unjudged\":[\"{s}\"]", .{esc})));
 }
 
 test "run: status writes nothing in holt's machine-local state and takes at most five git calls of its own for a healthy repo" {
@@ -2015,7 +2015,7 @@ test "run: status writes nothing in holt's machine-local state and takes at most
     var w = try kept_cmd.TestWorld.init(arena, &sb, true);
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
-    const state = try std.fs.path.join(arena, &.{ sb.root, "state" });
+    const state = try std.Io.Dir.path.join(arena, &.{ sb.root, "state" });
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), state);
 
     const before = proc.spawn_count.load(.monotonic);
@@ -2025,14 +2025,14 @@ test "run: status writes nothing in holt's machine-local state and takes at most
     try testing.expect(!has(got.out, "not linked"));
     try testing.expect(calls <= 1 + 5);
 
-    const exclude = try std.fs.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
     const text = try kept.content.readSmall(arena, exclude);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = try std.mem.concat(arena, u8, &.{ text, ".env\n" }) });
     _ = try w.write(arena, ".env", "S=1\n");
     const listed = try testutil.runCmd(arena, command.run, w.ws, &.{"proj"});
     try testing.expect(has(listed.out, "1 file not kept in 1 repo - run: holt keep --review --all\n"));
     try testing.expect(!fsutil.exists(state));
-    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), try std.fs.path.join(arena, &.{ sb.root, "tmp" }), .{ .iterate = true });
+    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), try std.Io.Dir.path.join(arena, &.{ sb.root, "tmp" }), .{ .iterate = true });
     defer d.close(fsutil.io());
     var it = d.iterate();
     while (try it.next(fsutil.io())) |e| try testing.expect(!std.mem.startsWith(u8, e.name, "holt-report-"));
@@ -2048,8 +2048,8 @@ fn gitDirSnapshot(a: std.mem.Allocator, dir: []const u8) ![]const []const u8 {
     defer walker.deinit();
     while (try walker.next(fsutil.io())) |e| {
         const st = try d.statFile(fsutil.io(), e.path, .{ .follow_symlinks = false });
-        const hash: [64]u8 = if (e.kind == .file) try kept.content.hashFile(a, try std.fs.path.join(a, &.{ dir, e.path })) else @splat('-');
-        try out.append(a, try std.fmt.allocPrint(a, "{s} {s} {d} {d} {s}", .{ e.path, @tagName(e.kind), st.size, st.mtime.nanoseconds, &hash }));
+        const hash: [64]u8 = if (e.kind == .file) try kept.content.hashFile(a, try std.Io.Dir.path.join(a, &.{ dir, e.path })) else @splat('-');
+        try out.append(a, try a.print("{s} {s} {d} {d} {s}", .{ e.path, @tagName(e.kind), st.size, st.mtime.nanoseconds, &hash }));
     }
     std.mem.sort([]const u8, out.items, {}, kept.paths.lessThan);
     return out.items;
@@ -2069,11 +2069,11 @@ test "status, info, doctor, doctor --retire, and sync --dry-run leave the clone'
     try testutil.runGit(&sb, w.clone, &.{ "add", "tracked.txt" });
     try testutil.runGit(&sb, w.clone, &.{ "commit", "-q", "-m", "tracked" });
     try testutil.runGit(&sb, w.clone, &.{ "push", "-q", "origin", "HEAD" });
-    const exclude = try std.fs.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
     const text = try kept.content.readSmall(arena, exclude);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = try std.mem.concat(arena, u8, &.{ text, ".env\n" }) });
     _ = try w.write(arena, ".env", "S=1\n");
-    const git_dir = try std.fs.path.join(arena, &.{ w.clone, ".git" });
+    const git_dir = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git" });
     const runs = [_]struct { name: []const u8, cmd: *const fn (ctx: *app.Ctx) anyerror!u8, argv: []const []const u8 }{
         .{ .name = "status", .cmd = command.run, .argv = &.{"proj"} },
         .{ .name = "info", .cmd = @import("info.zig").command.run, .argv = &.{"proj"} },
@@ -2108,24 +2108,24 @@ test "run: status never names a bare rm -rf of a record whose HEAD alone holds a
         var w = try kept_cmd.TestWorld.init(arena, &sb, true);
         defer w.deinit();
         try w.keep(arena, ".clasp.json", "{}\n");
-        const linked = try std.fs.path.join(arena, &.{ sb.root, "shared" });
+        const linked = try std.Io.Dir.path.join(arena, &.{ sb.root, "shared" });
         try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
-        const records = try fsutil.realPathOrSelf(arena, try std.fs.path.join(arena, &.{ w.clone, ".git", "worktrees" }));
-        const own = try std.fs.path.join(arena, &.{ records, "shared" });
+        const records = try fsutil.realPathOrSelf(arena, try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "worktrees" }));
+        const own = try std.Io.Dir.path.join(arena, &.{ records, "shared" });
         const made = try git.runInRepo(arena, &.{ "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "only-in-record" }, w.clone);
         const only = std.mem.trim(u8, made.stdout, " \r\n");
         const victim = switch (case) {
             .copied_record => blk: {
-                const copy = try std.fs.path.join(arena, &.{ records, "z-copy" });
+                const copy = try std.Io.Dir.path.join(arena, &.{ records, "z-copy" });
                 const cp = try proc.runEnv(arena, &.{ "cp", "-R", own, copy }, null, &sb.git_env.map);
                 try testing.expectEqual(@as(u8, 0), cp.status);
-                try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ copy, "HEAD" }), .data = try std.fmt.allocPrint(arena, "{s}\n", .{only}) });
+                try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ copy, "HEAD" }), .data = try arena.print("{s}\n", .{only}) });
                 break :blk copy;
             },
             .unparseable_git, .dangling_git => blk: {
-                try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ own, "HEAD" }), .data = try std.fmt.allocPrint(arena, "{s}\n", .{only}) });
-                const text = if (case == .unparseable_git) "not a link\n" else try std.fmt.allocPrint(arena, "gitdir: {s}/moved-away/.git/worktrees/shared\n", .{sb.root});
-                try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ linked, ".git" }), .data = text });
+                try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ own, "HEAD" }), .data = try arena.print("{s}\n", .{only}) });
+                const text = if (case == .unparseable_git) "not a link\n" else try arena.print("gitdir: {s}/moved-away/.git/worktrees/shared\n", .{sb.root});
+                try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ linked, ".git" }), .data = text });
                 break :blk own;
             },
         };
@@ -2135,18 +2135,18 @@ test "run: status never names a bare rm -rf of a record whose HEAD alone holds a
             .unparseable_git => "a linked working tree whose .git does not read as a link to a git directory",
             .dangling_git => "a linked working tree whose .git names a git directory that is not there",
         };
-        const named = try std.fmt.allocPrint(arena, "{s}: {s}; holt does not change it: resolve it with git (git -C {s} worktree list), then run again\n", .{ try quoted(arena, linked), seen, try quoted(arena, w.clone) });
+        const named = try arena.print("{s}: {s}; holt does not change it: resolve it with git (git -C {s} worktree list), then run again\n", .{ try quoted(arena, linked), seen, try quoted(arena, w.clone) });
         if (!has(got.out, named)) {
             std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ @tagName(case), named, got.out });
             failed = true;
         }
-        const bare = try std.fmt.allocPrint(arena, "rm -rf {s}", .{try quoted(arena, victim)});
+        const bare = try arena.print("rm -rf {s}", .{try quoted(arena, victim)});
         if (has(got.out, bare)) {
             std.debug.print("{s}: names {s} though {s} holds commit {s} alone:\n{s}\n", .{ @tagName(case), bare, victim, only, got.out });
             const res = try proc.runEnv(arena, &.{ "sh", "-c", bare }, null, &sb.git_env.map);
             try testing.expectEqual(@as(u32, 0), res.status);
             const all = try git.runInRepo(arena, &.{ "rev-list", "--all", "--reflog" }, w.clone);
-            std.debug.print("{s}: after the hint, commit reachable: {}\n", .{ @tagName(case), std.mem.indexOf(u8, all.stdout, only) != null });
+            std.debug.print("{s}: after the hint, commit reachable: {}\n", .{ @tagName(case), std.mem.find(u8, all.stdout, only) != null });
             failed = true;
         }
     }

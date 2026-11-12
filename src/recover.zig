@@ -10,7 +10,7 @@ const testing = std.testing;
 pub const Blocker = enum { dirty, stashes, unpushed, no_upstream, unreadable };
 
 pub const Verdict = struct {
-    blockers: std.ArrayListUnmanaged(Blocker),
+    blockers: std.ArrayList(Blocker),
 
     pub fn safe(self: @This()) bool {
         return self.blockers.items.len == 0;
@@ -32,7 +32,7 @@ pub const Verdict = struct {
 /// Collects every blocker in `repo_path` that would make a destructive move
 /// lossy: uncommitted changes, stashes, or commits/branches not on a remote.
 pub fn check(alloc: std.mem.Allocator, repo_path: []const u8) !Verdict {
-    var blockers: std.ArrayListUnmanaged(Blocker) = .empty;
+    var blockers: std.ArrayList(Blocker) = .empty;
 
     if (!try git.inspectable(alloc, repo_path)) {
         try blockers.append(alloc, .unreadable);
@@ -156,7 +156,7 @@ test "check: a corrupted .git directory is unreadable and blocks recovery" {
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
 
-    const head_path = try std.fs.path.join(testing.allocator, &.{ work, ".git", "HEAD" });
+    const head_path = try std.Io.Dir.path.join(testing.allocator, &.{ work, ".git", "HEAD" });
     defer testing.allocator.free(head_path);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
 
@@ -194,7 +194,7 @@ test "render: writes one line per blocker present" {
     try verdict.render(&aw.writer);
 
     const out = aw.written();
-    try testing.expect(std.mem.indexOf(u8, out, "uncommitted changes present") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "stash entries present") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "unpushed commits present") != null);
+    try testing.expect(std.mem.find(u8, out, "uncommitted changes present") != null);
+    try testing.expect(std.mem.find(u8, out, "stash entries present") != null);
+    try testing.expect(std.mem.find(u8, out, "unpushed commits present") != null);
 }

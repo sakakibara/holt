@@ -46,7 +46,7 @@ pub const Store = union(enum) {
 pub fn storeState(ctx: *app.Ctx, clones: []const []const u8) !Store {
     const ws = ctx.context.?.ws;
     const a = ctx.alloc;
-    const dir = try std.fs.path.join(a, &.{ ws.cfg.synced_root, "kept" });
+    const dir = try std.Io.Dir.path.join(a, &.{ ws.cfg.synced_root, "kept" });
     switch (try kept.content.entryAt(dir)) {
         .dir => {
             var d = std.Io.Dir.cwd().openDir(fsutil.io(), dir, .{ .iterate = true }) catch return .unreadable;
@@ -57,7 +57,7 @@ pub fn storeState(ctx: *app.Ctx, clones: []const []const u8) !Store {
         else => return .unreadable,
     }
     for (clones) |p| if (try linkedRoot(a, ws.cfg.synced_root, ws.cfg.code_root, p)) |root| return .{ .elsewhere = root };
-    if (try kept.content.entryAt(try std.fs.path.join(a, &.{ ws.cfg.synced_root, off_basename })) != .absent) return .off;
+    if (try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ ws.cfg.synced_root, off_basename })) != .absent) return .off;
     return .absent;
 }
 
@@ -94,14 +94,14 @@ pub fn printStore(ctx: *app.Ctx, w: *std.Io.Writer, st: Store, clones: []const [
         .ready, .off => {},
         .absent => if (try anyNotKept(ctx, clones)) try w.writeAll(try absentLine(ctx)),
         .elsewhere => |root| try w.writeAll(try elsewhereLine(ctx, root)),
-        .unreadable => try w.print("kept/ cannot be read: {s}\n", .{try quotedPath(ctx, try std.fs.path.join(ctx.alloc, &.{ ws.cfg.synced_root, "kept" }))}),
+        .unreadable => try w.print("kept/ cannot be read: {s}\n", .{try quotedPath(ctx, try std.Io.Dir.path.join(ctx.alloc, &.{ ws.cfg.synced_root, "kept" }))}),
     }
 }
 
 /// The line naming `root`, the synced root holt's links point into while
 /// `kept/` is absent here, and where to copy its `kept/`.
 pub fn elsewhereLine(ctx: *app.Ctx, root: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(ctx.alloc, "kept/ is at {s}: copy it to {s}\n", .{ try quotedPath(ctx, root), try quotedPath(ctx, ctx.context.?.ws.cfg.synced_root) });
+    return ctx.alloc.print("kept/ is at {s}: copy it to {s}\n", .{ try quotedPath(ctx, root), try quotedPath(ctx, ctx.context.?.ws.cfg.synced_root) });
 }
 
 /// Whether a working tree of a clone at `clones` holds a file not kept,
@@ -141,7 +141,7 @@ pub fn holdsProjects(ctx: *app.Ctx) bool {
 /// `kept/` another machine made that may still be downloading.
 pub fn absentLine(ctx: *app.Ctx) ![]const u8 {
     if (!holdsProjects(ctx)) return not_set_up;
-    return std.fmt.allocPrint(ctx.alloc, "no kept/ here yet: if another machine keeps files, wait for {s} to download it, then run holt sync; otherwise run holt keep --review --all\n", .{util.backendName(ctx)});
+    return ctx.alloc.print("no kept/ here yet: if another machine keeps files, wait for {s} to download it, then run holt sync; otherwise run holt keep --review --all\n", .{util.backendName(ctx)});
 }
 
 /// The kept store's context for this command, with this machine's id.
@@ -313,7 +313,7 @@ const Renderer = struct {
     w: *std.Io.Writer,
     opts: Options,
     summary: Summary = .{},
-    keys: std.StringArrayHashMapUnmanaged(void) = .empty,
+    keys: std.array_hash_map.String(void) = .empty,
     git_reported: bool = false,
     /// The key the working tree being rendered resolves to.
     resolved: ?[]const u8 = null,
@@ -359,7 +359,7 @@ const Renderer = struct {
             try r.stopLine(t.worktree, report);
             for (report.items) |item| {
                 const tree = item.worktree orelse t.worktree;
-                const id = try std.fmt.allocPrint(a, "{s}\x00{s}\x00{s}", .{ @tagName(item.outcome), tree, item.rel });
+                const id = try a.print("{s}\x00{s}\x00{s}", .{ @tagName(item.outcome), tree, item.rel });
                 if ((try seen.getOrPut(a, id)).found_existing) continue;
                 try r.itemLine(c, tree, item);
             }
@@ -547,7 +547,7 @@ const Renderer = struct {
 fn pathKey(a: std.mem.Allocator, code_root: []const u8, path: []const u8) !?[]const u8 {
     if (!fsutil.pathIsInside(path, code_root) or path.len <= code_root.len + 1) return null;
     const rel = try a.dupe(u8, std.mem.trimStart(u8, path[code_root.len..], "/\\"));
-    if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+    if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
     return rel;
 }
 
@@ -581,7 +581,7 @@ pub fn markerKeys(ctx: *app.Ctx) ![]const []const u8 {
         var it = org_dir.iterate();
         while (try it.next(fsutil.io())) |name| {
             if (name.kind != .directory) continue;
-            const path = try std.fs.path.join(a, &.{ root, org.name, name.name, marker.marker_basename });
+            const path = try std.Io.Dir.path.join(a, &.{ root, org.name, name.name, marker.marker_basename });
             const m = marker.load(a, path, null) catch continue;
             try appendKeys(a, &out, m);
         }
@@ -676,7 +676,7 @@ fn moveReady(ctx: *app.Ctx, w: *std.Io.Writer, rerun: []const u8) !?bool {
     switch (st) {
         .ready => return true,
         .unreadable => {
-            const dir = try std.fs.path.join(ctx.alloc, &.{ ctx.context.?.ws.cfg.synced_root, "kept" });
+            const dir = try std.Io.Dir.path.join(ctx.alloc, &.{ ctx.context.?.ws.cfg.synced_root, "kept" });
             try w.print("holt: kept/ cannot be read: {s}; the clone was not moved - make it readable, then run: {s}\n", .{ try quotedPath(ctx, dir), rerun });
             return null;
         },
@@ -884,11 +884,11 @@ pub const TestBed = struct {
     /// A workspace at `<sb.root>/<name>` (`name` empty for the root itself)
     /// with its own state directory.
     pub fn init(a: std.mem.Allocator, sb: *testutil.Sandbox, name: []const u8) !TestBed {
-        const root = try std.fs.path.join(a, &.{ sb.root, name });
-        const scope = try testutil.EnvScope.install(a, &.{.{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ root, "state" }) }});
+        const root = try std.Io.Dir.path.join(a, &.{ sb.root, name });
+        const scope = try testutil.EnvScope.install(a, &.{.{ "XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ root, "state" }) }});
         const ws = try testutil.testWorkspace(a, root);
         try fsutil.ensureDir(ws.cfg.synced_root);
-        const bare_owned = try testutil.makeBareRepo(sb, try std.fmt.allocPrint(a, "{s}bare.git", .{name}));
+        const bare_owned = try testutil.makeBareRepo(sb, try a.print("{s}bare.git", .{name}));
         defer sb.alloc.free(bare_owned);
         return .{ .a = a, .sb = sb, .ws = ws, .scope = scope, .bare = try a.dupe(u8, bare_owned) };
     }
@@ -899,7 +899,7 @@ pub const TestBed = struct {
 
     /// Makes this bed's environment the one commands read, as `init` did.
     pub fn use(t: *TestBed) !void {
-        t.scope = try testutil.EnvScope.install(t.a, &.{.{ "XDG_STATE_HOME", try std.fs.path.join(t.a, &.{ std.fs.path.dirname(t.ws.cfg.synced_root).?, "state" }) }});
+        t.scope = try testutil.EnvScope.install(t.a, &.{.{ "XDG_STATE_HOME", try std.Io.Dir.path.join(t.a, &.{ std.Io.Dir.path.dirname(t.ws.cfg.synced_root).?, "state" }) }});
     }
 
     pub fn kc(t: *TestBed) !kept.Ctx {
@@ -926,7 +926,7 @@ pub const TestBed = struct {
 
     pub fn write(t: *TestBed, dir: []const u8, rel: []const u8, data: []const u8) !void {
         const p = try fsutil.joinSlashy(t.a, dir, rel);
-        try fsutil.ensureDir(std.fs.path.dirname(p).?);
+        try fsutil.ensureDir(std.Io.Dir.path.dirname(p).?);
         try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = p, .data = data });
     }
 
@@ -967,17 +967,17 @@ pub fn snapshot(a: std.mem.Allocator, root: []const u8, skip: ?[]const u8) ![]co
     defer walker.deinit();
     var lines: std.ArrayList([]const u8) = .empty;
     while (try walker.next(fsutil.io())) |e| {
-        const full = try std.fs.path.join(a, &.{ root, e.path });
+        const full = try std.Io.Dir.path.join(a, &.{ root, e.path });
         if (skip) |s| if (fsutil.pathIsInside(full, s)) continue;
         const line = switch (e.kind) {
-            .file => if (kept.content.hashFile(a, full)) |h| try std.fmt.allocPrint(a, "f {s} {s}", .{ e.path, &h }) else |err| switch (err) {
+            .file => if (kept.content.hashFile(a, full)) |h| try a.print("f {s} {s}", .{ e.path, &h }) else |err| switch (err) {
                 // Windows refuses to read a file another handle holds locked.
-                error.LockViolation => try std.fmt.allocPrint(a, "f {s} locked, {d} bytes", .{ e.path, (try std.Io.Dir.cwd().statFile(fsutil.io(), full, .{})).size }),
+                error.LockViolation => try a.print("f {s} locked, {d} bytes", .{ e.path, (try std.Io.Dir.cwd().statFile(fsutil.io(), full, .{})).size }),
                 else => return err,
             },
-            .sym_link => try std.fmt.allocPrint(a, "l {s} {s}", .{ e.path, (try kept.content.readLink(a, full)) orelse "" }),
-            .directory => try std.fmt.allocPrint(a, "d {s}", .{e.path}),
-            else => try std.fmt.allocPrint(a, "o {s}", .{e.path}),
+            .sym_link => try a.print("l {s} {s}", .{ e.path, (try kept.content.readLink(a, full)) orelse "" }),
+            .directory => try a.print("d {s}", .{e.path}),
+            else => try a.print("o {s}", .{e.path}),
         };
         try lines.append(a, line);
     }

@@ -39,8 +39,8 @@ pub const icloud_default_synced_root = "~/Library/Mobile Documents/com~apple~Clo
 /// that would later trip an `*Absolute` fs call.
 pub fn configPath(alloc: std.mem.Allocator, env: Env) ![]u8 {
     const base = env_zig.dirs.configHome(alloc, env) catch return error.NoHomeDir;
-    if (!std.fs.path.isAbsolute(base)) return error.NoHomeDir;
-    return std.fs.path.join(alloc, &.{ base, "holt", "config.toml" });
+    if (!std.Io.Dir.path.isAbsolute(base)) return error.NoHomeDir;
+    return std.Io.Dir.path.join(alloc, &.{ base, "holt", "config.toml" });
 }
 
 /// A built-in backend suggestion offered by `holt setup`. Fixed-path clouds
@@ -223,7 +223,7 @@ pub fn load(alloc: std.mem.Allocator, env: Env, path: []const u8, diag: ?*diagno
 /// config, or a "~/..." expanded against a relative/unset $HOME - is caught
 /// here as a clean diagnostic instead of a downstream panic.
 fn ensureAbsolute(diag: ?*diagnostic.Diagnostic, alloc: std.mem.Allocator, shown: []const u8, label: []const u8, value: []const u8) !void {
-    if (std.fs.path.isAbsolute(value)) return;
+    if (std.Io.Dir.path.isAbsolute(value)) return;
     if (diag) |d| d.set(alloc, "{s}: {s} \"{s}\" is not an absolute path (check the config and $HOME)", .{ shown, label, value });
     return error.RelativeRoot;
 }
@@ -311,7 +311,7 @@ fn writeFixture(tmp: *testing.TmpDir, content: []const u8) ![]u8 {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "config.toml", .data = content });
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    return std.fs.path.join(testing.allocator, &.{ root, "config.toml" });
+    return std.Io.Dir.path.join(testing.allocator, &.{ root, "config.toml" });
 }
 
 test "load: backend mode resolves synced_root from the matching preset" {
@@ -335,7 +335,7 @@ test "load: backend mode resolves synced_root from the matching preset" {
     const cfg = try load(arena, env, path, null);
     try testing.expectEqualStrings("dropbox", cfg.backend.?);
     const home = try fsutil.expandTilde(arena, env, "~");
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "Dropbox", "workspace" }), cfg.synced_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "Dropbox", "workspace" }), cfg.synced_root);
     try testing.expectEqual(@as(usize, 1), cfg.presets.len);
     try testing.expectEqualStrings("dropbox", cfg.presets[0].name);
 }
@@ -358,7 +358,7 @@ test "load: direct mode uses synced_root with no backend" {
     const cfg = try load(arena, env, path, null);
     try testing.expectEqual(@as(?[]const u8, null), cfg.backend);
     const home = try fsutil.expandTilde(arena, env, "~");
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "x" }), cfg.synced_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "x" }), cfg.synced_root);
 }
 
 test "load: a free-form backend name loads fine as long as its preset exists" {
@@ -382,7 +382,7 @@ test "load: a free-form backend name loads fine as long as its preset exists" {
     const cfg = try load(arena, env, path, null);
     try testing.expectEqualStrings("myserver", cfg.backend.?);
     const home = try fsutil.expandTilde(arena, env, "~");
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "nas" }), cfg.synced_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "nas" }), cfg.synced_root);
 }
 
 test "load: a backend with no matching preset errors UnknownBackend, naming the path and the backend" {
@@ -402,8 +402,8 @@ test "load: a backend with no matching preset errors UnknownBackend, naming the 
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.UnknownBackend, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, path) != null);
-    try testing.expect(std.mem.indexOf(u8, d.message, "nope") != null);
+    try testing.expect(std.mem.find(u8, d.message, path) != null);
+    try testing.expect(std.mem.find(u8, d.message, "nope") != null);
 }
 
 test "load: both backend and synced_root set errors ConfigConflict" {
@@ -427,7 +427,7 @@ test "load: both backend and synced_root set errors ConfigConflict" {
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.ConfigConflict, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, path) != null);
+    try testing.expect(std.mem.find(u8, d.message, path) != null);
 }
 
 test "load: neither backend nor synced_root set errors NoSyncedRoot, pointing at holt setup" {
@@ -446,7 +446,7 @@ test "load: neither backend nor synced_root set errors NoSyncedRoot, pointing at
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.NoSyncedRoot, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "holt setup") != null);
+    try testing.expect(std.mem.find(u8, d.message, "holt setup") != null);
 }
 
 test "load: multiple backends all appear in presets" {
@@ -501,9 +501,9 @@ test "load: tilde-expands synced_root, code_root, and hub_root" {
 
     const cfg = try load(arena, env, path, null);
     const home = try fsutil.expandTilde(arena, env, "~");
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "Sync" }), cfg.synced_root);
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "dev" }), cfg.code_root);
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "hub" }), cfg.hub_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "Sync" }), cfg.synced_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "dev" }), cfg.code_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "hub" }), cfg.hub_root);
 }
 
 test "loadFromPath: a non-existent config path errors NoConfig, pointing at holt setup" {
@@ -516,11 +516,11 @@ test "loadFromPath: a non-existent config path errors NoConfig, pointing at holt
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const absent_path = try std.fs.path.join(arena, &.{ root, "config.toml" });
+    const absent_path = try std.Io.Dir.path.join(arena, &.{ root, "config.toml" });
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.NoConfig, loadFromPath(arena, env, absent_path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "holt setup") != null);
+    try testing.expect(std.mem.find(u8, d.message, "holt setup") != null);
 }
 
 test "loadFromPath: an existing iCloud container never gets adopted when the config is absent" {
@@ -539,11 +539,11 @@ test "loadFromPath: an existing iCloud container never gets adopted when the con
     try fsutil.ensureDir(icloud_container);
     try testing.expect(fsutil.exists(icloud_container));
 
-    const absent_path = try std.fs.path.join(arena, &.{ fake_home, "config.toml" });
+    const absent_path = try std.Io.Dir.path.join(arena, &.{ fake_home, "config.toml" });
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.NoConfig, loadFromPath(arena, env, absent_path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "holt setup") != null);
+    try testing.expect(std.mem.find(u8, d.message, "holt setup") != null);
 }
 
 test "loadFromPath: an existing but malformed config propagates its error, never falls back" {
@@ -564,7 +564,7 @@ test "loadFromPath: an existing but malformed config propagates its error, never
     var d: diagnostic.Diagnostic = .{};
     try testing.expect(fsutil.exists(path));
     try testing.expectError(error.UnknownBackend, loadFromPath(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "nope") != null);
+    try testing.expect(std.mem.find(u8, d.message, "nope") != null);
 }
 
 test "builtin_seeds: 5 real fixed-path clouds, 4 commented account-suffix clouds" {
@@ -586,9 +586,9 @@ test "renderConfig: backend mode round-trips through load and lists the seeds" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const body = try renderConfig(arena, "dropbox", null, "~/Code", "~/Projects");
-    try testing.expect(std.mem.indexOf(u8, body, "backend = \"dropbox\"") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "[backends.dropbox]") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "# [backends.gdrive]") != null);
+    try testing.expect(std.mem.find(u8, body, "backend = \"dropbox\"") != null);
+    try testing.expect(std.mem.find(u8, body, "[backends.dropbox]") != null);
+    try testing.expect(std.mem.find(u8, body, "# [backends.gdrive]") != null);
 
     const path = try writeFixture(&tmp, body);
     defer testing.allocator.free(path);
@@ -596,9 +596,9 @@ test "renderConfig: backend mode round-trips through load and lists the seeds" {
     const cfg = try load(arena, env, path, null);
     try testing.expectEqualStrings("dropbox", cfg.backend.?);
     const home = try fsutil.expandTilde(arena, env, "~");
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "Dropbox", "workspace" }), cfg.synced_root);
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "Code" }), cfg.code_root);
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "Projects" }), cfg.hub_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "Dropbox", "workspace" }), cfg.synced_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "Code" }), cfg.code_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "Projects" }), cfg.hub_root);
 }
 
 test "renderConfig: direct mode round-trips through load with no active backend" {
@@ -610,8 +610,8 @@ test "renderConfig: direct mode round-trips through load with no active backend"
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const body = try renderConfig(arena, null, "~/custom", "~/Code", "~/Projects");
-    try testing.expect(std.mem.indexOf(u8, body, "synced_root = \"~/custom\"") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "backend =") == null);
+    try testing.expect(std.mem.find(u8, body, "synced_root = \"~/custom\"") != null);
+    try testing.expect(std.mem.find(u8, body, "backend =") == null);
 
     const path = try writeFixture(&tmp, body);
     defer testing.allocator.free(path);
@@ -619,7 +619,7 @@ test "renderConfig: direct mode round-trips through load with no active backend"
     const cfg = try load(arena, env, path, null);
     try testing.expectEqual(@as(?[]const u8, null), cfg.backend);
     const home = try fsutil.expandTilde(arena, env, "~");
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "custom" }), cfg.synced_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "custom" }), cfg.synced_root);
 }
 
 test "load: malformed TOML syntax errors and the diag names the path and says invalid TOML" {
@@ -639,8 +639,8 @@ test "load: malformed TOML syntax errors and the diag names the path and says in
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.TomlParseError, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, path) != null);
-    try testing.expect(std.mem.indexOf(u8, d.message, "invalid TOML") != null);
+    try testing.expect(std.mem.find(u8, d.message, path) != null);
+    try testing.expect(std.mem.find(u8, d.message, "invalid TOML") != null);
 }
 
 test "load: a file with no [workspace] table errors, naming the missing table" {
@@ -656,8 +656,8 @@ test "load: a file with no [workspace] table errors, naming the missing table" {
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.MissingField, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, path) != null);
-    try testing.expect(std.mem.indexOf(u8, d.message, "no [workspace] table found") != null);
+    try testing.expect(std.mem.find(u8, d.message, path) != null);
+    try testing.expect(std.mem.find(u8, d.message, "no [workspace] table found") != null);
 }
 
 test "configPath: resolves under a holt directory" {
@@ -665,11 +665,11 @@ test "configPath: resolves under a holt directory" {
     defer arena_state.deinit();
 
     const path = try configPath(arena_state.allocator(), try homeEnv(arena_state.allocator()));
-    try testing.expect(std.mem.endsWith(u8, path, "holt" ++ std.fs.path.sep_str ++ "config.toml"));
+    try testing.expect(std.mem.endsWith(u8, path, "holt" ++ std.Io.Dir.path.sep_str ++ "config.toml"));
 }
 
 test "configPath: an empty or relative XDG_CONFIG_HOME is treated as unset, still yielding an absolute path" {
-    const default_suffix = ".config" ++ std.fs.path.sep_str ++ "holt" ++ std.fs.path.sep_str ++ "config.toml";
+    const default_suffix = ".config" ++ std.Io.Dir.path.sep_str ++ "holt" ++ std.Io.Dir.path.sep_str ++ "config.toml";
     for ([_][]const u8{ "", "relative/cfg" }) |bad_xdg| {
         var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
         defer arena_state.deinit();
@@ -678,7 +678,7 @@ test "configPath: an empty or relative XDG_CONFIG_HOME is treated as unset, stil
         const env = try testEnv(arena, &.{ .{ "HOME", test_home }, .{ "XDG_CONFIG_HOME", bad_xdg } });
 
         const path = try configPath(arena, env);
-        try testing.expect(std.fs.path.isAbsolute(path));
+        try testing.expect(std.Io.Dir.path.isAbsolute(path));
         try testing.expect(std.mem.endsWith(u8, path, default_suffix));
     }
 }
@@ -691,7 +691,7 @@ test "configPath: an absolute XDG_CONFIG_HOME is used verbatim" {
     const env = try testEnv(arena, &.{ .{ "HOME", test_home }, .{ "XDG_CONFIG_HOME", "/somewhere/cfg" } });
 
     const path = try configPath(arena, env);
-    const want = try std.fs.path.join(arena, &.{ "/somewhere/cfg", "holt", "config.toml" });
+    const want = try std.Io.Dir.path.join(arena, &.{ "/somewhere/cfg", "holt", "config.toml" });
     try testing.expectEqualStrings(want, path);
 }
 
@@ -712,8 +712,8 @@ test "load: a relative synced_root errors RelativeRoot instead of panicking down
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.RelativeRoot, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "synced_root") != null);
-    try testing.expect(std.mem.indexOf(u8, d.message, "absolute") != null);
+    try testing.expect(std.mem.find(u8, d.message, "synced_root") != null);
+    try testing.expect(std.mem.find(u8, d.message, "absolute") != null);
 }
 
 test "load: a root that exists as a file errors RootNotDirectory instead of a bare NotDir, naming it" {
@@ -728,16 +728,16 @@ test "load: a root that exists as a file errors RootNotDirectory instead of a ba
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     // A plain file where synced_root is supposed to be a directory.
-    const file_root = try std.fs.path.join(arena, &.{ root, "not-a-dir" });
+    const file_root = try std.Io.Dir.path.join(arena, &.{ root, "not-a-dir" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = file_root, .data = "x" });
 
-    const path = try writeFixture(&tmp, try std.fmt.allocPrint(arena, "[workspace]\nsynced_root = \"{s}\"\n", .{try tomlEscape(arena, file_root)}));
+    const path = try writeFixture(&tmp, try arena.print("[workspace]\nsynced_root = \"{s}\"\n", .{try tomlEscape(arena, file_root)}));
     defer testing.allocator.free(path);
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.RootNotDirectory, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "synced_root") != null);
-    try testing.expect(std.mem.indexOf(u8, d.message, "not a directory") != null);
+    try testing.expect(std.mem.find(u8, d.message, "synced_root") != null);
+    try testing.expect(std.mem.find(u8, d.message, "not a directory") != null);
 }
 
 test "load: a relative code_root errors RelativeRoot, naming code_root" {
@@ -758,5 +758,5 @@ test "load: a relative code_root errors RelativeRoot, naming code_root" {
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.RelativeRoot, load(arena, env, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "code_root") != null);
+    try testing.expect(std.mem.find(u8, d.message, "code_root") != null);
 }

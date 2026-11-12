@@ -454,7 +454,7 @@ pub const Prepared = struct {
     /// kept (`kept_what`: the clone, or the worktree), then what was set
     /// aside and unlinked (`asideNote`).
     pub fn changedWhy(p: *const Prepared, ctx: *app.Ctx, kept_what: []const u8) ![]const u8 {
-        return std.fmt.allocPrint(ctx.alloc, "{s} changed while it was being weighed (a ref or HEAD moved, or git could not read them again); {s} was kept{s}", .{ try show(ctx, p.path), kept_what, try p.asideNote(ctx) });
+        return ctx.alloc.print("{s} changed while it was being weighed (a ref or HEAD moved, or git could not read them again); {s} was kept{s}", .{ try show(ctx, p.path), kept_what, try p.asideNote(ctx) });
     }
 
     /// The refs and HEADs of every git directory the delete removes, and
@@ -570,7 +570,7 @@ pub const Prepared = struct {
                 },
             };
             try ctx.out.print("link recorded {s} -> {s} (kept/.holt-aside/{s})\n", .{ shown, raw, e.stamp });
-            try p.noteAside(a, path, try std.fmt.allocPrint(a, ".holt-aside/{s}", .{e.stamp}));
+            try p.noteAside(a, path, try a.print(".holt-aside/{s}", .{e.stamp}));
             return true;
         }
         const e = kept.aside.ensureAside(a, p.kctx.layout, c.common_dir, p.kctx.machine_id, key, rel, path, .deleting, .{ .partial = .{ .ignore_case = try kept.clone.ignoresCase(a, tree) } }) catch |err| switch (err) {
@@ -593,7 +593,7 @@ pub const Prepared = struct {
         }
         if (!whole) return false;
         try ctx.out.print("set aside {s} (kept/.holt-aside/{s})\n", .{ shown, e.stamp });
-        try p.noteAside(a, path, try std.fmt.allocPrint(a, ".holt-aside/{s}", .{e.stamp}));
+        try p.noteAside(a, path, try a.print(".holt-aside/{s}", .{e.stamp}));
         for (e.links) |l| try ctx.out.print("link recorded {s} -> {s}\n", .{ try show(ctx, try fsutil.joinSlashy(a, tree, l.path)), l.target });
         return true;
     }
@@ -616,7 +616,7 @@ pub const Prepared = struct {
         const scratch = try kept.sweep.scratchDir(a, p.kctx);
         try fsutil.ensureDir(scratch);
         const suffix = kept.content.randomSuffix();
-        const tmp = try std.fs.path.join(a, &.{ scratch, try std.mem.concat(a, u8, &.{ "staged-", &suffix }) });
+        const tmp = try std.Io.Dir.path.join(a, &.{ scratch, try std.mem.concat(a, u8, &.{ "staged-", &suffix }) });
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = tmp, .data = blob.stdout });
         defer fsutil.removePath(tmp) catch {};
         const e = kept.aside.setAsideStaged(a, p.kctx.layout, p.kctx.machine_id, key, d.rel, tmp, .deleting) catch |err| switch (err) {
@@ -627,7 +627,7 @@ pub const Prepared = struct {
             },
         };
         try ctx.out.print("set aside the staged version of {s} (kept/.holt-aside/{s}/index/{s})\n", .{ shown, e.stamp, try ui.printable(a, d.rel) });
-        try p.noteAside(a, try fsutil.joinSlashy(a, d.tree, d.rel), try std.fmt.allocPrint(a, ".holt-aside/{s}/index/{s}", .{ e.stamp, try ui.printable(a, d.rel) }));
+        try p.noteAside(a, try fsutil.joinSlashy(a, d.tree, d.rel), try a.print(".holt-aside/{s}/index/{s}", .{ e.stamp, try ui.printable(a, d.rel) }));
         return true;
     }
 
@@ -715,7 +715,7 @@ pub const Prepared = struct {
                             return false;
                         },
                     };
-                    held = try std.fmt.allocPrint(a, ".holt-aside/{s}", .{e.stamp});
+                    held = try a.print(".holt-aside/{s}", .{e.stamp});
                     try p.noteAside(a, path, held.?);
                 };
                 const removed = kept.content.removeLinkIf(a, path, raw) catch |err| {
@@ -785,18 +785,18 @@ pub const Prepared = struct {
         const a = ctx.alloc;
         const f = p.found;
         var out: std.ArrayList([]const u8) = .empty;
-        if (f.candidates.len > 0) try out.append(a, try std.fmt.allocPrint(a, "{s} (run: holt keep --review {s})", .{ try doctor_cmd.counted(a, f.candidates.len, "file not kept", "files not kept"), try q(ctx, p.path) }));
+        if (f.candidates.len > 0) try out.append(a, try a.print("{s} (run: holt keep --review {s})", .{ try doctor_cmd.counted(a, f.candidates.len, "file not kept", "files not kept"), try q(ctx, p.path) }));
         for (f.unsettled) |u| {
             const h = try p.hintFor(ctx, u);
-            try out.append(a, try std.fmt.allocPrint(a, "a kept file unsettled, {s}: {s}", .{ try q(ctx, try kept_hints.placeOf(a, u.tree, u.item)), try kept_hints.render(a, h) }));
+            try out.append(a, try a.print("a kept file unsettled, {s}: {s}", .{ try q(ctx, try kept_hints.placeOf(a, u.tree, u.item)), try kept_hints.render(a, h) }));
         }
         if (f.stop != .none) {
             const h = try kept_hints.forStop(ctx, p.c.?.worktree, f.stop, p.key);
-            try out.append(a, try std.fmt.allocPrint(a, "its kept files could not be evaluated: {s}", .{try kept_hints.render(a, h)}));
+            try out.append(a, try a.print("its kept files could not be evaluated: {s}", .{try kept_hints.render(a, h)}));
         }
         for (f.nested) |n| {
             const at = try q(ctx, try fsutil.joinSlashy(a, n.tree, n.nested.repo));
-            try out.append(a, try std.fmt.allocPrint(a, "nested repository {s} (run: holt repo adopt {s})", .{ at, at }));
+            try out.append(a, try a.print("nested repository {s} (run: holt repo adopt {s})", .{ at, at }));
         }
         var repos: std.ArrayList([]const u8) = .empty;
         for (f.dirty) |d| if (!kept.paths.contains(repos.items, d.repo)) try repos.append(a, d.repo);
@@ -805,7 +805,7 @@ pub const Prepared = struct {
             for (f.dirty) |d| if (std.mem.eql(u8, d.repo, r)) {
                 n += 1;
             };
-            try out.append(a, try std.fmt.allocPrint(a, "{s} in {s} (run: git -C {s} status)", .{ try doctor_cmd.counted(a, n, "uncommitted change", "uncommitted changes"), try show(ctx, r), try q(ctx, r) }));
+            try out.append(a, try a.print("{s} in {s} (run: git -C {s} status)", .{ try doctor_cmd.counted(a, n, "uncommitted change", "uncommitted changes"), try show(ctx, r), try q(ctx, r) }));
         }
         for (f.ops) |x| try out.append(a, try opLine(ctx, x, force_cmd));
         for (f.git) |r| {
@@ -813,7 +813,7 @@ pub const Prepared = struct {
             if (p.many and r.risk.what == .note and !besideLine(f.git, r.repo)) continue;
             try out.append(a, try riskLineThen(ctx, r, force_cmd, then));
         }
-        for (f.unlisted) |t| try out.append(a, try std.fmt.allocPrint(a, "git could not list what {s} holds (run: git -C {s} status)", .{ try show(ctx, t), try q(ctx, t) }));
+        for (f.unlisted) |t| try out.append(a, try a.print("git could not list what {s} holds (run: git -C {s} status)", .{ try show(ctx, t), try q(ctx, t) }));
         return out.items;
     }
 
@@ -886,15 +886,15 @@ pub const HeldBack = struct {
     /// taken, `..., then delete each with: <then>` in place of `and run
     /// again`.
     pub fn lines(h: *const HeldBack, a: std.mem.Allocator, what: []const u8, then: ?[]const u8, tail: []const u8) ![]const []const u8 {
-        const after: []const u8 = if (then) |cmd| try std.fmt.allocPrint(a, ", then delete each with: {s}", .{cmd}) else " and run again";
+        const after: []const u8 = if (then) |cmd| try a.print(", then delete each with: {s}", .{cmd}) else " and run again";
         var out: std.ArrayList([]const u8) = .empty;
         for (h.hosts.items, h.clones.items) |sk, clones| {
             const shown = clones.items[0..@min(clones.items.len, unasked_shown)];
-            const more = if (clones.items.len > unasked_shown) try std.fmt.allocPrint(a, ", and {d} more", .{clones.items.len - unasked_shown}) else "";
+            const more = if (clones.items.len > unasked_shown) try a.print(", and {d} more", .{clones.items.len - unasked_shown}) else "";
             const count_words: []const u8 = if (clones.items.len == 1) "clone was" else "clones were";
             const line = switch (sk.class) {
-                .host_key => try std.fmt.allocPrint(a, "the host key of {s} was not verified, so {d} {s} {s}: {s}{s}; verify the host key of {s}{s}{s}", .{ sk.host, clones.items.len, count_words, what, try std.mem.join(a, ", ", shown), more, sk.host, after, tail }),
-                else => try std.fmt.allocPrint(a, "{s} did not answer, so {d} {s} {s}: {s}{s}; reconnect{s}{s}", .{ sk.host, clones.items.len, count_words, what, try std.mem.join(a, ", ", shown), more, after, tail }),
+                .host_key => try a.print("the host key of {s} was not verified, so {d} {s} {s}: {s}{s}; verify the host key of {s}{s}{s}", .{ sk.host, clones.items.len, count_words, what, try std.mem.join(a, ", ", shown), more, sk.host, after, tail }),
+                else => try a.print("{s} did not answer, so {d} {s} {s}: {s}{s}; reconnect{s}{s}", .{ sk.host, clones.items.len, count_words, what, try std.mem.join(a, ", ", shown), more, after, tail }),
             };
             try out.append(a, line);
         }
@@ -962,7 +962,7 @@ fn describeSkip(why: kept.content.Skip) []const u8 {
 /// worktrees set.
 fn printUnkept(ctx: *app.Ctx, common_dir: []const u8) !void {
     const a = ctx.alloc;
-    const hooks = try std.fs.path.join(a, &.{ common_dir, "hooks" });
+    const hooks = try std.Io.Dir.path.join(a, &.{ common_dir, "hooks" });
     var names: std.ArrayList([]const u8) = .empty;
     if (std.Io.Dir.cwd().openDir(io(), hooks, .{ .iterate = true })) |opened| {
         var d = opened;
@@ -977,13 +977,13 @@ fn printUnkept(ctx: *app.Ctx, common_dir: []const u8) !void {
         std.mem.sort([]const u8, names.items, {}, kept.paths.lessThan);
         try ctx.out.print("deleting custom hooks in {s}: {s}\n", .{ try show(ctx, hooks), try std.mem.join(a, ", ", names.items) });
     }
-    const cfg = try std.fs.path.join(a, &.{ common_dir, "config" });
+    const cfg = try std.Io.Dir.path.join(a, &.{ common_dir, "config" });
     const listed = try (At{ .repo = common_dir }).run(a, &.{ "config", "--file", cfg, "--name-only", "--list" });
     if (listed.status != 0) return;
     var keys: std.ArrayList([]const u8) = .empty;
     var it = std.mem.tokenizeAny(u8, listed.stdout, "\r\n");
     while (it.next()) |name| {
-        const dot = std.mem.indexOfScalar(u8, name, '.') orelse continue;
+        const dot = std.mem.findScalar(u8, name, '.') orelse continue;
         const section = name[0..dot];
         const clone_own = for ([_][]const u8{ "core", "remote", "branch", "submodule" }) |s| {
             if (std.ascii.eqlIgnoreCase(section, s)) break true;
@@ -1022,50 +1022,50 @@ pub fn describeRisk(ctx: *app.Ctx, r: RiskAt) ![]const u8 {
     const name = try ui.shellQuote(a, r.risk.name);
     const none: []const u8 = if (r.risk.answered) "no remote has" else "no remote that answered has";
     const what = try switch (r.risk.what) {
-        .stashes => std.fmt.allocPrint(a, "stash entries of {s}", .{at}),
-        .ahead => std.fmt.allocPrint(a, "commits of branch {s} {s}, in {s}", .{ name, none, at }),
+        .stashes => a.print("stash entries of {s}", .{at}),
+        .ahead => a.print("commits of branch {s} {s}, in {s}", .{ name, none, at }),
         .ref_unheld => if (r.risk.worktree) |w|
-            std.fmt.allocPrint(a, "commits only {s} of worktree {s} holds, {s}, in {s}", .{ name, try ui.shellQuote(a, w), none, at })
+            a.print("commits only {s} of worktree {s} holds, {s}, in {s}", .{ name, try ui.shellQuote(a, w), none, at })
         else
-            std.fmt.allocPrint(a, "commits only {s} holds, {s}, in {s}", .{ name, none, at }),
+            a.print("commits only {s} holds, {s}, in {s}", .{ name, none, at }),
         .object_unheld => if (r.risk.worktree) |w|
-            std.fmt.allocPrint(a, "the {s} only {s} of worktree {s} names, {s}, in {s}", .{ r.risk.kind, name, try ui.shellQuote(a, w), none, at })
+            a.print("the {s} only {s} of worktree {s} names, {s}, in {s}", .{ r.risk.kind, name, try ui.shellQuote(a, w), none, at })
         else
-            std.fmt.allocPrint(a, "the {s} only {s} names, {s}, in {s}", .{ r.risk.kind, name, none, at }),
+            a.print("the {s} only {s} names, {s}, in {s}", .{ r.risk.kind, name, none, at }),
         .remote_refs => blk: {
             const refs = r.risk.refs;
             var shown: std.ArrayList([]const u8) = .empty;
             for (refs[0..@min(refs.len, unasked_shown)]) |ref| try shown.append(a, try ui.shellQuote(a, ref));
-            const more = if (refs.len > unasked_shown) try std.fmt.allocPrint(a, ", and {d} more", .{refs.len - unasked_shown}) else "";
-            break :blk std.fmt.allocPrint(a, "commits only {s} of remote {s} {s}, {s}, in {s}: {s}{s}", .{ try doctor_cmd.counted(a, refs.len, "ref", "refs"), name, if (refs.len == 1) "holds" else "hold", none, at, try std.mem.join(a, ", ", shown.items), more });
+            const more = if (refs.len > unasked_shown) try a.print(", and {d} more", .{refs.len - unasked_shown}) else "";
+            break :blk a.print("commits only {s} of remote {s} {s}, {s}, in {s}: {s}{s}", .{ try doctor_cmd.counted(a, refs.len, "ref", "refs"), name, if (refs.len == 1) "holds" else "hold", none, at, try std.mem.join(a, ", ", shown.items), more });
         },
         .unasked => blk: {
             const refs = r.risk.refs;
             var shown: std.ArrayList([]const u8) = .empty;
             for (refs[0..@min(refs.len, unasked_shown)]) |ref| try shown.append(a, try ui.shellQuote(a, ref));
-            const more = if (refs.len > unasked_shown) try std.fmt.allocPrint(a, ", and {d} more", .{refs.len - unasked_shown}) else "";
-            const held = try std.fmt.allocPrint(a, "{s} not confirmed held, in {s}: {s}{s}", .{ try doctor_cmd.counted(a, refs.len, "ref", "refs"), at, try std.mem.join(a, ", ", shown.items), more });
+            const more = if (refs.len > unasked_shown) try a.print(", and {d} more", .{refs.len - unasked_shown}) else "";
+            const held = try a.print("{s} not confirmed held, in {s}: {s}{s}", .{ try doctor_cmd.counted(a, refs.len, "ref", "refs"), at, try std.mem.join(a, ", ", shown.items), more });
             const remote = try ui.shellQuote(a, r.risk.remote orelse "");
             var urls: std.ArrayList([]const u8) = .empty;
             try urls.append(a, try shownUrl(a, r.risk.url));
             for (r.risk.more_urls) |u| try urls.append(a, try shownUrl(a, u));
-            break :blk std.fmt.allocPrint(a, "{s} (remote {s} could not be asked at {s}: {s})", .{ held, remote, try std.mem.join(a, ", ", urls.items), r.risk.why });
+            break :blk a.print("{s} (remote {s} could not be asked at {s}: {s})", .{ held, remote, try std.mem.join(a, ", ", urls.items), r.risk.why });
         },
         .note => blk: {
             var parts: std.ArrayList([]const u8) = .empty;
-            for (r.risk.notes) |n| try parts.append(a, try std.fmt.allocPrint(a, "remote {s} at {s} ({s})", .{ try ui.shellQuote(a, n.remote), try shownUrl(a, n.url), n.why.why }));
-            break :blk std.fmt.allocPrint(a, "could not be asked, in {s}: {s}", .{ at, try std.mem.join(a, "; ", parts.items) });
+            for (r.risk.notes) |n| try parts.append(a, try a.print("remote {s} at {s} ({s})", .{ try ui.shellQuote(a, n.remote), try shownUrl(a, n.url), n.why.why }));
+            break :blk a.print("could not be asked, in {s}: {s}", .{ at, try std.mem.join(a, "; ", parts.items) });
         },
         .head_unheld => if (r.risk.worktree) |w|
-            std.fmt.allocPrint(a, "commit {s}, which only the HEAD of worktree {s} holds and {s}, in {s}", .{ r.risk.name, try ui.shellQuote(a, w), none, at })
+            a.print("commit {s}, which only the HEAD of worktree {s} holds and {s}, in {s}", .{ r.risk.name, try ui.shellQuote(a, w), none, at })
         else
-            std.fmt.allocPrint(a, "commit {s}, which only the HEAD of {s} holds and {s}", .{ r.risk.name, at, none }),
-        .unreadable => std.fmt.allocPrint(a, "git state of {s} could not be read", .{at}),
+            a.print("commit {s}, which only the HEAD of {s} holds and {s}", .{ r.risk.name, at, none }),
+        .unreadable => a.print("git state of {s} could not be read", .{at}),
         .no_target => blk: {
             var clauses: std.ArrayList([]const u8) = .empty;
             for (r.risk.gone) |g| try clauses.append(a, (try clauseOf(ctx, r, g)).text);
             if (clauses.items.len == 0) try clauses.append(a, "it has no remote");
-            break :blk std.fmt.allocPrint(a, "{s}; no remote counts as a copy: {s}", .{ try noTargetHead(ctx, r), try std.mem.join(a, "; ", clauses.items) });
+            break :blk a.print("{s}; no remote counts as a copy: {s}", .{ try noTargetHead(ctx, r), try std.mem.join(a, "; ", clauses.items) });
         },
     };
     return what;
@@ -1077,7 +1077,7 @@ pub fn describeRisk(ctx: *app.Ctx, r: RiskAt) ![]const u8 {
 pub fn lostPhrase(ctx: *app.Ctx, r: RiskAt) ![]const u8 {
     return switch (r.risk.what) {
         .no_target => noTargetHead(ctx, r),
-        .unreadable => std.fmt.allocPrint(ctx.alloc, "the git state of {s}, which could not be read", .{try show(ctx, r.repo)}),
+        .unreadable => ctx.alloc.print("the git state of {s}, which could not be read", .{try show(ctx, r.repo)}),
         else => describeRisk(ctx, r),
     };
 }
@@ -1088,8 +1088,8 @@ fn noTargetHead(ctx: *app.Ctx, r: RiskAt) anyerror![]const u8 {
     const refs = r.risk.refs;
     var shown: std.ArrayList([]const u8) = .empty;
     for (refs[0..@min(refs.len, unasked_shown)]) |ref| try shown.append(a, try ui.shellQuote(a, ref));
-    const more = if (refs.len > unasked_shown) try std.fmt.allocPrint(a, ", and {d} more", .{refs.len - unasked_shown}) else "";
-    return std.fmt.allocPrint(a, "{s} no remote on another machine {s}holds, in {s}: {s}{s}", .{ try doctor_cmd.counted(a, refs.len, "ref", "refs"), if (r.risk.answered) "" else "that answered ", try show(ctx, r.repo), try std.mem.join(a, ", ", shown.items), more });
+    const more = if (refs.len > unasked_shown) try a.print(", and {d} more", .{refs.len - unasked_shown}) else "";
+    return a.print("{s} no remote on another machine {s}holds, in {s}: {s}{s}", .{ try doctor_cmd.counted(a, refs.len, "ref", "refs"), if (r.risk.answered) "" else "that answered ", try show(ctx, r.repo), try std.mem.join(a, ", ", shown.items), more });
 }
 
 /// `r` with how it is settled: `<describeRisk> (run: <cmd>)`; for a
@@ -1109,28 +1109,28 @@ pub fn riskLine(ctx: *app.Ctx, r: RiskAt, force_cmd: []const u8) ![]const u8 {
 /// and run again`, for a command that cannot be run again.
 pub fn riskLineThen(ctx: *app.Ctx, r: RiskAt, force_cmd: []const u8, then: ?[]const u8) ![]const u8 {
     const a = ctx.alloc;
-    const after: []const u8 = if (then) |c| try std.fmt.allocPrint(a, ", then delete it with: {s}", .{c}) else " and run again";
+    const after: []const u8 = if (then) |c| try a.print(", then delete it with: {s}", .{c}) else " and run again";
     const what = try describeRisk(ctx, r);
     const cmd = try settleRisk(ctx, r);
     if (r.risk.what == .no_target) {
         const way = try noTargetWay(ctx, r);
-        const with: []const u8 = if (std.mem.indexOf(u8, way.cmd, "<url>") != null) ", with <url> a URL on another machine" else "";
-        return std.fmt.allocPrint(a, "{s}; {s} (run: {s}{s}){s}, or {s} deletes {s}", .{ what, way.text, way.cmd, with, way.note, force_cmd, if (r.risk.refs.len == 1) "it" else "them" });
+        const with: []const u8 = if (std.mem.find(u8, way.cmd, "<url>") != null) ", with <url> a URL on another machine" else "";
+        return a.print("{s}; {s} (run: {s}{s}){s}, or {s} deletes {s}", .{ what, way.text, way.cmd, with, way.note, force_cmd, if (r.risk.refs.len == 1) "it" else "them" });
     }
     if (r.risk.what == .note) return what;
-    if (r.risk.what == .unreadable) return std.fmt.allocPrint(a, "{s}; {s} deletes it", .{ what, force_cmd });
+    if (r.risk.what == .unreadable) return a.print("{s}; {s} deletes it", .{ what, force_cmd });
     if (r.risk.what == .unasked) {
         const them: []const u8 = if (r.risk.refs.len == 1) "it" else "them";
         const way = try unaskedWay(ctx, r);
         return switch (way) {
-            .reconnect => std.fmt.allocPrint(a, "{s}; reconnect{s}, or {s} deletes {s}", .{ what, after, force_cmd, them }),
-            .host_key => |host| std.fmt.allocPrint(a, "{s}; verify the host key of {s}{s}, or {s} deletes {s}", .{ what, host, after, force_cmd, them }),
-            .remove => |cmd_| std.fmt.allocPrint(a, "{s}; {s} (run: {s}){s}, or {s} deletes {s}", .{ what, if (cmd_.edit) |key| try std.fmt.allocPrint(a, "edit {s} to remove that URL", .{try ui.shellQuote(a, key)}) else "remove that URL", cmd_.cmd, cmd_.note, force_cmd, them }),
-            .replace => |cmd_| std.fmt.allocPrint(a, "{s}; {s} (run: {s}, with <url> a URL on another machine){s}, or {s} deletes {s}", .{ what, if (cmd_.edit) |key| try std.fmt.allocPrint(a, "edit {s} to replace this push URL", .{try ui.shellQuote(a, key)}) else "replace this push URL", cmd_.cmd, cmd_.note, force_cmd, them }),
+            .reconnect => a.print("{s}; reconnect{s}, or {s} deletes {s}", .{ what, after, force_cmd, them }),
+            .host_key => |host| a.print("{s}; verify the host key of {s}{s}, or {s} deletes {s}", .{ what, host, after, force_cmd, them }),
+            .remove => |cmd_| a.print("{s}; {s} (run: {s}){s}, or {s} deletes {s}", .{ what, if (cmd_.edit) |key| try a.print("edit {s} to remove that URL", .{try ui.shellQuote(a, key)}) else "remove that URL", cmd_.cmd, cmd_.note, force_cmd, them }),
+            .replace => |cmd_| a.print("{s}; {s} (run: {s}, with <url> a URL on another machine){s}, or {s} deletes {s}", .{ what, if (cmd_.edit) |key| try a.print("edit {s} to replace this push URL", .{try ui.shellQuote(a, key)}) else "replace this push URL", cmd_.cmd, cmd_.note, force_cmd, them }),
         };
     }
     if (cmd.len == 0) return what;
-    return std.fmt.allocPrint(a, "{s} (run: {s})", .{ what, cmd });
+    return a.print("{s} (run: {s})", .{ what, cmd });
 }
 
 /// How a line about a push URL that did not answer settles it: only the
@@ -1151,13 +1151,13 @@ fn unaskedWay(ctx: *app.Ctx, r: RiskAt) !UnaskedWay {
         .persistent => {},
     }
     const remote = r.risk.remote orelse "";
-    const key = try std.fmt.allocPrint(a, "remote.{s}.{s}", .{ remote, if (r.risk.pushurl) "pushurl" else "url" });
+    const key = try a.print("remote.{s}.{s}", .{ remote, if (r.risk.pushurl) "pushurl" else "url" });
     const removal = try removalCmd(ctx, r, key);
     if (r.risk.others_answered) return if (removal) |rm| .{ .remove = rm } else .reconnect;
-    const add = try std.fmt.allocPrint(a, "{s} config --local --add {s} <url>", .{ try gitIn(ctx, r), try ui.shellQuote(a, try std.fmt.allocPrint(a, "remote.{s}.pushurl", .{remote})) });
+    const add = try a.print("{s} config --local --add {s} <url>", .{ try gitIn(ctx, r), try ui.shellQuote(a, try a.print("remote.{s}.pushurl", .{remote})) });
     if (!r.risk.pushurl) return .{ .replace = .{ .cmd = add } };
     const rm = removal orelse return .reconnect;
-    return .{ .replace = .{ .cmd = try std.fmt.allocPrint(a, "{s} && {s}", .{ rm.cmd, add }), .edit = rm.edit, .note = rm.note } };
+    return .{ .replace = .{ .cmd = try a.print("{s} && {s}", .{ rm.cmd, add }), .edit = rm.edit, .note = rm.note } };
 }
 
 /// Every distinct host (`shownHost`) of the URLs the line of `risk` names,
@@ -1171,7 +1171,7 @@ fn shownHosts(a: std.mem.Allocator, risk: Risk) ![]const u8 {
     }
     const n = hosts.items.len;
     if (n == 1) return hosts.items[0];
-    return std.fmt.allocPrint(a, "{s} and {s}", .{ try std.mem.join(a, ", ", hosts.items[0 .. n - 1]), hosts.items[n - 1] });
+    return a.print("{s} and {s}", .{ try std.mem.join(a, ", ", hosts.items[0 .. n - 1]), hosts.items[n - 1] });
 }
 
 /// The command removing, from every file that holds it, each value
@@ -1181,7 +1181,7 @@ fn shownHosts(a: std.mem.Allocator, risk: Risk) ![]const u8 {
 /// origin is no file.
 fn removalCmd(ctx: *app.Ctx, r: RiskAt, key: []const u8) !?Removal {
     const a = ctx.alloc;
-    if (!r.risk.mapped or r.risk.values.len == 0) return .{ .cmd = try std.fmt.allocPrint(a, "{s} config --local --edit", .{try gitIn(ctx, r)}), .edit = key };
+    if (!r.risk.mapped or r.risk.values.len == 0) return .{ .cmd = try a.print("{s} config --local --edit", .{try gitIn(ctx, r)}), .edit = key };
     var parts: std.ArrayList([]const u8) = .empty;
     var notes: std.ArrayList([]const u8) = .empty;
     var edit: ?[]const u8 = null;
@@ -1209,20 +1209,20 @@ fn removalCmd(ctx: *app.Ctx, r: RiskAt, key: []const u8) !?Removal {
 fn valueRemoval(ctx: *app.Ctx, r: RiskAt, key: []const u8, v: Configured) !Removal {
     const a = ctx.alloc;
     const config = if (v.file) |f|
-        try std.fmt.allocPrint(a, "git config --file {s}", .{try q(ctx, f)})
+        try a.print("git config --file {s}", .{try q(ctx, f)})
     else
-        try std.fmt.allocPrint(a, "{s} config {s}", .{ try gitIn(ctx, r), if (v.worktree) "--worktree" else "--local" });
+        try a.print("{s} config {s}", .{ try gitIn(ctx, r), if (v.worktree) "--worktree" else "--local" });
     const scope: []const []const u8 = if (v.file) |f| &.{ "--file", f } else if (v.worktree) &.{"--worktree"} else &.{"--local"};
     const note = if (v.file) |f|
-        (if (v.system) try std.fmt.allocPrint(a, " (in {s}, which changes every repository and may need an administrator to change, sudo)", .{try show(ctx, f)}) else if (v.global) try std.fmt.allocPrint(a, " (in {s}, which changes every repository)", .{try show(ctx, f)}) else "")
+        (if (v.system) try a.print(" (in {s}, which changes every repository and may need an administrator to change, sudo)", .{try show(ctx, f)}) else if (v.global) try a.print(" (in {s}, which changes every repository)", .{try show(ctx, f)}) else "")
     else
         "";
     const k = try ui.shellQuote(a, key);
-    if (!printable(v.value) or hasControl(v.value)) return .{ .cmd = try std.fmt.allocPrint(a, "{s} --edit", .{config}), .edit = key, .note = note };
-    if (!hidesParts(v.value)) return .{ .cmd = try std.fmt.allocPrint(a, "{s} --fixed-value --unset-all {s} {s}", .{ config, k, try ui.shellQuote(a, v.value) }), .note = note };
+    if (!printable(v.value) or hasControl(v.value)) return .{ .cmd = try a.print("{s} --edit", .{config}), .edit = key, .note = note };
+    if (!hidesParts(v.value)) return .{ .cmd = try a.print("{s} --fixed-value --unset-all {s} {s}", .{ config, k, try ui.shellQuote(a, v.value) }), .note = note };
     const regex = try wholeRegex(a, v.value);
-    if (try matchesOther(a, if (r.git_dir_only) .{ .repo = r.repo, .git_dir = r.repo } else .{ .repo = r.repo }, scope, key, regex, v.value)) return .{ .cmd = try std.fmt.allocPrint(a, "{s} --edit", .{config}), .edit = key, .note = note };
-    return .{ .cmd = try std.fmt.allocPrint(a, "{s} --unset-all {s} {s}", .{ config, k, try ui.shellQuote(a, regex) }), .note = note };
+    if (try matchesOther(a, if (r.git_dir_only) .{ .repo = r.repo, .git_dir = r.repo } else .{ .repo = r.repo }, scope, key, regex, v.value)) return .{ .cmd = try a.print("{s} --edit", .{config}), .edit = key, .note = note };
+    return .{ .cmd = try a.print("{s} --unset-all {s} {s}", .{ config, k, try ui.shellQuote(a, regex) }), .note = note };
 }
 
 /// The clause of the no-target line (row 11) naming why the remote `g`
@@ -1234,36 +1234,36 @@ fn clauseOf(ctx: *app.Ctx, r: RiskAt, g: GoneRemote) !Clause {
     const a = ctx.alloc;
     const name = try ui.shellQuote(a, g.name);
     const git_in = try gitIn(ctx, r);
-    const add = try std.fmt.allocPrint(a, "{s} config --local --add {s} <url>", .{ git_in, try ui.shellQuote(a, try std.fmt.allocPrint(a, "remote.{s}.pushurl", .{g.name})) });
+    const add = try a.print("{s} config --local --add {s} <url>", .{ git_in, try ui.shellQuote(a, try a.print("remote.{s}.pushurl", .{g.name})) });
     switch (g.why) {
         .local => {
             var listed: std.ArrayList([]const u8) = .empty;
             for (g.urls) |u| try listed.append(a, try shownUrl(a, u));
             const urls = try std.mem.join(a, ", ", listed.items);
-            if (!g.push_only) return .{ .text = try std.fmt.allocPrint(a, "remote {s} is on this machine ({s})", .{ name, urls }) };
-            if (!g.push) return .{ .text = try std.fmt.allocPrint(a, "remote {s} has its push URLs on this machine ({s}), through a pushInsteadOf rule", .{ name, urls }), .way = "add a push URL", .cmd = .{ .cmd = add } };
+            if (!g.push_only) return .{ .text = try a.print("remote {s} is on this machine ({s})", .{ name, urls }) };
+            if (!g.push) return .{ .text = try a.print("remote {s} has its push URLs on this machine ({s}), through a pushInsteadOf rule", .{ name, urls }), .way = "add a push URL", .cmd = .{ .cmd = add } };
             var parts: std.ArrayList([]const u8) = .empty;
             var notes: std.ArrayList([]const u8) = .empty;
-            const key = try std.fmt.allocPrint(a, "remote.{s}.pushurl", .{g.name});
+            const key = try a.print("remote.{s}.pushurl", .{g.name});
             for (g.pushurls) |v| {
-                if (v.no_file) return .{ .text = try std.fmt.allocPrint(a, "remote {s} has its push URLs on this machine ({s})", .{ name, urls }) };
+                if (v.no_file) return .{ .text = try a.print("remote {s} has its push URLs on this machine ({s})", .{ name, urls }) };
                 const one = try valueRemoval(ctx, r, key, v);
                 if (kept.paths.contains(parts.items, one.cmd)) continue;
                 try parts.append(a, one.cmd);
                 if (one.note.len > 0 and !kept.paths.contains(notes.items, one.note)) try notes.append(a, one.note);
             }
             if (!g.edit_alone) try parts.append(a, add);
-            return .{ .text = try std.fmt.allocPrint(a, "remote {s} has its push URLs on this machine ({s})", .{ name, urls }), .way = "replace its push URLs", .cmd = .{ .cmd = try std.mem.join(a, " && ", parts.items), .note = try std.mem.join(a, "", notes.items) } };
+            return .{ .text = try a.print("remote {s} has its push URLs on this machine ({s})", .{ name, urls }), .way = "replace its push URLs", .cmd = .{ .cmd = try std.mem.join(a, " && ", parts.items), .note = try std.mem.join(a, "", notes.items) } };
         },
         .no_url => {
-            if (g.empties.len == 0) return .{ .text = try std.fmt.allocPrint(a, "remote {s} has no URL", .{name}), .way = "set a URL", .cmd = .{ .cmd = try std.fmt.allocPrint(a, "{s} config --local {s} <url>", .{ git_in, try ui.shellQuote(a, try std.fmt.allocPrint(a, "remote.{s}.url", .{g.name})) }) } };
-            const text = if (g.lists_empty) try std.fmt.allocPrint(a, "remote {s} has an empty URL", .{name}) else try std.fmt.allocPrint(a, "remote {s} has no URL", .{name});
+            if (g.empties.len == 0) return .{ .text = try a.print("remote {s} has no URL", .{name}), .way = "set a URL", .cmd = .{ .cmd = try a.print("{s} config --local {s} <url>", .{ git_in, try ui.shellQuote(a, try a.print("remote.{s}.url", .{g.name})) }) } };
+            const text = if (g.lists_empty) try a.print("remote {s} has an empty URL", .{name}) else try a.print("remote {s} has no URL", .{name});
             var parts: std.ArrayList([]const u8) = .empty;
             var notes: std.ArrayList([]const u8) = .empty;
             for (g.empties, g.empty_values) |k, v| {
                 if (v.no_file) return .{ .text = text };
-                const config = if (v.file) |f| try std.fmt.allocPrint(a, "git config --file {s}", .{try q(ctx, f)}) else try std.fmt.allocPrint(a, "{s} config {s}", .{ git_in, if (v.worktree) "--worktree" else "--local" });
-                const cmd = try std.fmt.allocPrint(a, "{s} --unset-all {s} '^$'", .{ config, try ui.shellQuote(a, k[0]) });
+                const config = if (v.file) |f| try a.print("git config --file {s}", .{try q(ctx, f)}) else try a.print("{s} config {s}", .{ git_in, if (v.worktree) "--worktree" else "--local" });
+                const cmd = try a.print("{s} --unset-all {s} '^$'", .{ config, try ui.shellQuote(a, k[0]) });
                 if (kept.paths.contains(parts.items, cmd)) continue;
                 try parts.append(a, cmd);
                 const note = try fileNote(ctx, v);
@@ -1272,11 +1272,11 @@ fn clauseOf(ctx: *app.Ctx, r: RiskAt, g: GoneRemote) !Clause {
             if (!g.edit_alone) try parts.append(a, add);
             return .{ .text = text, .way = "remove the empty URL", .cmd = .{ .cmd = try std.mem.join(a, " && ", parts.items), .note = try std.mem.join(a, "", notes.items) } };
         },
-        .unsupported => return .{ .text = try std.fmt.allocPrint(a, "remote {s} is reached through {s}, which holt never asks", .{ name, g.transport }) },
-        .mixed => return .{ .text = try std.fmt.allocPrint(a, "remote {s} has push destinations holt cannot verify", .{name}) },
-        .mirror => return .{ .text = try std.fmt.allocPrint(a, "remote {s} is configured to mirror", .{name}) },
-        .ambiguous => return .{ .text = try std.fmt.allocPrint(a, "remote {s} has a URL holt cannot read safely ({s})", .{ name, g.shown }) },
-        .unreadable => return .{ .text = try std.fmt.allocPrint(a, "git cannot read the URLs of remote {s}", .{name}) },
+        .unsupported => return .{ .text = try a.print("remote {s} is reached through {s}, which holt never asks", .{ name, g.transport }) },
+        .mixed => return .{ .text = try a.print("remote {s} has push destinations holt cannot verify", .{name}) },
+        .mirror => return .{ .text = try a.print("remote {s} is configured to mirror", .{name}) },
+        .ambiguous => return .{ .text = try a.print("remote {s} has a URL holt cannot read safely ({s})", .{ name, g.shown }) },
+        .unreadable => return .{ .text = try a.print("git cannot read the URLs of remote {s}", .{name}) },
     }
 }
 
@@ -1284,8 +1284,8 @@ fn clauseOf(ctx: *app.Ctx, r: RiskAt, g: GoneRemote) !Clause {
 /// `v`, carries; empty for any other file.
 fn fileNote(ctx: *app.Ctx, v: Configured) ![]const u8 {
     const f = v.file orelse return "";
-    if (v.system) return std.fmt.allocPrint(ctx.alloc, " (in {s}, which changes every repository and may need an administrator to change, sudo)", .{try show(ctx, f)});
-    if (v.global) return std.fmt.allocPrint(ctx.alloc, " (in {s}, which changes every repository)", .{try show(ctx, f)});
+    if (v.system) return ctx.alloc.print(" (in {s}, which changes every repository and may need an administrator to change, sudo)", .{try show(ctx, f)});
+    if (v.global) return ctx.alloc.print(" (in {s}, which changes every repository)", .{try show(ctx, f)});
     return "";
 }
 
@@ -1303,7 +1303,7 @@ fn noTargetWay(ctx: *app.Ctx, r: RiskAt) !NoTargetWay {
             if (c.cmd) |cmd| return .{ .text = c.way.?, .cmd = cmd.cmd, .note = cmd.note };
         }
     }
-    return .{ .text = "add a remote on another machine", .cmd = try std.fmt.allocPrint(ctx.alloc, "{s} remote add {s} <url>", .{ try gitIn(ctx, r), try ui.shellQuote(ctx.alloc, r.risk.add_name) }) };
+    return .{ .text = "add a remote on another machine", .cmd = try ctx.alloc.print("{s} remote add {s} <url>", .{ try gitIn(ctx, r), try ui.shellQuote(ctx.alloc, r.risk.add_name) }) };
 }
 
 /// How a line about a push URL that did not answer settles it
@@ -1313,9 +1313,9 @@ pub fn unaskedHint(ctx: *app.Ctx, r: RiskAt) !NoTargetWay {
     const a = ctx.alloc;
     return switch (try unaskedWay(ctx, r)) {
         .reconnect => .{ .text = "reconnect and run again", .cmd = "" },
-        .host_key => |host| .{ .text = try std.fmt.allocPrint(a, "verify the host key of {s} and run again", .{host}), .cmd = "" },
-        .remove => |rm| .{ .text = if (rm.edit) |key| try std.fmt.allocPrint(a, "edit {s} to remove that URL", .{try ui.shellQuote(a, key)}) else "remove that URL", .cmd = rm.cmd, .note = rm.note },
-        .replace => |rm| .{ .text = if (rm.edit) |key| try std.fmt.allocPrint(a, "edit {s} to replace this push URL", .{try ui.shellQuote(a, key)}) else "replace this push URL", .cmd = rm.cmd, .note = rm.note },
+        .host_key => |host| .{ .text = try a.print("verify the host key of {s} and run again", .{host}), .cmd = "" },
+        .remove => |rm| .{ .text = if (rm.edit) |key| try a.print("edit {s} to remove that URL", .{try ui.shellQuote(a, key)}) else "remove that URL", .cmd = rm.cmd, .note = rm.note },
+        .replace => |rm| .{ .text = if (rm.edit) |key| try a.print("edit {s} to replace this push URL", .{try ui.shellQuote(a, key)}) else "replace this push URL", .cmd = rm.cmd, .note = rm.note },
     };
 }
 
@@ -1362,7 +1362,7 @@ pub fn localHint(ctx: *app.Ctx, repo: []const u8, g: GoneRemote) !LocalHint {
     for ([_][]const u8{ "url", "pushurl" }) |field| {
         const src = (try sourceAt(a, at, g.name, std.mem.eql(u8, field, "pushurl"), &.{})) orelse return .{ .text = c.text };
         if (!std.mem.eql(u8, field, "url") and !src.pushurl) continue;
-        const key = try std.fmt.allocPrint(a, "remote.{s}.{s}", .{ g.name, field });
+        const key = try a.print("remote.{s}.{s}", .{ g.name, field });
         for (src.values) |v| {
             if (v.no_file) return .{ .text = c.text };
             const one = try valueRemoval(ctx, r, key, v);
@@ -1371,7 +1371,7 @@ pub fn localHint(ctx: *app.Ctx, repo: []const u8, g: GoneRemote) !LocalHint {
             if (one.note.len > 0 and !kept.paths.contains(notes.items, one.note)) try notes.append(a, one.note);
         }
     }
-    try parts.append(a, try std.fmt.allocPrint(a, "{s} config --local {s} <url>", .{ try gitIn(ctx, r), try ui.shellQuote(a, try std.fmt.allocPrint(a, "remote.{s}.url", .{g.name})) }));
+    try parts.append(a, try a.print("{s} config --local {s} <url>", .{ try gitIn(ctx, r), try ui.shellQuote(a, try a.print("remote.{s}.url", .{g.name})) }));
     return .{ .text = c.text, .way = "replace its URLs", .cmd = try std.mem.join(a, " && ", parts.items), .note = try std.mem.join(a, "", notes.items) };
 }
 
@@ -1385,18 +1385,18 @@ pub fn settleRisk(ctx: *app.Ctx, r: RiskAt) ![]const u8 {
     const a = ctx.alloc;
     const git_in = try gitIn(ctx, r);
     return switch (r.risk.what) {
-        .stashes => std.fmt.allocPrint(a, "{s} stash list", .{git_in}),
+        .stashes => a.print("{s} stash list", .{git_in}),
         .ahead, .ref_unheld, .object_unheld, .head_unheld, .remote_refs => blk: {
             if (r.risk.keep) |keep| break :blk if (r.risk.what == .head_unheld)
-                std.fmt.allocPrint(a, "{s} branch {s} {s}", .{ git_in, try ui.shellQuote(a, keep["refs/heads/".len..]), r.risk.name })
+                a.print("{s} branch {s} {s}", .{ git_in, try ui.shellQuote(a, keep["refs/heads/".len..]), r.risk.name })
             else
-                std.fmt.allocPrint(a, "{s} update-ref {s} {s}", .{ git_in, try ui.shellQuote(a, keep), r.risk.src.? });
+                a.print("{s} update-ref {s} {s}", .{ git_in, try ui.shellQuote(a, keep), r.risk.src.? });
             const remote = r.risk.remote orelse break :blk "";
             var specs: std.ArrayList([]const u8) = .empty;
             if (r.risk.what == .remote_refs) {
                 for (r.risk.pushes) |p| try specs.append(a, try refspec(a, p[0], p[1]));
             } else try specs.append(a, try refspec(a, r.risk.src.?, r.risk.dst.?));
-            break :blk std.fmt.allocPrint(a, "{s} push --recurse-submodules=no -- {s} {s}", .{ git_in, try ui.shellQuote(a, remote), try std.mem.join(a, " ", specs.items) });
+            break :blk a.print("{s} push --recurse-submodules=no -- {s} {s}", .{ git_in, try ui.shellQuote(a, remote), try std.mem.join(a, " ", specs.items) });
         },
         .unasked => switch (try unaskedWay(ctx, r)) {
             .reconnect, .host_key => "",
@@ -1417,8 +1417,8 @@ fn refspec(a: std.mem.Allocator, src: []const u8, dst: []const u8) ![]const u8 {
 /// `core.worktree` names no directory.
 fn gitIn(ctx: *app.Ctx, r: RiskAt) ![]const u8 {
     const at = try q(ctx, r.repo);
-    if (!r.git_dir_only) return std.fmt.allocPrint(ctx.alloc, "git -C {s}", .{at});
-    return std.fmt.allocPrint(ctx.alloc, "git --git-dir {s} --work-tree {s}", .{ at, at });
+    if (!r.git_dir_only) return ctx.alloc.print("git -C {s}", .{at});
+    return ctx.alloc.print("git --git-dir {s} --work-tree {s}", .{ at, at });
 }
 
 /// A command removing a configured value, and, when it opens the
@@ -1492,7 +1492,7 @@ pub fn shownUrl(a: std.mem.Allocator, url: []const u8) ![]const u8 {
 fn ereEscaped(a: std.mem.Allocator, s: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (s) |c| {
-        if (std.mem.indexOfScalar(u8, "\\.^$|?*+()[]{}", c) != null) try out.append(a, '\\');
+        if (std.mem.findScalar(u8, "\\.^$|?*+()[]{}", c) != null) try out.append(a, '\\');
         try out.append(a, c);
     }
     return out.items;
@@ -1590,7 +1590,7 @@ fn redirectKey(a: std.mem.Allocator, url: []const u8) !?[]const u8 {
     const tail = parsed.tail;
     const info_end = parsed.info_end;
     const info = url[start..info_end];
-    const user = if (std.mem.indexOfScalar(u8, info, ':')) |colon| try std.mem.concat(a, u8, &.{ info[0..colon], "@" }) else info;
+    const user = if (std.mem.findScalar(u8, info, ':')) |colon| try std.mem.concat(a, u8, &.{ info[0..colon], "@" }) else info;
     return try std.mem.concat(a, u8, &.{ "http.", url[0..start], user, url[info_end..tail], ".followRedirects" });
 }
 
@@ -1694,7 +1694,7 @@ fn remotesOf(a: std.mem.Allocator, at: At) !Remotes {
     var all_gone: std.ArrayList(GoneRemote) = .empty;
     var it = std.mem.tokenizeAny(u8, listed.stdout, "\r\n");
     while (it.next()) |name| {
-        const vcs = try at.run(a, &.{ "config", "--get", try std.fmt.allocPrint(a, "remote.{s}.vcs", .{name}) });
+        const vcs = try at.run(a, &.{ "config", "--get", try a.print("remote.{s}.vcs", .{name}) });
         if (vcs.status == 1) {
             var lists: [2]std.ArrayList([]const u8) = .{ .empty, .empty };
             for ([_][]const []const u8{ &.{ "remote", "get-url", "--push", "--all", "--", name }, &.{ "remote", "get-url", "--all", "--", name } }, &lists) |args, *list| {
@@ -1707,7 +1707,7 @@ fn remotesOf(a: std.mem.Allocator, at: At) !Remotes {
             }
             var values: std.ArrayList(Configured) = .empty;
             for ([_][]const u8{ "url", "pushurl" }) |field| {
-                const got = try at.run(a, &.{ "config", "-z", "--get-all", try std.fmt.allocPrint(a, "remote.{s}.{s}", .{ name, field }) });
+                const got = try at.run(a, &.{ "config", "-z", "--get-all", try a.print("remote.{s}.{s}", .{ name, field }) });
                 if (got.status != 0) continue;
                 var vit = std.mem.splitScalar(u8, got.stdout, 0);
                 while (vit.next()) |v| if (v.len > 0) try values.append(a, .{ .value = v });
@@ -1738,7 +1738,7 @@ fn remotesOf(a: std.mem.Allocator, at: At) !Remotes {
     var push_remotes: std.ArrayList([2][]const u8) = .empty;
     var entries = std.mem.splitScalar(u8, pushes.stdout, 0);
     while (entries.next()) |entry| {
-        const nl = std.mem.indexOfScalar(u8, entry, '\n') orelse continue;
+        const nl = std.mem.findScalar(u8, entry, '\n') orelse continue;
         const key = entry[0..nl];
         if (!std.mem.startsWith(u8, key, "branch.") or !std.mem.endsWith(u8, key, ".pushremote") or key.len <= "branch.".len + ".pushremote".len) continue;
         try push_remotes.append(a, .{ key["branch.".len .. key.len - ".pushremote".len], entry[nl + 1 ..] });
@@ -1774,10 +1774,10 @@ const Weighed = union(enum) { gone: GoneRemote, surviving: Surviving };
 /// (`counts`), and neither `remote.<name>.vcs` (a remote helper) nor
 /// `remote.<name>.mirror` is set; else why not.
 fn weighRemote(a: std.mem.Allocator, at: At, name: []const u8) !Weighed {
-    const vcs = try at.run(a, &.{ "config", "--get", try std.fmt.allocPrint(a, "remote.{s}.vcs", .{name}) });
+    const vcs = try at.run(a, &.{ "config", "--get", try a.print("remote.{s}.vcs", .{name}) });
     if (vcs.status == 0) return .{ .gone = .{ .name = name, .why = .unsupported, .transport = try ui.printable(a, std.mem.trimEnd(u8, vcs.stdout, "\r\n")) } };
     if (vcs.status != 1) return .{ .gone = .{ .name = name, .why = .unreadable } };
-    const mirror = try at.run(a, &.{ "config", "--bool", "--get", try std.fmt.allocPrint(a, "remote.{s}.mirror", .{name}) });
+    const mirror = try at.run(a, &.{ "config", "--bool", "--get", try a.print("remote.{s}.mirror", .{name}) });
     if (mirror.status == 0 and std.mem.eql(u8, std.mem.trim(u8, mirror.stdout, "\r\n"), "true")) return .{ .gone = .{ .name = name, .why = .mirror } };
     if (mirror.status != 0 and mirror.status != 1) return .{ .gone = .{ .name = name, .why = .unreadable } };
     const res = try at.run(a, &.{ "remote", "get-url", "--push", "--all", "--", name });
@@ -1841,7 +1841,7 @@ fn noUrl(a: std.mem.Allocator, at: At, name: []const u8, lists_empty: bool) !Gon
     var keys: std.ArrayList([2][]const u8) = .empty;
     var values: std.ArrayList(Configured) = .empty;
     for ([_][]const u8{ "url", "pushurl" }) |field| {
-        const key = try std.fmt.allocPrint(a, "remote.{s}.{s}", .{ name, field });
+        const key = try a.print("remote.{s}.{s}", .{ name, field });
         const res = try at.run(a, &.{ "config", "--show-scope", "--show-origin", "-z", "--get-all", key });
         if (res.status != 0) continue;
         var it = std.mem.splitScalar(u8, res.stdout, 0);
@@ -1964,7 +1964,7 @@ fn sourceAt(a: std.mem.Allocator, at: At, remote: []const u8, push: bool, effect
     const own = (try ownConfigs(a, at)) orelse return null;
     const fields: []const []const u8 = if (push) &.{ "pushurl", "url" } else &.{"url"};
     for (fields) |field| {
-        const res = try at.run(a, &.{ "config", "--show-scope", "--show-origin", "-z", "--get-all", try std.fmt.allocPrint(a, "remote.{s}.{s}", .{ remote, field }) });
+        const res = try at.run(a, &.{ "config", "--show-scope", "--show-origin", "-z", "--get-all", try a.print("remote.{s}.{s}", .{ remote, field }) });
         if (res.status == 1) continue;
         if (res.status != 0) return null;
         var values: std.ArrayList(Configured) = .empty;
@@ -1995,8 +1995,8 @@ fn ownConfigs(a: std.mem.Allocator, at: At) !?[2][]const u8 {
     if (dirs.status != 0) return null;
     var dit = std.mem.tokenizeAny(u8, dirs.stdout, "\r\n");
     return .{
-        try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ dit.next() orelse return null, "config" })),
-        try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ dit.next() orelse return null, "config.worktree" })),
+        try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ dit.next() orelse return null, "config" })),
+        try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ dit.next() orelse return null, "config.worktree" })),
     };
 }
 
@@ -2013,7 +2013,7 @@ fn outsideFile(a: std.mem.Allocator, at: At, own: *const [2][]const u8, origin: 
 fn originPath(a: std.mem.Allocator, at: At, origin: []const u8) !?[]const u8 {
     if (!std.mem.startsWith(u8, origin, "file:")) return null;
     const f = origin["file:".len..];
-    return try fsutil.realPathOrSelf(a, if (std.fs.path.isAbsolute(f)) f else try std.fs.path.join(a, &.{ at.base(), f }));
+    return try fsutil.realPathOrSelf(a, if (std.Io.Dir.path.isAbsolute(f)) f else try std.Io.Dir.path.join(a, &.{ at.base(), f }));
 }
 
 /// Test seam: a loopback URL whose port is one of these stands for
@@ -2053,9 +2053,9 @@ pub fn hostIsThisMachine(host: []const u8) bool {
 pub fn onThisMachine(a: std.mem.Allocator, base: []const u8, url: []const u8) !bool {
     if (remote_url.localPath(url)) |local| {
         if (!builtin.is_test) return true;
-        var dir: ?[]const u8 = if (std.fs.path.isAbsolute(local)) local else try std.fs.path.join(a, &.{ base, local });
-        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
-            const mark = kept.content.entryAt(try std.fs.path.join(a, &.{ d, testutil.elsewhere_mark })) catch continue;
+        var dir: ?[]const u8 = if (std.Io.Dir.path.isAbsolute(local)) local else try std.Io.Dir.path.join(a, &.{ base, local });
+        while (dir) |d| : (dir = std.Io.Dir.path.dirname(d)) {
+            const mark = kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ d, testutil.elsewhere_mark })) catch continue;
             if (mark != .absent) return false;
         }
         return true;
@@ -2273,18 +2273,18 @@ pub const Asker = struct {
         const key = try answerKey(a, scope, url);
         if (asker.answers.get(key)) |known| return known;
         const resolved = try at.run(a, &.{ "ls-remote", "--get-url", "--", url });
-        if (resolved.status != 0) return .{ .unasked = .{ .why = try std.fmt.allocPrint(a, "git ls-remote --get-url failed (exit {d})", .{resolved.status}) } };
+        if (resolved.status != 0) return .{ .unasked = .{ .why = try a.print("git ls-remote --get-url failed (exit {d})", .{resolved.status}) } };
         const target = std.mem.trimEnd(u8, resolved.stdout, "\r\n");
         var arg = url;
         if (!std.mem.eql(u8, target, url)) {
             arg = for (values) |v| {
                 const got = try at.run(a, &.{ "ls-remote", "--get-url", "--", v.value });
                 if (got.status == 0 and std.mem.eql(u8, std.mem.trimEnd(u8, got.stdout, "\r\n"), url)) break v.value;
-            } else return .{ .unasked = .{ .why = try std.fmt.allocPrint(a, "an insteadOf rule rewrites it again, to {s}", .{try shownUrl(a, target)}), .class = .persistent } };
+            } else return .{ .unasked = .{ .why = try a.print("an insteadOf rule rewrites it again, to {s}", .{try shownUrl(a, target)}), .class = .persistent } };
         }
-        const helper = try at.run(a, &.{ "config", "--get", try std.fmt.allocPrint(a, "remote.{s}.vcs", .{arg}) });
+        const helper = try at.run(a, &.{ "config", "--get", try a.print("remote.{s}.vcs", .{arg}) });
         if (helper.status == 0) return .{ .unasked = .{ .why = "a remote helper would answer for it", .class = .persistent } };
-        if (helper.status != 1) return .{ .unasked = .{ .why = try std.fmt.allocPrint(a, "git config failed (exit {d})", .{helper.status}) } };
+        if (helper.status != 1) return .{ .unasked = .{ .why = try a.print("git config failed (exit {d})", .{helper.status}) } };
         const answer = try asker.query(at, remote, url, arg);
         try asker.answers.put(a, key, answer);
         return answer;
@@ -2307,7 +2307,7 @@ pub const Asker = struct {
         var notice: ?proc.Notice = null;
         if (asker.err) |w| {
             if (!asker.terminal) {
-                notice = .{ .after = .fromSeconds(notice_after_s), .w = w, .line = try std.fmt.allocPrint(a, "waiting for {s}...\n", .{shown_host}) };
+                notice = .{ .after = .fromSeconds(notice_after_s), .w = w, .line = try a.print("waiting for {s}...\n", .{shown_host}) };
             } else if (!asker.run.announced.contains(url)) {
                 try asker.run.announced.put(a, try a.dupe(u8, url), {});
                 try w.print("asking {s} at {s}...\n", .{ try ui.shellQuote(a, remote), try shownUrl(a, url) });
@@ -2322,7 +2322,7 @@ pub const Asker = struct {
         const budget: i96 = @as(i96, if (builtin.is_test) ask_budget_for_test orelse limit_s else limit_s) * std.time.ns_per_s;
         if (res.timed_out) {
             try asker.run.record(a, key, host, elapsed, null, budget);
-            return .{ .unasked = .{ .why = try std.fmt.allocPrint(a, "no answer in {d} seconds", .{limit_s}), .class = .transient } };
+            return .{ .unasked = .{ .why = try a.print("no answer in {d} seconds", .{limit_s}), .class = .transient } };
         }
         if (res.status != 0) {
             const failure = try queryFailure(a, res.stderr, res.status);
@@ -2339,7 +2339,7 @@ fn parseRemoteListing(a: std.mem.Allocator, stdout: []const u8) ![]const Listed 
     var listed: std.ArrayList(Listed) = .empty;
     var lines = std.mem.tokenizeAny(u8, stdout, "\r\n");
     while (lines.next()) |line| {
-        const tab = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
+        const tab = std.mem.findScalar(u8, line, '\t') orelse continue;
         if (std.mem.startsWith(u8, line, "ref: ")) {
             if (tab <= "ref: ".len) continue;
             try listed.append(a, .{ .ref = line[tab + 1 ..], .object = "", .symref = line["ref: ".len..tab] });
@@ -2376,7 +2376,7 @@ fn queryFailure(a: std.mem.Allocator, stderr: []const u8, status: u8) !Failure {
     for (failure_reasons) |r| {
         for (r.phrases) |phrase| if (std.ascii.findIgnoreCase(stderr, phrase) != null) return r.failure;
     }
-    return .{ .why = try std.fmt.allocPrint(a, "git ls-remote failed (exit {d})", .{status}), .class = .transient };
+    return .{ .why = try a.print("git ls-remote failed (exit {d})", .{status}), .class = .transient };
 }
 
 fn failureReason(a: std.mem.Allocator, stderr: []const u8, status: u8) ![]const u8 {
@@ -2400,8 +2400,8 @@ fn namesSsh(a: std.mem.Allocator, at: At) !bool {
 /// when that is no number.
 fn skipKey(a: std.mem.Allocator, parsed: remote_url.Url) ![]const u8 {
     const host = try hostKey(a, parsed);
-    if (portOf(parsed)) |port| return std.fmt.allocPrint(a, "{s}\x00{s}\x00{d}", .{ @tagName(parsed.transport), host, port });
-    return std.fmt.allocPrint(a, "{s}\x00{s}\x00{s}", .{ @tagName(parsed.transport), host, parsed.port orelse "" });
+    if (portOf(parsed)) |port| return a.print("{s}\x00{s}\x00{d}", .{ @tagName(parsed.transport), host, port });
+    return a.print("{s}\x00{s}\x00{s}", .{ @tagName(parsed.transport), host, parsed.port orelse "" });
 }
 
 /// host(u) of `parsed`, lowercased, without a trailing dot.
@@ -2414,7 +2414,7 @@ fn hostKey(a: std.mem.Allocator, parsed: remote_url.Url) ![]const u8 {
 /// names, printable.
 fn shownHost(a: std.mem.Allocator, parsed: remote_url.Url) ![]const u8 {
     const host = parsed.host orelse "";
-    if (parsed.port) |port| if (port.len > 0) return ui.printable(a, try std.fmt.allocPrint(a, "{s}:{s}", .{ host, port }));
+    if (parsed.port) |port| if (port.len > 0) return ui.printable(a, try a.print("{s}:{s}", .{ host, port }));
     return ui.printable(a, host);
 }
 
@@ -2422,8 +2422,8 @@ fn shownHost(a: std.mem.Allocator, parsed: remote_url.Url) ![]const u8 {
 /// delete-gate refusals, naming `host`.
 fn skippedAnswer(a: std.mem.Allocator, host: []const u8, class: Class) !Unanswered {
     const why = switch (class) {
-        .host_key => try std.fmt.allocPrint(a, "not asked: the host key of {s} was not verified earlier in this run", .{host}),
-        else => try std.fmt.allocPrint(a, "not asked: {s} did not answer earlier in this run", .{host}),
+        .host_key => try a.print("not asked: the host key of {s} was not verified earlier in this run", .{host}),
+        else => try a.print("not asked: {s} did not answer earlier in this run", .{host}),
     };
     return .{ .why = why, .class = class, .host = host };
 }
@@ -2656,13 +2656,13 @@ fn headBranch(listings: []const []const Listed, branch: []const u8) HeadBranch {
 fn freeName(a: std.mem.Allocator, listings: []const []const Listed, family: []const u8, name: []const u8) ![]const u8 {
     var listed: usize = 0;
     for (listings) |l| listed += l.len;
-    const base = try std.fmt.allocPrint(a, "{s}/{s}", .{ family, name });
+    const base = try a.print("{s}/{s}", .{ family, name });
     for (1..listed + 2) |n| {
-        const candidate = if (n == 1) base else try std.fmt.allocPrint(a, "{s}-{d}", .{ base, n });
+        const candidate = if (n == 1) base else try a.print("{s}-{d}", .{ base, n });
         if (!conflicts(listings, candidate)) return candidate;
     }
     for (2..listed + 3) |k| {
-        const candidate = try std.fmt.allocPrint(a, "{s}-{d}/{s}", .{ family, k, name });
+        const candidate = try a.print("{s}-{d}/{s}", .{ family, k, name });
         if (!conflicts(listings, candidate)) return candidate;
     }
     return base;
@@ -2776,7 +2776,7 @@ fn inventoryAt(a: std.mem.Allocator, at: At) !Inventory {
     if (listing.status != 0) return error.GitFailed;
     var dirs: std.ArrayList(GitDir) = .empty;
     try dirs.append(a, .{ .id = ".", .path = common });
-    const records = try std.fs.path.join(a, &.{ common, "worktrees" });
+    const records = try std.Io.Dir.path.join(a, &.{ common, "worktrees" });
     if (std.Io.Dir.cwd().openDir(io(), records, .{ .iterate = true })) |opened| {
         var dir = opened;
         defer dir.close(io());
@@ -2784,7 +2784,7 @@ fn inventoryAt(a: std.mem.Allocator, at: At) !Inventory {
         while (it.next(io()) catch return error.GitFailed) |entry| {
             if (entry.kind == .sym_link) return error.GitFailed;
             if (entry.kind != .directory) continue;
-            try dirs.append(a, .{ .id = try std.mem.concat(a, u8, &.{ "worktrees/", entry.name }), .path = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ records, entry.name })) });
+            try dirs.append(a, .{ .id = try std.mem.concat(a, u8, &.{ "worktrees/", entry.name }), .path = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ records, entry.name })) });
         }
     } else |err| switch (err) {
         error.FileNotFound => {},
@@ -2888,8 +2888,8 @@ fn gatherNoTarget(asker: Asker, at: At, remotes: Remotes, answered: bool, out: *
         const x = out.items[i];
         const name: ?[]const []const u8 = switch (x.what) {
             .ahead => &.{x.src.?},
-            .ref_unheld, .object_unheld => &.{if (x.worktree) |w| try std.fmt.allocPrint(a, "worktrees/{s}/{s}", .{ w, x.name }) else x.name},
-            .head_unheld => &.{if (x.worktree) |w| try std.fmt.allocPrint(a, "worktrees/{s}/HEAD", .{w}) else "HEAD"},
+            .ref_unheld, .object_unheld => &.{if (x.worktree) |w| try a.print("worktrees/{s}/{s}", .{ w, x.name }) else x.name},
+            .head_unheld => &.{if (x.worktree) |w| try a.print("worktrees/{s}/HEAD", .{w}) else "HEAD"},
             .remote_refs => x.refs,
             else => null,
         };
@@ -2917,7 +2917,7 @@ fn freeRemote(a: std.mem.Allocator, at: At, remotes: Remotes) ![]const u8 {
     const listed = try remotes.names(a);
     var n: usize = 0;
     while (n < 1000) : (n += 1) {
-        const name = if (n == 0) "origin" else if (n == 1) "holt-kept" else try std.fmt.allocPrint(a, "holt-kept-{d}", .{n});
+        const name = if (n == 0) "origin" else if (n == 1) "holt-kept" else try a.print("holt-kept-{d}", .{n});
         if (kept.paths.contains(listed, name)) continue;
         const got = try at.run(a, &.{ "remote", "get-url", "--", name });
         if (got.status == 2) return name;
@@ -2934,7 +2934,7 @@ fn rewriteRules(a: std.mem.Allocator, at: At) ![]const Rule {
     if (res.status != 0) return out.items;
     var it = std.mem.splitScalar(u8, res.stdout, 0);
     while (it.next()) |entry| {
-        const nl = std.mem.indexOfScalar(u8, entry, '\n') orelse continue;
+        const nl = std.mem.findScalar(u8, entry, '\n') orelse continue;
         const key = entry[0..nl];
         const push = std.mem.endsWith(u8, key, ".pushinsteadof");
         const suffix: usize = if (push) ".pushinsteadof".len else ".insteadof".len;
@@ -2969,14 +2969,14 @@ fn editAlone(asker: Asker, at: At, scope: []const u8, g: GoneRemote, rules: []co
     switch (g.why) {
         .no_url => {
             for ([_][]const u8{ "pushurl", "url" }, [_]*std.ArrayList([]const u8){ &pushurls, &urls }) |field, list| {
-                const got = try at.run(a, &.{ "config", "-z", "--get-all", try std.fmt.allocPrint(a, "remote.{s}.{s}", .{ g.name, field }) });
+                const got = try at.run(a, &.{ "config", "-z", "--get-all", try a.print("remote.{s}.{s}", .{ g.name, field }) });
                 if (got.status != 0) continue;
                 var it = std.mem.splitScalar(u8, got.stdout, 0);
                 while (it.next()) |v| if (v.len > 0) try list.append(a, v);
             }
         },
         .local => if (g.push_only and g.push) {
-            const got = try at.run(a, &.{ "config", "-z", "--get-all", try std.fmt.allocPrint(a, "remote.{s}.url", .{g.name}) });
+            const got = try at.run(a, &.{ "config", "-z", "--get-all", try a.print("remote.{s}.url", .{g.name}) });
             if (got.status == 0) {
                 var it = std.mem.splitScalar(u8, got.stdout, 0);
                 while (it.next()) |v| if (v.len > 0) try urls.append(a, v);
@@ -3081,8 +3081,8 @@ fn risksOf(asker: Asker, at: At) ![]const Risk {
                 continue;
             }
             if (r.worktree) |w| {
-                if (try unconfirmed.take(a, first_remote, try std.fmt.allocPrint(a, "worktrees/{s}/{s}", .{ worktreeName(w), r.ref }))) continue;
-                const family_name = try std.fmt.allocPrint(a, "{s}/{s}", .{ worktreeName(w), r.ref["refs/".len..] });
+                if (try unconfirmed.take(a, first_remote, try a.print("worktrees/{s}/{s}", .{ worktreeName(w), r.ref }))) continue;
+                const family_name = try a.print("{s}/{s}", .{ worktreeName(w), r.ref["refs/".len..] });
                 const dst = if (first_remote) |remote| try freeName(a, h.listingsOf(remotes, remote), if (exact) "refs/tags/holt-kept" else "refs/heads/holt-kept", family_name) else null;
                 try out.append(a, .{ .what = if (exact) .object_unheld else .ref_unheld, .name = r.ref, .src = r.object, .worktree = worktreeName(w), .remote = first_remote, .kind = r.kind, .dst = dst, .answered = answered });
                 continue;
@@ -3107,8 +3107,8 @@ fn risksOf(asker: Asker, at: At) ![]const Risk {
         for (state.heads) |head| if (head.object) |object| {
             if (held.contains(object) or covered.contains(object)) continue;
             const linked = !std.mem.eql(u8, head.worktree, ".");
-            if (try unconfirmed.take(a, first_remote, if (linked) try std.fmt.allocPrint(a, "worktrees/{s}/HEAD", .{worktreeName(head.worktree)}) else "HEAD")) continue;
-            const dst = if (first_remote) |remote| try freeName(a, h.listingsOf(remotes, remote), "refs/heads/holt-kept", try std.fmt.allocPrint(a, "head-{s}", .{object[0..@min(12, object.len)]})) else null;
+            if (try unconfirmed.take(a, first_remote, if (linked) try a.print("worktrees/{s}/HEAD", .{worktreeName(head.worktree)}) else "HEAD")) continue;
+            const dst = if (first_remote) |remote| try freeName(a, h.listingsOf(remotes, remote), "refs/heads/holt-kept", try a.print("head-{s}", .{object[0..@min(12, object.len)]})) else null;
             try out.append(a, .{ .what = .head_unheld, .name = object, .src = object, .worktree = if (linked) worktreeName(head.worktree) else null, .remote = first_remote, .dst = dst, .answered = answered });
         };
         for (h.unasked, unconfirmed.refs) |u, taken| {
@@ -3177,7 +3177,7 @@ fn refsOf(a: std.mem.Allocator, at: At) ![]const Ref {
         const upstream = f.next() orelse "";
         const track = f.next() orelse "";
         const commit: ?[]const u8 = if (std.mem.eql(u8, kind, "commit")) obj else if (std.mem.eql(u8, peeled_kind, "commit")) peeled else null;
-        try out.append(a, .{ .ref = ref, .kind = kind, .object = obj, .commit = commit, .upstream = upstream, .upstream_gone = std.mem.indexOf(u8, track, "gone") != null, .symref = symref });
+        try out.append(a, .{ .ref = ref, .kind = kind, .object = obj, .commit = commit, .upstream = upstream, .upstream_gone = std.mem.find(u8, track, "gone") != null, .symref = symref });
     }
     return out.items;
 }
@@ -3249,12 +3249,12 @@ fn worktreeRisksAt(asker: Asker, at: At) ![]const Risk {
         const lost = if (ref.commit) |c| !held.contains(c) else false;
         const exact = !std.mem.eql(u8, ref.kind, "commit");
         if (!lost and !(exact and !combined.listed.contains(ref.object))) continue;
-        const keep = try freeLocal(a, state.refs, false, try std.fmt.allocPrint(a, "{s}/{s}", .{ worktreeName(id), ref.ref["refs/".len..] }));
+        const keep = try freeLocal(a, state.refs, false, try a.print("{s}/{s}", .{ worktreeName(id), ref.ref["refs/".len..] }));
         try out.append(a, .{ .what = if (exact) .object_unheld else .ref_unheld, .name = ref.ref, .src = ref.object, .worktree = worktreeName(id), .kind = ref.kind, .keep = keep, .answered = try allAnswered(asker, remotes) });
     }
     for (state.heads) |head| if (std.mem.eql(u8, head.worktree, id)) {
         if (head.object) |object| if (!held.contains(object)) {
-            const keep = try freeLocal(a, state.refs, true, try std.fmt.allocPrint(a, "head-{s}", .{object[0..@min(12, object.len)]}));
+            const keep = try freeLocal(a, state.refs, true, try a.print("head-{s}", .{object[0..@min(12, object.len)]}));
             try out.append(a, .{ .what = .head_unheld, .name = object, .src = object, .worktree = worktreeName(id), .keep = keep, .answered = try allAnswered(asker, remotes) });
         };
     };
@@ -3312,11 +3312,11 @@ pub const InProgress = struct {
 pub fn inProgress(a: std.mem.Allocator, dir: []const u8, tree: []const u8, no_tree: bool) ![]const InProgress {
     const has = struct {
         fn at(al: std.mem.Allocator, d: []const u8, rel: []const u8) !bool {
-            const e = kept.content.entryAt(try std.fs.path.join(al, &.{ d, rel })) catch return error.GitFailed;
+            const e = kept.content.entryAt(try std.Io.Dir.path.join(al, &.{ d, rel })) catch return error.GitFailed;
             return e != .absent;
         }
         fn stash(al: std.mem.Allocator, d: []const u8, rel: []const u8) !?[]const u8 {
-            const text = kept.content.readSmall(al, try std.fs.path.join(al, &.{ d, rel })) catch |err| switch (err) {
+            const text = kept.content.readSmall(al, try std.Io.Dir.path.join(al, &.{ d, rel })) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 error.FileNotFound => return null,
                 else => return error.GitFailed,
@@ -3344,7 +3344,7 @@ pub fn inProgress(a: std.mem.Allocator, dir: []const u8, tree: []const u8, no_tr
         var pick = try has.at(a, dir, "CHERRY_PICK_HEAD");
         var revert = try has.at(a, dir, "REVERT_HEAD");
         if (!pick and !revert and try has.at(a, dir, "sequencer")) {
-            const todo = kept.content.readSmall(a, try std.fs.path.join(a, &.{ dir, "sequencer", "todo" })) catch |err| switch (err) {
+            const todo = kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ dir, "sequencer", "todo" })) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => "",
             };
@@ -3377,18 +3377,18 @@ pub fn inProgress(a: std.mem.Allocator, dir: []const u8, tree: []const u8, no_tr
 /// no command: `force` names what deletes it.
 pub fn inProgressLine(ctx: *app.Ctx, x: InProgress, force: []const u8) ![]const u8 {
     const a = ctx.alloc;
-    if (x.no_tree) return std.fmt.allocPrint(a, "{s} in progress in {s}, a submodule git directory with no working tree, where git can neither finish nor abort it; {s} deletes it", .{ x.name(), try show(ctx, x.tree), force });
-    const git_in = try std.fmt.allocPrint(a, "git -C {s}", .{try q(ctx, x.tree)});
-    const head = try std.fmt.allocPrint(a, "{s} in progress in {s}; finish it or abort it", .{ x.name(), try show(ctx, x.tree) });
-    if (x.op == .bisect) return std.fmt.allocPrint(a, "{s} (run: {s} bisect reset)", .{ head, git_in });
-    return std.fmt.allocPrint(a, "{s} (run: {s} {s} --continue, or {s} {s} --abort)", .{ head, git_in, x.name(), git_in, x.name() });
+    if (x.no_tree) return a.print("{s} in progress in {s}, a submodule git directory with no working tree, where git can neither finish nor abort it; {s} deletes it", .{ x.name(), try show(ctx, x.tree), force });
+    const git_in = try a.print("git -C {s}", .{try q(ctx, x.tree)});
+    const head = try a.print("{s} in progress in {s}; finish it or abort it", .{ x.name(), try show(ctx, x.tree) });
+    if (x.op == .bisect) return a.print("{s} (run: {s} bisect reset)", .{ head, git_in });
+    return a.print("{s} (run: {s} {s} --continue, or {s} {s} --abort)", .{ head, git_in, x.name(), git_in, x.name() });
 }
 
 /// What `--force` names as lost with `x`: the operation, and its
 /// autostash when it holds one.
 pub fn inProgressLost(ctx: *app.Ctx, x: InProgress) ![]const u8 {
-    const with: []const u8 = if (x.autostash) |id| try std.fmt.allocPrint(ctx.alloc, ", with its autostash {s}", .{id}) else "";
-    return std.fmt.allocPrint(ctx.alloc, "the {s} in progress in {s}{s}", .{ x.name(), try show(ctx, x.tree), with });
+    const with: []const u8 = if (x.autostash) |id| try ctx.alloc.print(", with its autostash {s}", .{id}) else "";
+    return ctx.alloc.print("the {s} in progress in {s}{s}", .{ x.name(), try show(ctx, x.tree), with });
 }
 
 /// `x` as a line names it: `inProgressLine` for one in a working tree
@@ -3406,12 +3406,12 @@ pub fn inProgressLost(ctx: *app.Ctx, x: InProgress) ![]const u8 {
 pub fn opLine(ctx: *app.Ctx, x: InProgress, force: []const u8) ![]const u8 {
     if (x.seen) |seen| {
         const gq = try q(ctx, x.record);
-        const what = try std.fmt.allocPrint(ctx.alloc, "a submodule git directory with a {s} in progress, whose core.worktree names {s}, {s}", .{ x.name(), try show(ctx, x.tree), seen });
-        const config = try q(ctx, try std.fs.path.join(ctx.alloc, &.{ x.record, "config" }));
-        return std.fmt.allocPrint(ctx.alloc, "{s}: {s}", .{ gq, try leftWhat(ctx, what, try std.fmt.allocPrint(ctx.alloc, "git config --file {s} core.worktree", .{config})) });
+        const what = try ctx.alloc.print("a submodule git directory with a {s} in progress, whose core.worktree names {s}, {s}", .{ x.name(), try show(ctx, x.tree), seen });
+        const config = try q(ctx, try std.Io.Dir.path.join(ctx.alloc, &.{ x.record, "config" }));
+        return ctx.alloc.print("{s}: {s}", .{ gq, try leftWhat(ctx, what, try ctx.alloc.print("git config --file {s} core.worktree", .{config})) });
     }
     if (x.link != .absent) return inProgressLine(ctx, x, force);
-    return std.fmt.allocPrint(ctx.alloc, "{s} in progress in {s}, which is gone; bring it back from its {s}, then finish it or abort it there (run: {s})", .{ x.name(), try show(ctx, x.tree), if (x.module) "git directory" else "record", try relinkCmd(ctx, x.tree, x.record, true) });
+    return ctx.alloc.print("{s} in progress in {s}, which is gone; bring it back from its {s}, then finish it or abort it there (run: {s})", .{ x.name(), try show(ctx, x.tree), if (x.module) "git directory" else "record", try relinkCmd(ctx, x.tree, x.record, true) });
 }
 
 /// How a linked working tree stands to its record.
@@ -3445,7 +3445,7 @@ pub fn linkOf(a: std.mem.Allocator, common_dir: []const u8, record: []const u8, 
         },
         else => return .unresolved,
     };
-    if ((kept.content.entryAt(try std.fs.path.join(a, &.{ dir, ".git" })) catch return .unresolved) == .absent) return .unresolved;
+    if ((kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ dir, ".git" })) catch return .unresolved) == .absent) return .unresolved;
     return if (try kept.clone.leadsBack(a, dir, common_dir, record)) .there else .unresolved;
 }
 
@@ -3473,7 +3473,7 @@ pub fn linkSeen(a: std.mem.Allocator, common_dir: []const u8, record: []const u8
         .absent, .symlink => return "a linked working tree whose path is a symlink to nothing",
         else => return not_dir,
     }
-    const dot_git = try std.fs.path.join(a, &.{ dir, ".git" });
+    const dot_git = try std.Io.Dir.path.join(a, &.{ dir, ".git" });
     const link = switch (kept.content.entryAt(dot_git) catch return unreadable) {
         .absent => return "a linked working tree whose .git is gone",
         .file => dot_git,
@@ -3498,7 +3498,7 @@ pub fn linkSeen(a: std.mem.Allocator, common_dir: []const u8, record: []const u8
     };
     const line = std.mem.trimEnd(u8, text, " \t\r\n");
     if (!std.mem.startsWith(u8, line, "gitdir: ")) return "a linked working tree whose .git does not read as a link to a git directory";
-    const named = try std.fs.path.resolve(a, &.{ dir, line["gitdir: ".len..] });
+    const named = try std.Io.Dir.path.resolveAlloc(a, &.{ dir, line["gitdir: ".len..] });
     if ((kept.content.entryAt(named) catch return unreadable) == .absent) return "a linked working tree whose .git names a git directory that is not there";
     const own = std.mem.eql(u8, resolvedPath(a, named) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -3560,31 +3560,31 @@ pub fn unresolvedSeen(a: std.mem.Allocator, common_dir: []const u8, records: []c
 pub fn unresolvedLine(ctx: *app.Ctx, path: []const u8, seen: []const u8, git_in: []const u8) ![]const u8 {
     const unlisted = std.mem.eql(u8, seen, half_made_seen) or std.mem.eql(u8, seen, record_unreadable_seen);
     const what = if (unlisted) try recordWhat(ctx, seen, path) else try unresolvedWhat(ctx, seen, git_in);
-    return std.fmt.allocPrint(ctx.alloc, "{s}: {s}", .{ try q(ctx, path), what });
+    return ctx.alloc.print("{s}: {s}", .{ try q(ctx, path), what });
 }
 
 /// `unresolvedLine` without its path, for a caller that leads with it.
 pub fn unresolvedWhat(ctx: *app.Ctx, seen: []const u8, git_in: []const u8) ![]const u8 {
-    return leftWhat(ctx, seen, try std.fmt.allocPrint(ctx.alloc, "{s} worktree list", .{git_in}));
+    return leftWhat(ctx, seen, try ctx.alloc.print("{s} worktree list", .{git_in}));
 }
 
 /// `unresolvedWhat` for the record `record`, which git's worktree list
 /// leaves out: `<seen>; holt does not change it: resolve it with git (the
 /// record is <record>), then run again`.
 pub fn recordWhat(ctx: *app.Ctx, seen: []const u8, record: []const u8) ![]const u8 {
-    return leftWhat(ctx, seen, try std.fmt.allocPrint(ctx.alloc, "the record is {s}", .{try q(ctx, record)}));
+    return leftWhat(ctx, seen, try ctx.alloc.print("the record is {s}", .{try q(ctx, record)}));
 }
 
 /// What holt says of a state it leaves to the user, `seen`, with `place`
 /// the git command or path that shows it.
 fn leftWhat(ctx: *app.Ctx, seen: []const u8, place: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(ctx.alloc, "{s}; holt does not change it: resolve it with git ({s}), then run again", .{ seen, place });
+    return ctx.alloc.print("{s}; holt does not change it: resolve it with git ({s}), then run again", .{ seen, place });
 }
 
 /// `git -C <main>`, the git `unresolvedLine` names for a linked working
 /// tree of the clone at `main`.
 pub fn mainGit(ctx: *app.Ctx, main: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(ctx.alloc, "git -C {s}", .{try q(ctx, main)});
+    return ctx.alloc.print("git -C {s}", .{try q(ctx, main)});
 }
 
 /// The command that brings the linked working tree at `tree` back to its
@@ -3602,17 +3602,17 @@ pub fn relinkCmdFor(ctx: *app.Ctx, tree: []const u8, record: []const u8, make: b
     const a = ctx.alloc;
     const env = app.envOf(ctx);
     const wq = try ui.quotePathFor(a, env, tree, shell);
-    const dot_git = try ui.quotePathFor(a, env, try std.fs.path.join(a, &.{ tree, ".git" }), shell);
+    const dot_git = try ui.quotePathFor(a, env, try std.Io.Dir.path.join(a, &.{ tree, ".git" }), shell);
     const write = switch (shell) {
-        .posix => try std.fmt.allocPrint(a, "printf 'gitdir: %s\\n' {s} > {s}", .{ try ui.quotePathFor(a, env, record, shell), dot_git }),
-        .powershell => try std.fmt.allocPrint(a, "Set-Content -NoNewline -LiteralPath {s} -Value ('gitdir: ' + {s} + \"`n\")", .{ dot_git, try psString(a, try fsutil.forwardSlashed(a, record)) }),
+        .posix => try a.print("printf 'gitdir: %s\\n' {s} > {s}", .{ try ui.quotePathFor(a, env, record, shell), dot_git }),
+        .powershell => try a.print("Set-Content -NoNewline -LiteralPath {s} -Value ('gitdir: ' + {s} + \"`n\")", .{ dot_git, try psString(a, try fsutil.forwardSlashed(a, record)) }),
     };
     if (!make) return write;
     const mkdir = switch (shell) {
-        .posix => try std.fmt.allocPrint(a, "mkdir -p {s}", .{wq}),
-        .powershell => try std.fmt.allocPrint(a, "New-Item -ItemType Directory -Force -Path {s}", .{wq}),
+        .posix => try a.print("mkdir -p {s}", .{wq}),
+        .powershell => try a.print("New-Item -ItemType Directory -Force -Path {s}", .{wq}),
     };
-    return std.fmt.allocPrint(a, "{s} && {s} && git -C {s} checkout-index -a", .{ mkdir, write, wq });
+    return a.print("{s} && {s} && git -C {s} checkout-index -a", .{ mkdir, write, wq });
 }
 
 /// The command removing each of `paths`, a directory with all it holds or
@@ -3625,8 +3625,8 @@ pub fn removeCmdFor(ctx: *app.Ctx, paths: []const []const u8, shell: ui.Shell) !
     var quoted: std.ArrayList([]const u8) = .empty;
     for (paths) |path| try quoted.append(a, try ui.quotePathFor(a, env, path, shell));
     return switch (shell) {
-        .posix => std.fmt.allocPrint(a, "rm -rf {s}", .{try std.mem.join(a, " ", quoted.items)}),
-        .powershell => std.fmt.allocPrint(a, "Remove-Item -Recurse -Force -LiteralPath {s}", .{try std.mem.join(a, ", ", quoted.items)}),
+        .posix => a.print("rm -rf {s}", .{try std.mem.join(a, " ", quoted.items)}),
+        .powershell => a.print("Remove-Item -Recurse -Force -LiteralPath {s}", .{try std.mem.join(a, ", ", quoted.items)}),
     };
 }
 
@@ -3642,10 +3642,10 @@ pub fn removeCmd(ctx: *app.Ctx, paths: []const []const u8) ![]const u8 {
 pub fn repointCmdFor(ctx: *app.Ctx, record: []const u8, tree: []const u8, shell: ui.Shell) ![]const u8 {
     const a = ctx.alloc;
     const env = app.envOf(ctx);
-    const gitdir = try ui.quotePathFor(a, env, try std.fs.path.join(a, &.{ record, "gitdir" }), shell);
+    const gitdir = try ui.quotePathFor(a, env, try std.Io.Dir.path.join(a, &.{ record, "gitdir" }), shell);
     return switch (shell) {
-        .posix => std.fmt.allocPrint(a, "printf '%s/.git\\n' {s} > {s}", .{ try ui.quotePathFor(a, env, tree, shell), gitdir }),
-        .powershell => std.fmt.allocPrint(a, "Set-Content -NoNewline -LiteralPath {s} -Value ({s} + \"/.git`n\")", .{ gitdir, try psString(a, try fsutil.forwardSlashed(a, tree)) }),
+        .posix => a.print("printf '%s/.git\\n' {s} > {s}", .{ try ui.quotePathFor(a, env, tree, shell), gitdir }),
+        .powershell => a.print("Set-Content -NoNewline -LiteralPath {s} -Value ({s} + \"/.git`n\")", .{ gitdir, try psString(a, try fsutil.forwardSlashed(a, tree)) }),
     };
 }
 
@@ -3664,13 +3664,13 @@ fn psString(a: std.mem.Allocator, s: []const u8) ![]const u8 {
 /// holds, as git writes it: `gitdir: <record>`, `/`-separated, and a
 /// newline.
 pub fn linkText(a: std.mem.Allocator, record: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(a, "gitdir: {s}\n", .{try fsutil.forwardSlashed(a, record)});
+    return a.print("gitdir: {s}\n", .{try fsutil.forwardSlashed(a, record)});
 }
 
 /// What the `gitdir` of the record of the linked working tree at `tree`
 /// holds, as git writes it: `<tree>/.git`, `/`-separated, and a newline.
 pub fn recordText(a: std.mem.Allocator, tree: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(a, "{s}/.git\n", .{try fsutil.forwardSlashed(a, tree)});
+    return a.print("{s}/.git\n", .{try fsutil.forwardSlashed(a, tree)});
 }
 
 /// Writes the `.git` of the linked working tree at `tree` as `linkText`
@@ -3681,7 +3681,7 @@ pub fn recordText(a: std.mem.Allocator, tree: []const u8) ![]const u8 {
 /// (removing a created one) and returns `LinkNotFound`; an error writing
 /// is returned as it is, with what was there left in place.
 pub fn writeLink(a: std.mem.Allocator, tree: []const u8, record: []const u8, old: ?[]const u8) !void {
-    const dot_git = try std.fs.path.join(a, &.{ tree, ".git" });
+    const dot_git = try std.Io.Dir.path.join(a, &.{ tree, ".git" });
     const text = try linkText(a, record);
     if (old == null) {
         const file = try std.Io.Dir.cwd().createFile(io(), dot_git, .{ .exclusive = true });
@@ -3786,31 +3786,31 @@ pub const LinkedTree = struct {
         var out: std.ArrayList([]const u8) = .empty;
         if (t.seen != null) return out.items;
         if (t.link == .absent and (t.ops.len > 0 or t.staged)) {
-            try out.append(a, try std.fmt.allocPrint(a, "{s}: its directory is gone; bring it back from its record first (run: {s})", .{ shown, try relinkCmd(ctx, t.path, t.record, true) }));
+            try out.append(a, try a.print("{s}: its directory is gone; bring it back from its record first (run: {s})", .{ shown, try relinkCmd(ctx, t.path, t.record, true) }));
         }
         for (t.risks) |r| {
             if (r.risk.what == .unreadable and (std.mem.eql(u8, r.repo, t.path) or std.mem.eql(u8, r.repo, t.record))) {
-                try out.append(a, try std.fmt.allocPrint(a, "{s}: its git state could not be read (run: git -C {s} worktree list --porcelain)", .{ shown, try q(ctx, main) }));
-            } else try out.append(a, try std.fmt.allocPrint(a, "{s}: {s}", .{ shown, try riskLine(ctx, r, force_cmd) }));
+                try out.append(a, try a.print("{s}: its git state could not be read (run: git -C {s} worktree list --porcelain)", .{ shown, try q(ctx, main) }));
+            } else try out.append(a, try a.print("{s}: {s}", .{ shown, try riskLine(ctx, r, force_cmd) }));
         }
-        for (t.ops) |x| try out.append(a, try std.fmt.allocPrint(a, "{s}: {s}", .{ shown, try inProgressLine(ctx, x, force_cmd) }));
-        if (t.staged) try out.append(a, try std.fmt.allocPrint(a, "{s}: {s}; commit or stash them there (run: git -C {s} stash push)", .{ shown, try t.stagedPhrase(ctx), wq }));
+        for (t.ops) |x| try out.append(a, try a.print("{s}: {s}", .{ shown, try inProgressLine(ctx, x, force_cmd) }));
+        if (t.staged) try out.append(a, try a.print("{s}: {s}; commit or stash them there (run: git -C {s} stash push)", .{ shown, try t.stagedPhrase(ctx), wq }));
         for (t.nested) |n| {
             const at = try q(ctx, n);
-            try out.append(a, try std.fmt.allocPrint(a, "{s}: nested repository {s} (run: holt repo adopt {s})", .{ shown, at, at }));
+            try out.append(a, try a.print("{s}: nested repository {s} (run: holt repo adopt {s})", .{ shown, at, at }));
         }
-        for (t.not_kept) |p| try out.append(a, try std.fmt.allocPrint(a, "{s}: not kept: {s}", .{ shown, try show(ctx, p) }));
-        if (t.not_kept.len > 0) try out.append(a, try std.fmt.allocPrint(a, "{s}: keep or skip each first (run: holt keep --review {s})", .{ shown, wq }));
+        for (t.not_kept) |p| try out.append(a, try a.print("{s}: not kept: {s}", .{ shown, try show(ctx, p) }));
+        if (t.not_kept.len > 0) try out.append(a, try a.print("{s}: keep or skip each first (run: holt keep --review {s})", .{ shown, wq }));
         if (t.unlisted) |u| try out.append(a, switch (u) {
-            .patterns => try std.fmt.allocPrint(a, "{s}: the skip and auto patterns cannot be matched (run: holt doctor)", .{shown}),
-            .git => try std.fmt.allocPrint(a, "{s}: git could not list what it holds (run: git -C {s} status)", .{ shown, wq }),
+            .patterns => try a.print("{s}: the skip and auto patterns cannot be matched (run: holt doctor)", .{shown}),
+            .git => try a.print("{s}: git could not list what it holds (run: git -C {s} status)", .{ shown, wq }),
         });
         return out.items;
     }
 
     /// Its staged changes as a line names them.
     pub fn stagedPhrase(t: LinkedTree, ctx: *app.Ctx) ![]const u8 {
-        return std.fmt.allocPrint(ctx.alloc, "staged changes only {s}'s record holds", .{try show(ctx, t.path)});
+        return ctx.alloc.print("staged changes only {s}'s record holds", .{try show(ctx, t.path)});
     }
 
     /// The lines `--force` prints for what removing it deletes, each
@@ -3819,9 +3819,9 @@ pub const LinkedTree = struct {
     pub fn lostLines(t: LinkedTree, ctx: *app.Ctx) ![]const []const u8 {
         const a = ctx.alloc;
         var out: std.ArrayList([]const u8) = .empty;
-        for (t.risks) |r| try out.append(a, try std.fmt.allocPrint(a, "deleting {s}", .{try lostPhrase(ctx, r)}));
-        for (t.ops) |x| try out.append(a, try std.fmt.allocPrint(a, "deleting {s}", .{try inProgressLost(ctx, x)}));
-        if (t.staged) try out.append(a, try std.fmt.allocPrint(a, "deleting the {s}", .{try t.stagedPhrase(ctx)}));
+        for (t.risks) |r| try out.append(a, try a.print("deleting {s}", .{try lostPhrase(ctx, r)}));
+        for (t.ops) |x| try out.append(a, try a.print("deleting {s}", .{try inProgressLost(ctx, x)}));
+        if (t.staged) try out.append(a, try a.print("deleting the {s}", .{try t.stagedPhrase(ctx)}));
         return out.items;
     }
 };
@@ -3893,8 +3893,8 @@ pub fn weighRecord(asker: Asker, main: []const u8, rec: kept.clone.Record) !Link
 /// compare alike.
 pub fn resolvedPath(a: std.mem.Allocator, path: []const u8) ![]const u8 {
     if (try kept.content.entryAt(path) != .absent) return fsutil.realPathOrSelf(a, path);
-    const parent = std.fs.path.dirname(path) orelse return path;
-    return std.fs.path.join(a, &.{ try resolvedPath(a, parent), std.fs.path.basename(path) });
+    const parent = std.Io.Dir.path.dirname(path) orelse return path;
+    return std.Io.Dir.path.join(a, &.{ try resolvedPath(a, parent), std.Io.Dir.path.basename(path) });
 }
 
 /// The linked working tree `rec` of the repository `main`, whose common
@@ -3911,7 +3911,7 @@ fn weighLinked(asker: Asker, main: []const u8, common: []const u8, rec: kept.clo
         t.seen = try linkSeen(a, common, rec.record, path) orelse "a linked working tree that does not lead back to its record";
         return t;
     }
-    t.locked = try kept.content.entryAt(try std.fs.path.join(a, &.{ rec.record, "locked" })) != .absent;
+    t.locked = try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ rec.record, "locked" })) != .absent;
     if (!t.gone()) t.dirty = try git.isDirty(a, path);
     const at: At = .{ .repo = rec.record, .git_dir = rec.record };
     if (worktreeRisksAt(asker, at)) |found| {
@@ -3934,7 +3934,7 @@ fn weighLinked(asker: Asker, main: []const u8, common: []const u8, rec: kept.clo
             error.GitFailed => t.risks = try std.mem.concat(a, RiskAt, &.{ t.risks, &.{.{ .repo = path, .risk = .{ .what = .unreadable } }} }),
             else => return err,
         }
-        const roots: []const []const u8 = &.{try std.fs.path.join(a, &.{ rec.record, "modules" })};
+        const roots: []const []const u8 = &.{try std.Io.Dir.path.join(a, &.{ rec.record, "modules" })};
         t.risks = try std.mem.concat(a, RiskAt, &.{ t.risks, try moduleRisks(asker, roots, &.{}) });
         return t;
     }
@@ -3975,7 +3975,7 @@ pub fn recordState(a: std.mem.Allocator, record: []const u8, path: []const u8) !
         error.OutOfMemory => return err,
         else => return null,
     };
-    const modules = try moduleDirs(a, &.{try std.fs.path.join(a, &.{ record, "modules" })});
+    const modules = try moduleDirs(a, &.{try std.Io.Dir.path.join(a, &.{ record, "modules" })});
     if (modules.unreadable.len > 0) return null;
     var out: std.Io.Writer.Allocating = .init(a);
     try writeState(&out.writer, state, own);
@@ -4014,7 +4014,7 @@ pub fn stagedIn(a: std.mem.Allocator, record: []const u8) !bool {
 /// was kept, then `aside`, what was set aside and unlinked before
 /// (`Prepared.asideNote`).
 pub fn recordChangedLine(ctx: *app.Ctx, path: []const u8, aside: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(ctx.alloc, "holt: {s} changed while it was being weighed (its HEAD, a ref, an operation in progress, its staged changes, or a submodule git directory in its record changed, or git could not read them again); its record was kept{s}; run the command again\n", .{ try q(ctx, path), aside });
+    return ctx.alloc.print("holt: {s} changed while it was being weighed (its HEAD, a ref, an operation in progress, its staged changes, or a submodule git directory in its record changed, or git could not read them again); its record was kept{s}; run the command again\n", .{ try q(ctx, path), aside });
 }
 
 /// Whether the record `record` of the linked working tree at `path` is as
@@ -4079,11 +4079,11 @@ pub fn treeOps(a: std.mem.Allocator, tree: []const u8) ![]const InProgress {
 pub fn moduleRoots(a: std.mem.Allocator, c: kept.clone.Clone, scope: Scope) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     if (scope == .worktree) {
-        if (!std.mem.eql(u8, c.git_dir, c.common_dir)) try out.append(a, try std.fs.path.join(a, &.{ c.git_dir, "modules" }));
+        if (!std.mem.eql(u8, c.git_dir, c.common_dir)) try out.append(a, try std.Io.Dir.path.join(a, &.{ c.git_dir, "modules" }));
         return out.items;
     }
-    try out.append(a, try std.fs.path.join(a, &.{ c.common_dir, "modules" }));
-    const wts = try std.fs.path.join(a, &.{ c.common_dir, "worktrees" });
+    try out.append(a, try std.Io.Dir.path.join(a, &.{ c.common_dir, "modules" }));
+    const wts = try std.Io.Dir.path.join(a, &.{ c.common_dir, "worktrees" });
     var d = std.Io.Dir.cwd().openDir(io(), wts, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return out.items,
         else => return err,
@@ -4091,15 +4091,15 @@ pub fn moduleRoots(a: std.mem.Allocator, c: kept.clone.Clone, scope: Scope) ![]c
     defer d.close(io());
     var it = d.iterate();
     while (try it.next(io())) |e| {
-        if (e.kind == .directory) try out.append(a, try std.fs.path.join(a, &.{ wts, e.name, "modules" }));
+        if (e.kind == .directory) try out.append(a, try std.Io.Dir.path.join(a, &.{ wts, e.name, "modules" }));
     }
     return out.items;
 }
 
 /// Whether `dir` is a git directory: it holds `HEAD` and `objects`.
 fn isGitDir(a: std.mem.Allocator, dir: []const u8) !bool {
-    return try kept.content.entryAt(try std.fs.path.join(a, &.{ dir, "HEAD" })) == .file and
-        try kept.content.entryAt(try std.fs.path.join(a, &.{ dir, "objects" })) == .dir;
+    return try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ dir, "HEAD" })) == .file and
+        try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ dir, "objects" })) == .dir;
 }
 
 /// The submodule git directories under the `modules/` directories
@@ -4130,12 +4130,12 @@ fn moduleDirs(a: std.mem.Allocator, roots: []const []const u8) !ModuleDirs {
             break :blk null;
         }) |e| {
             if (e.kind != .directory) continue;
-            const p = try std.fs.path.join(a, &.{ dir, e.name });
+            const p = try std.Io.Dir.path.join(a, &.{ dir, e.name });
             if (!try isGitDir(a, p)) {
                 try queue.append(a, p);
                 continue;
             }
-            try queue.append(a, try std.fs.path.join(a, &.{ p, "modules" }));
+            try queue.append(a, try std.Io.Dir.path.join(a, &.{ p, "modules" }));
             try dirs.append(a, p);
         }
     }
@@ -4178,7 +4178,7 @@ fn worktreeGone(a: std.mem.Allocator, dir: []const u8) !bool {
     const res = try (At{ .repo = dir, .git_dir = dir }).run(a, &.{ "config", "--get", "core.worktree" });
     if (res.status != 0) return false;
     const value = std.mem.trimEnd(u8, res.stdout, "\r\n");
-    const path = if (std.fs.path.isAbsolute(value)) value else try std.fs.path.join(a, &.{ dir, value });
+    const path = if (std.Io.Dir.path.isAbsolute(value)) value else try std.Io.Dir.path.join(a, &.{ dir, value });
     return try kept.content.entryAt(path) != .dir;
 }
 
@@ -4193,8 +4193,8 @@ pub const ModuleTree = struct { path: []const u8, module: ?[]const u8 = null, se
 /// else through its submodule git directory (`moduleGit`).
 fn moduleTreeGit(ctx: *app.Ctx, t: ModuleTree) ![]const u8 {
     const a = ctx.alloc;
-    const gd = t.module orelse return std.fmt.allocPrint(a, "git -C {s}", .{try q(ctx, t.path)});
-    if (try kept.content.entryAt(t.path) != .absent) return std.fmt.allocPrint(a, "git -C {s}", .{try q(ctx, t.path)});
+    const gd = t.module orelse return a.print("git -C {s}", .{try q(ctx, t.path)});
+    if (try kept.content.entryAt(t.path) != .absent) return a.print("git -C {s}", .{try q(ctx, t.path)});
     return moduleGit(ctx, gd);
 }
 
@@ -4204,8 +4204,8 @@ fn moduleTreeGit(ctx: *app.Ctx, t: ModuleTree) ![]const u8 {
 fn moduleGit(ctx: *app.Ctx, gd: []const u8) ![]const u8 {
     const a = ctx.alloc;
     const mq = try q(ctx, gd);
-    if (try worktreeGone(a, gd)) return std.fmt.allocPrint(a, "git --git-dir {s} --work-tree {s}", .{ mq, mq });
-    return std.fmt.allocPrint(a, "git --git-dir {s}", .{mq});
+    if (try worktreeGone(a, gd)) return a.print("git --git-dir {s} --work-tree {s}", .{ mq, mq });
+    return a.print("git --git-dir {s}", .{mq});
 }
 
 /// The linked working trees of the submodule git directories under the
@@ -4224,7 +4224,7 @@ pub fn moduleWorktrees(a: std.mem.Allocator, roots: []const []const u8, weighed:
         const recs = kept.clone.linkedRecords(a, gd) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
-                try out.append(a, .{ .path = try std.fs.path.join(a, &.{ gd, "worktrees" }) });
+                try out.append(a, .{ .path = try std.Io.Dir.path.join(a, &.{ gd, "worktrees" }) });
                 continue;
             },
         };
@@ -4256,7 +4256,7 @@ fn listDirty(a: std.mem.Allocator, tree: []const u8, sub: []const u8, subs: []co
         const path = std.mem.trimEnd(u8, rec[3..], "/");
         const rel = if (sub.len == 0) try a.dupe(u8, path) else try std.mem.concat(a, u8, &.{ sub, "/", path });
         if (kept.paths.contains(subs, rel)) continue;
-        const staged = std.mem.indexOfScalar(u8, "MARCT", rec[0]) != null and std.mem.indexOfScalar(u8, "MDT", rec[1]) != null;
+        const staged = std.mem.findScalar(u8, "MARCT", rec[0]) != null and std.mem.findScalar(u8, "MDT", rec[1]) != null;
         try out.append(a, .{ .tree = tree, .rel = rel, .repo = repo, .in_repo = try a.dupe(u8, path), .staged = staged });
     }
     return true;
@@ -4295,7 +4295,7 @@ pub fn hasBlock(a: std.mem.Allocator, common_dir: []const u8) bool {
         error.FileNotFound => return false,
         else => return true,
     };
-    return std.mem.indexOf(u8, text, kept.block.begin_line) != null or std.mem.indexOf(u8, text, kept.block.end_line) != null;
+    return std.mem.find(u8, text, kept.block.begin_line) != null or std.mem.find(u8, text, kept.block.end_line) != null;
 }
 
 /// Reconciles the working tree at `path` and lists what the gates weigh,
@@ -4316,7 +4316,7 @@ pub fn prepare(ctx: *app.Ctx, path: []const u8, scope: Scope, opts: Options) !Ou
     const a = ctx.alloc;
     const kctx = keptCtx(ctx) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => return .{ .refused = try std.fmt.allocPrint(a, "this machine's id cannot be read or written ({s})", .{@errorName(err)}) },
+        else => return .{ .refused = try a.print("this machine's id cannot be read or written ({s})", .{@errorName(err)}) },
     };
     kept.clone.requireGit(a) catch |err| switch (err) {
         error.GitTooOld => return .{ .refused = try kept.clone.gitTooOld(a) },
@@ -4327,7 +4327,7 @@ pub fn prepare(ctx: *app.Ctx, path: []const u8, scope: Scope, opts: Options) !Ou
     if (try kept.content.entryAt(path) == .absent) return .{ .ready = p };
     const c = kept.clone.inspect(a, path, kctx.code_root) catch |err| switch (err) {
         error.NotAClone => {
-            if (hasBlock(a, try std.fs.path.join(a, &.{ path, ".git" }))) return .{ .refused = "git cannot read it, yet it has kept-file links; nothing can be checked (run: holt doctor)" };
+            if (hasBlock(a, try std.Io.Dir.path.join(a, &.{ path, ".git" }))) return .{ .refused = "git cannot read it, yet it has kept-file links; nothing can be checked (run: holt doctor)" };
             p.found = .{ .git = try a.dupe(RiskAt, &.{.{ .repo = path, .risk = .{ .what = .unreadable } }}) };
             return .{ .ready = p };
         },
@@ -4346,10 +4346,10 @@ pub fn prepare(ctx: *app.Ctx, path: []const u8, scope: Scope, opts: Options) !Ou
             const line = try kept_hooks.elsewhereLine(ctx, root);
             return .{ .refused = line[0 .. line.len - 1] };
         };
-        return .{ .refused = try std.fmt.allocPrint(a, "it has kept-file links but kept/ at {s} cannot be reached (mount or download the synced root, then run: holt sync)", .{try show(ctx, try kctx.layout.keptDir(a))}) };
+        return .{ .refused = try a.print("it has kept-file links but kept/ at {s} cannot be reached (mount or download the synced root, then run: holt sync)", .{try show(ctx, try kctx.layout.keptDir(a))}) };
     }
     if (store == .unreadable) {
-        return .{ .refused = try std.fmt.allocPrint(a, "kept/ at {s} cannot be read, so nothing can be set aside (run: ls -la {s})", .{ try show(ctx, try kctx.layout.keptDir(a)), try q(ctx, try kctx.layout.keptDir(a)) }) };
+        return .{ .refused = try a.print("kept/ at {s} cannot be read, so nothing can be set aside (run: ls -la {s})", .{ try show(ctx, try kctx.layout.keptDir(a)), try q(ctx, try kctx.layout.keptDir(a)) }) };
     }
     p.trees = try a.dupe([]const u8, &.{c.worktree});
     if (p.store_ready) {
@@ -4382,7 +4382,7 @@ fn lockAll(p: *Prepared) !?[]const u8 {
     const c = p.c.?;
     p.clone_lock = kept.lockClone(p.kctx, c.common_dir) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => return try std.fmt.allocPrint(a, "its kept-file state directory cannot be locked ({s})", .{@errorName(err)}),
+        else => return try a.print("its kept-file state directory cannot be locked ({s})", .{@errorName(err)}),
     };
     const own = c.key orelse return null;
     const scope = try reconcile.scopeOf(p.kctx, &p.index, c);
@@ -4421,7 +4421,7 @@ fn noteReconciled(a: std.mem.Allocator, p: *Prepared, before: []const []const u8
             if (p.key) |k| if (!std.mem.eql(u8, m.key, k)) continue;
             break :blk try fsutil.joinSlashy(a, c.worktree, m.rel);
         };
-        try p.noteAside(a, path, try std.fmt.allocPrint(a, ".holt-aside/{s}", .{stamp}));
+        try p.noteAside(a, path, try a.print(".holt-aside/{s}", .{stamp}));
     }
 }
 
@@ -4446,7 +4446,7 @@ fn evaluate(ctx: *app.Ctx, p: *Prepared, answers: ?*Answers) !?[]const u8 {
         report = got catch |err| switch (err) {
             error.OutOfMemory, error.Interrupted => return err,
             error.LocksNotHeld => return "the kept store changed while it was being locked (run the command again)",
-            else => return try std.fmt.allocPrint(a, "reconciling its kept files failed ({s})", .{@errorName(err)}),
+            else => return try a.print("reconciling its kept files failed ({s})", .{@errorName(err)}),
         };
     }
     var too_large: []const u8 = "";
@@ -4465,18 +4465,18 @@ fn evaluate(ctx: *app.Ctx, p: *Prepared, answers: ?*Answers) !?[]const u8 {
     };
     const all = listed catch |err| switch (err) {
         error.OutOfMemory, error.Interrupted => return err,
-        error.MatcherFailed => return try std.fmt.allocPrint(a, "the skip and auto patterns cannot be matched{s}{s} (run: holt doctor)", .{ if (too_large.len > 0) "; too large: " else "", if (too_large.len > 0) try q(ctx, too_large) else "" }),
+        error.MatcherFailed => return try a.print("the skip and auto patterns cannot be matched{s}{s} (run: holt doctor)", .{ if (too_large.len > 0) "; too large: " else "", if (too_large.len > 0) try q(ctx, too_large) else "" }),
         error.ListingFailed, error.WorktreeListFailed, error.NotAClone => {
             try unlisted.append(a, c.worktree);
             p.found = .{ .unlisted = unlisted.items, .stop = report.stop };
             return null;
         },
-        else => return try std.fmt.allocPrint(a, "listing the files holt does not keep failed ({s})", .{@errorName(err)}),
+        else => return try a.print("listing the files holt does not keep failed ({s})", .{@errorName(err)}),
     };
     try listings.appendSlice(a, all.listings);
     for (all.listings) |l| if (l.other_filesystems.len > 0) {
         const mount = try fsutil.joinSlashy(a, l.worktree, l.other_filesystems[0]);
-        return try std.fmt.allocPrint(a, "it holds {s}, a mount point of another filesystem the delete would reach into (unmount it first)", .{try show(ctx, mount)});
+        return try a.print("it holds {s}, a mount point of another filesystem the delete would reach into (unmount it first)", .{try show(ctx, mount)});
     };
     var trees: std.ArrayList([]const u8) = .empty;
     try trees.append(a, c.worktree);
@@ -4499,7 +4499,7 @@ fn evaluate(ctx: *app.Ctx, p: *Prepared, answers: ?*Answers) !?[]const u8 {
         for (l.submodules_failed) |s| try unlisted.append(a, try fsutil.joinSlashy(a, l.worktree, s));
         try auto_kept.appendSlice(a, l.auto_kept);
         for (l.auto_kept) |k| {
-            const line = try std.fmt.allocPrint(a, "kept automatically: {s} (matches '{s}')\n", .{ try show(ctx, try fsutil.joinSlashy(a, l.worktree, k.rel)), k.pattern });
+            const line = try a.print("kept automatically: {s} (matches '{s}')\n", .{ try show(ctx, try fsutil.joinSlashy(a, l.worktree, k.rel)), k.pattern });
             if (kept.paths.contains(p.shown_auto.items, line)) continue;
             try p.shown_auto.append(a, line);
             try ctx.out.writeAll(line);
@@ -4546,8 +4546,8 @@ fn evaluate(ctx: *app.Ctx, p: *Prepared, answers: ?*Answers) !?[]const u8 {
         const settle = if (sub_trees[0].seen) |seen|
             try unresolvedLine(ctx, sub_trees[0].path, seen, try moduleGit(ctx, sub_trees[0].module.?))
         else
-            try std.fmt.allocPrint(a, "remove {s} first (run: {s} worktree remove {s})", .{ if (sub_trees.len == 1) "it" else "each", try moduleTreeGit(ctx, sub_trees[0]), first });
-        return try std.fmt.allocPrint(a, "the delete would leave {s} of its submodules without their repository: {s}; {s}", .{ if (sub_trees.len == 1) "a linked working tree" else "linked working trees", try std.mem.join(a, ", ", named.items), settle });
+            try a.print("remove {s} first (run: {s} worktree remove {s})", .{ if (sub_trees.len == 1) "it" else "each", try moduleTreeGit(ctx, sub_trees[0]), first });
+        return try a.print("the delete would leave {s} of its submodules without their repository: {s}; {s}", .{ if (sub_trees.len == 1) "a linked working tree" else "linked working trees", try std.mem.join(a, ", ", named.items), settle });
     }
     try risks.appendSlice(a, try moduleRisks(asker, roots, subs.items));
     const ops = inProgressAll(a, try deletedDirs(a, p.scope, c, subs.items, roots)) catch |err| switch (err) {
@@ -4664,7 +4664,7 @@ fn moduleDir(a: std.mem.Allocator, dir: []const u8) !DeletedDir {
         else => return error.GitFailed,
     }
     const value = std.mem.trimEnd(u8, res.stdout, "\r\n");
-    const tree = try std.fs.path.resolve(a, &.{ dir, value });
+    const tree = try std.Io.Dir.path.resolveAlloc(a, &.{ dir, value });
     const unreadable = "which cannot be read";
     const not_dir = "which is not a directory";
     const seen = switch (kept.content.entryAt(tree) catch return .{ .dir = dir, .tree = tree, .link = .unresolved, .module = true, .seen = unreadable }) {
@@ -4743,7 +4743,7 @@ pub const Fixture = struct {
         defer sb.alloc.free(bare_owned);
         const bare = try a.dupe(u8, bare_owned);
         const clone_path = try fsutil.joinSlashy(a, ws.cfg.code_root, key);
-        try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
+        try fsutil.ensureDir(std.Io.Dir.path.dirname(clone_path).?);
         try testutil.runGit(sb, null, &.{ "clone", "-q", bare, clone_path });
         return .{ .a = a, .sb = sb, .ws = ws, .kctx = kctx, .bare = bare, .clone = try fsutil.realPathOrSelf(a, clone_path) };
     }
@@ -4754,13 +4754,13 @@ pub const Fixture = struct {
 
     pub fn write(f: *const Fixture, tree: []const u8, rel: []const u8, data: []const u8) !void {
         const p = try fsutil.joinSlashy(f.a, tree, rel);
-        try fsutil.ensureDir(std.fs.path.dirname(p).?);
+        try fsutil.ensureDir(std.Io.Dir.path.dirname(p).?);
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
     }
 
     /// Adds `line` to the clone's `info/exclude`, outside holt's block.
     pub fn ignore(f: *const Fixture, line: []const u8) !void {
-        const p = try std.fs.path.join(f.a, &.{ f.clone, ".git", "info", "exclude" });
+        const p = try std.Io.Dir.path.join(f.a, &.{ f.clone, ".git", "info", "exclude" });
         const old = kept.content.readSmall(f.a, p) catch "";
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = try std.mem.concat(f.a, u8, &.{ line, "\n", old }) });
     }
@@ -4785,15 +4785,15 @@ pub const Fixture = struct {
         var out: std.ArrayList([]const u8) = .empty;
         while (try walker.next(io())) |e| {
             const rel = try f.a.dupe(u8, e.path);
-            if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+            if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
             if (!with_aside and std.mem.startsWith(u8, rel, ".holt-aside")) continue;
             if (std.mem.startsWith(u8, rel, ".holt-tmp")) continue;
             const hex: []const u8 = switch (e.kind) {
-                .file => &(try kept.content.hashFile(f.a, try std.fs.path.join(f.a, &.{ kept_dir, e.path }))),
+                .file => &(try kept.content.hashFile(f.a, try std.Io.Dir.path.join(f.a, &.{ kept_dir, e.path }))),
                 .directory => "dir",
                 else => "other",
             };
-            try out.append(f.a, try std.fmt.allocPrint(f.a, "{s} {s}", .{ rel, hex }));
+            try out.append(f.a, try f.a.print("{s} {s}", .{ rel, hex }));
         }
         std.mem.sort([]const u8, out.items, {}, kept.paths.lessThan);
         return out.items;
@@ -4842,7 +4842,7 @@ fn expectSameButLinkRecords(f: *const Fixture, before: []const []const u8, after
             try kept_lines.append(f.a, line);
             continue;
         }
-        const path = line[0 .. std.mem.lastIndexOfScalar(u8, line, ' ') orelse line.len];
+        const path = line[0 .. std.mem.findScalarLast(u8, line, ' ') orelse line.len];
         const prefix = ".holt-aside/";
         if (std.mem.eql(u8, path, ".holt-aside")) continue;
         if (!std.mem.startsWith(u8, path, prefix)) {
@@ -4850,7 +4850,7 @@ fn expectSameButLinkRecords(f: *const Fixture, before: []const []const u8, after
             continue;
         }
         const rest = path[prefix.len..];
-        const stamp = rest[0 .. std.mem.indexOfScalar(u8, rest, '/') orelse rest.len];
+        const stamp = rest[0 .. std.mem.findScalar(u8, rest, '/') orelse rest.len];
         const m = (try kept.aside.readManifest(f.a, f.kctx.layout, stamp)) orelse {
             try kept_lines.append(f.a, line);
             continue;
@@ -4866,7 +4866,7 @@ fn expectSame(before: []const []const u8, after: []const []const u8) !void {
 }
 
 fn contains(hay: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, hay, needle) != null;
+    return std.mem.find(u8, hay, needle) != null;
 }
 
 /// An asker for a test that weighs a repository without a command run.
@@ -4926,8 +4926,8 @@ test "repo remove --clone: an unsettled kept path is named with the command that
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
     const qp = try q_test(a, try f.path(".env.kept"));
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "  {s}: ", .{qp})));
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "run: holt unkeep {s}", .{qp})));
+    try testing.expect(contains(got.err, try a.print("  {s}: ", .{qp})));
+    try testing.expect(contains(got.err, try a.print("run: holt unkeep {s}", .{qp})));
     try testing.expect(!contains(got.err, "unsettled ("));
     try testing.expect(!contains(got.err, "holt keep --review"));
     try testing.expect(!contains(got.err, "exists nowhere else"));
@@ -5041,14 +5041,14 @@ test "repo remove --clone --force: the user's own link of holt's shape at a kept
     try f.write(f.clone, ".env", "kept");
     try f.keep(f.clone, ".env");
     const mine = try fsutil.joinSlashy(a, sb.root, "notes/kept/" ++ Fixture.key ++ "/.env");
-    try fsutil.ensureDir(std.fs.path.dirname(mine).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(mine).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = mine, .data = "mine" });
     try fsutil.removePath(try f.path(".env"));
     try kept.content.createLink(mine, try f.path(".env"), .file);
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(contains(got.out, try std.fmt.allocPrint(a, "link recorded {s} -> {s}", .{ try ui.quotePath(a, app.envOf_current(), try f.path(".env")), mine })));
+    try testing.expect(contains(got.out, try a.print("link recorded {s} -> {s}", .{ try ui.quotePath(a, app.envOf_current(), try f.path(".env")), mine })));
     try testing.expectEqualStrings("mine", try kept.content.readSmall(a, mine));
 }
 
@@ -5067,7 +5067,7 @@ test "repo remove --clone: holt's links are recorded by their target before they
     try f.write(f.clone, ".env", "kept");
     try f.keep(f.clone, ".env");
     const temp = try kept.paths.tempRel(a, ".env");
-    try kept.block.add(a, try std.fs.path.join(a, &.{ f.clone, ".git" }), &.{temp});
+    try kept.block.add(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git" }), &.{temp});
     try kept.content.createLink("/elsewhere", try f.path(temp), .file);
 
     stop_for_test = .unlinked;
@@ -5126,9 +5126,9 @@ test "repo remove --clone --force: a staged version that differs from the workin
             const m = (try kept.aside.readManifest(a, f.kctx.layout, e.name)) orelse continue;
             if (std.mem.eql(u8, m.rel, want[0]) and m.index.len == 1) stamp = try a.dupe(u8, e.name);
         }
-        const at = try std.fs.path.join(a, &.{ dir, stamp.?, "index", want[0] });
+        const at = try std.Io.Dir.path.join(a, &.{ dir, stamp.?, "index", want[0] });
         try testing.expectEqualStrings(want[1], try kept.content.readSmall(a, at));
-        try testing.expect(contains(got.out, try std.fmt.allocPrint(a, "set aside the staged version of {s} (kept/.holt-aside/{s}/index/{s})", .{ try ui.quotePath(a, app.envOf_current(), try f.path(want[0])), stamp.?, want[0] })));
+        try testing.expect(contains(got.out, try a.print("set aside the staged version of {s} (kept/.holt-aside/{s}/index/{s})", .{ try ui.quotePath(a, app.envOf_current(), try f.path(want[0])), stamp.?, want[0] })));
     }
     try testing.expectEqualStrings("working", (try f.asideData("notes.txt"))[0]);
 }
@@ -5148,8 +5148,8 @@ test "repo remove --clone: the summary names custom hooks and local git config t
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    const hooks = try ui.quotePath(a, app.envOf_current(), try std.fs.path.join(a, &.{ f.clone, ".git", "hooks" }));
-    try testing.expect(contains(got.out, try std.fmt.allocPrint(a, "deleting custom hooks in {s}: pre-commit\n", .{hooks})));
+    const hooks = try ui.quotePath(a, app.envOf_current(), try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "hooks" }));
+    try testing.expect(contains(got.out, try a.print("deleting custom hooks in {s}: pre-commit\n", .{hooks})));
     try testing.expect(contains(got.out, "deleting local git config in "));
     try testing.expect(contains(got.out, ": user.name\n"));
     try testing.expect(!contains(got.out, "remote.origin"));
@@ -5205,14 +5205,14 @@ test "repo remove --clone: a place whose name holds a control character is liste
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "  not kept: {s}\n", .{try ui.printable(a, try fsutil.contractTilde(a, app.envOf_current(), try f.path("s\x01.txt")))})));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "  nested repository (--force deletes it): {s}\n", .{try ui.printable(a, try fsutil.contractTilde(a, app.envOf_current(), nested))})));
-    try testing.expect(std.mem.indexOfAny(u8, refused.err, "\x01\t") == null);
+    try testing.expect(contains(refused.err, try a.print("  not kept: {s}\n", .{try ui.printable(a, try fsutil.contractTilde(a, app.envOf_current(), try f.path("s\x01.txt")))})));
+    try testing.expect(contains(refused.err, try a.print("  nested repository (--force deletes it): {s}\n", .{try ui.printable(a, try fsutil.contractTilde(a, app.envOf_current(), nested))})));
+    try testing.expect(std.mem.findAny(u8, refused.err, "\x01\t") == null);
 
     const forced = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
     try testing.expectEqual(@as(u8, 0), forced.code);
-    try testing.expect(contains(forced.out, try std.fmt.allocPrint(a, "deleting nested repository {s}\n", .{try ui.printable(a, try fsutil.contractTilde(a, app.envOf_current(), nested))})));
-    try testing.expect(std.mem.indexOfAny(u8, forced.out, "\x01\t") == null);
+    try testing.expect(contains(forced.out, try a.print("deleting nested repository {s}\n", .{try ui.printable(a, try fsutil.contractTilde(a, app.envOf_current(), nested))})));
+    try testing.expect(std.mem.findAny(u8, forced.out, "\x01\t") == null);
 }
 
 test "repo remove --clone: an edit git hides in a tracked file refuses the delete" {
@@ -5259,7 +5259,7 @@ test "repo remove --clone: a kept file a tool replaced with different content re
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "  {s}: local copy differs from the kept copy (run: holt keep --take-local {s}", .{ try q_test(a, try f.path(".env.kept")), try q_test(a, try f.path(".env.kept")) })));
+    try testing.expect(contains(refused.err, try a.print("  {s}: local copy differs from the kept copy (run: holt keep --take-local {s}", .{ try q_test(a, try f.path(".env.kept")), try q_test(a, try f.path(".env.kept")) })));
     try testing.expect(!contains(refused.err, "not kept: "));
 
     const forced = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
@@ -5313,7 +5313,7 @@ test "repo remove --clone: a clone with holt's block refuses even with --force w
     try f.write(f.clone, ".env.kept", "kept secret");
     try f.keep(f.clone, ".env.kept");
     const kept_dir = try f.kctx.layout.keptDir(a);
-    const away = try std.fmt.allocPrint(a, "{s}.away", .{kept_dir});
+    const away = try a.print("{s}.away", .{kept_dir});
     try std.Io.Dir.cwd().rename(kept_dir, std.Io.Dir.cwd(), away, io());
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
@@ -5395,7 +5395,7 @@ test "repo remove --clone: a commit only a local tag or notes ref holds refuses 
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(fsutil.exists(f.clone));
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "the tag only refs/tags/experiment names, no remote has, in {s} (run: git -C {s} push --recurse-submodules=no -- origin refs/tags/experiment:refs/tags/holt-kept/tags/experiment)", .{ cq, cq })));
+    try testing.expect(contains(got.err, try a.print("the tag only refs/tags/experiment names, no remote has, in {s} (run: git -C {s} push --recurse-submodules=no -- origin refs/tags/experiment:refs/tags/holt-kept/tags/experiment)", .{ cq, cq })));
     try testing.expect(contains(got.err, "commits only refs/notes/commits holds"));
     try testing.expect(!contains(got.err, "refs/tags/released"));
 
@@ -5428,12 +5428,12 @@ test "repo remove --clone: a tag or notes ref the remote holds, pushed as hinted
     try testutil.runGit(&sb, f.clone, &.{ "push", "-q", "origin", "refs/tags/experiment" });
     try testutil.runGit(&sb, f.clone, &.{ "push", "-q", "origin", "refs/notes/commits" });
 
-    const gone = try std.fs.path.join(a, &.{ f.bare, "gone.git" });
+    const gone = try std.Io.Dir.path.join(a, &.{ f.bare, "gone.git" });
     try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", gone });
     const unasked = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), unasked.code);
-    const lead = try std.fmt.allocPrint(a, "4 refs not confirmed held, in {s}: refs/heads/main, refs/notes/commits, refs/remotes/origin/main, and 1 more (remote origin could not be asked at {s}: repository not found); ", .{ cq, gone });
-    try testing.expect(contains(unasked.err, try std.fmt.allocPrint(a, "{s}replace this push URL (run: git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes them\n", .{ lead, cq })));
+    const lead = try a.print("4 refs not confirmed held, in {s}: refs/heads/main, refs/notes/commits, refs/remotes/origin/main, and 1 more (remote origin could not be asked at {s}: repository not found); ", .{ cq, gone });
+    try testing.expect(contains(unasked.err, try a.print("{s}replace this push URL (run: git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes them\n", .{ lead, cq })));
     try testing.expect(fsutil.exists(f.clone));
     try runHint(&f, unasked.err, lead, f.bare);
 
@@ -5467,20 +5467,20 @@ test "repo remove --clone: a deinitialized submodule's unpushed branch, and a ne
     try testutil.runGit(&sb, sub, &.{ "commit", "-q", "-m", "local only" });
     try testutil.runGit(&sb, sub, &.{ "switch", "-q", "-c", "wip" });
     try testutil.runGit(&sb, f.clone, &.{ "submodule", "deinit", "-q", "-f", "sub" });
-    const inner = try std.fs.path.join(a, &.{ f.clone, ".git", "modules", "sub", "modules", "deep" });
+    const inner = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "modules", "sub", "modules", "deep" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", inner });
-    try testutil.runGit(&sb, inner, &.{ "--git-dir=.", "fetch", "-q", try std.fs.path.join(a, &.{ f.clone, ".git", "modules", "sub" }), "wip:refs/heads/deep-wip" });
+    try testutil.runGit(&sb, inner, &.{ "--git-dir=.", "fetch", "-q", try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "modules", "sub" }), "wip:refs/heads/deep-wip" });
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(fsutil.exists(f.clone));
-    const gd = try ui.quotePath(a, app.envOf_current(), try std.fs.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "branch wip no remote has, in {s}", .{gd})));
+    const gd = try ui.quotePath(a, app.envOf_current(), try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
+    try testing.expect(contains(got.err, try a.print("branch wip no remote has, in {s}", .{gd})));
     try testing.expect(contains(got.err, ": refs/heads/deep-wip; no remote counts as a copy: it has no remote; add a remote on another machine (run: git -C "));
 
     const forced = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
     try testing.expectEqual(@as(u8, 0), forced.code);
-    try testing.expect(contains(forced.out, try std.fmt.allocPrint(a, "deleting commits of branch wip no remote has, in {s}", .{gd})));
+    try testing.expect(contains(forced.out, try a.print("deleting commits of branch wip no remote has, in {s}", .{gd})));
     try testing.expect(contains(forced.out, "deleting 1 ref no remote on another machine holds, in "));
 }
 
@@ -5576,7 +5576,7 @@ test "archive --prune: a clone kept by several gates names each on a line of its
     const got = try f.run(project_cmd.archive_command.run, &.{ "acme/proj", "--prune", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
     const quoted = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const want = try std.fmt.allocPrint(a, "not pruned widget:\n  1 file not kept (run: holt keep --review {s})\n  commits of branch wip no remote has, in {s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/wip:refs/heads/wip)\n  once settled, delete it with: holt repo remove {s} --clone\n", .{ quoted, try fsutil.contractTilde(a, app.envOf_current(), f.clone), quoted, Fixture.key });
+    const want = try a.print("not pruned widget:\n  1 file not kept (run: holt keep --review {s})\n  commits of branch wip no remote has, in {s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/wip:refs/heads/wip)\n  once settled, delete it with: holt repo remove {s} --clone\n", .{ quoted, try fsutil.contractTilde(a, app.envOf_current(), f.clone), quoted, Fixture.key });
     try testing.expect(contains(got.out, want));
     try testing.expect(fsutil.exists(f.clone));
 
@@ -5648,7 +5648,7 @@ test "worktree -r on a terminal offers the review; without one it refuses naming
 
 /// A project `acme/proj` whose member `widget` is the fixture's clone.
 fn withProject(f: *const Fixture) !void {
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(f.a, "widget", Fixture.url);
     try testutil.writeMarker(f.a, try f.ws.projectsRoot(f.a), "acme", "proj", repos, .empty);
 }
@@ -5679,7 +5679,7 @@ test "worktree -r: a kept path whose copy differs there, after another tree's ke
     try testing.expectEqual(@as(u8, 1), got.code);
     const qp = try q_test(a, try fsutil.joinSlashy(a, wt, ".env.kept"));
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, got.err, qp));
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "  {s}: local copy differs from the kept copy (run: holt keep --take-local {s}, or holt keep --take-kept {s})\n", .{ qp, qp, qp })));
+    try testing.expect(contains(got.err, try a.print("  {s}: local copy differs from the kept copy (run: holt keep --take-local {s}, or holt keep --take-kept {s})\n", .{ qp, qp, qp })));
     try testing.expect(fsutil.exists(wt));
 
     try testing.expectEqual(@as(u8, 0), (try f.run(keep_cmd.command.run, &.{ "--take-local", try fsutil.joinSlashy(a, wt, ".env.kept") })).code);
@@ -5789,7 +5789,7 @@ test "archive --prune: a clone holding a file holt does not keep is not pruned, 
     const got = try f.run(project_cmd.archive_command.run, &.{ "acme/proj", "--prune", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
     const quoted = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const want = try std.fmt.allocPrint(a, "not pruned widget: 1 file not kept (run: holt keep --review {s}); once settled, delete it with: holt repo remove {s} --clone\n", .{ quoted, Fixture.key });
+    const want = try a.print("not pruned widget: 1 file not kept (run: holt keep --review {s}); once settled, delete it with: holt repo remove {s} --clone\n", .{ quoted, Fixture.key });
     try testing.expect(contains(got.out, want));
     try testing.expect(fsutil.exists(try f.path("secret.txt")));
 
@@ -5947,7 +5947,7 @@ test "repo remove --clone --force: a directory holding a name only some filesyst
         try f.ignore("/cache/");
         try f.write(f.clone, "cache/top.txt", "top");
         try f.write(f.clone, "cache/sub/notes.txt", "only here");
-        const alias = try std.fmt.allocPrint(a, "cache/sub/{s}", .{name});
+        const alias = try a.print("cache/sub/{s}", .{name});
         try f.write(f.clone, alias, "x");
         const nested = try kept.content.isNestedRepo(a, try f.path("cache/sub"), try kept.clone.ignoresCase(a, f.clone));
 
@@ -6156,7 +6156,7 @@ test "worktree -r: commits only a detached HEAD holds refuse the removal; --forc
 
     const forced = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r", "--force" });
     try testing.expectEqual(@as(u8, 0), forced.code);
-    try testing.expect(contains(forced.out, try std.fmt.allocPrint(a, "deleting commit {s}, which only the HEAD of worktree feature holds", .{sha})));
+    try testing.expect(contains(forced.out, try a.print("deleting commit {s}, which only the HEAD of worktree feature holds", .{sha})));
     try testing.expect(!fsutil.exists(wt));
 }
 
@@ -6193,7 +6193,7 @@ test "repo remove --clone: a symlink holt did not make refuses without --force; 
     var it = d.iterate();
     while (try it.next(io())) |e| {
         const m = (try kept.aside.readManifest(a, f.kctx.layout, e.name)) orelse continue;
-        for (m.links) |l| try targets.append(a, try std.fmt.allocPrint(a, "{s} {s}", .{ l.path, l.target }));
+        for (m.links) |l| try targets.append(a, try a.print("{s} {s}", .{ l.path, l.target }));
     }
     try testing.expect(kept.paths.contains(targets.items, "result /nix/store/abc"));
     try testing.expect(kept.paths.contains(targets.items, "cache/sub/link ../a.txt"));
@@ -6244,7 +6244,7 @@ test "repo remove --clone: an ignored .gitignore an auto pattern matches is not 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const shown = try fsutil.contractTilde(a, app.envOf_current(), try f.path("sub/.gitignore"));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "  not kept: {s}\n", .{shown})));
+    try testing.expect(contains(refused.err, try a.print("  not kept: {s}\n", .{shown})));
     try testing.expect(!contains(refused.out, "kept automatically"));
     try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(try f.path("sub/.gitignore")));
 }
@@ -6265,12 +6265,12 @@ test "deleter messages show every place as a line names it, and quote it in each
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const shown = try fsutil.contractTilde(a, app.envOf_current(), try f.path("my secret.txt"));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "  not kept: {s}\n", .{shown})));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "run: holt keep --review {s}\n", .{try q_test(a, f.clone)})));
+    try testing.expect(contains(refused.err, try a.print("  not kept: {s}\n", .{shown})));
+    try testing.expect(contains(refused.err, try a.print("run: holt keep --review {s}\n", .{try q_test(a, f.clone)})));
 
     const forced = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
     try testing.expectEqual(@as(u8, 0), forced.code);
-    try testing.expect(contains(forced.out, try std.fmt.allocPrint(a, "set aside {s} (kept/.holt-aside/", .{shown})));
+    try testing.expect(contains(forced.out, try a.print("set aside {s} (kept/.holt-aside/", .{shown})));
 }
 
 test "worktree -r: a dirty worktree's refusal names the stash command and the --force command" {
@@ -6333,7 +6333,7 @@ test "repo remove --clone: a commit only a linked worktree's detached HEAD holds
     try testutil.runGit(&sb, f.clone, &.{ "branch", "feature" });
     const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
-    try fsutil.removePath(try std.fs.path.join(a, &.{ try f.ws.projectsRoot(a), "acme", "proj", ".holt.json" }));
+    try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ try f.ws.projectsRoot(a), "acme", "proj", ".holt.json" }));
     try testutil.runGit(&sb, wt, &.{ "checkout", "-q", "--detach" });
     try f.write(wt, "x.txt", "detached work");
     try testutil.runGit(&sb, wt, &.{ "add", "x.txt" });
@@ -6357,7 +6357,7 @@ test "repo remove --clone: a commit only a linked worktree's refs/worktree ref h
     try testutil.runGit(&sb, f.clone, &.{ "branch", "feature" });
     const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
-    try fsutil.removePath(try std.fs.path.join(a, &.{ try f.ws.projectsRoot(a), "acme", "proj", ".holt.json" }));
+    try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ try f.ws.projectsRoot(a), "acme", "proj", ".holt.json" }));
     try testutil.runGit(&sb, wt, &.{ "checkout", "-q", "--detach" });
     try f.write(wt, "x.txt", "wip work");
     try testutil.runGit(&sb, wt, &.{ "add", "x.txt" });
@@ -6438,7 +6438,7 @@ test "repo remove --clone: a linked working tree of a submodule refuses the dele
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const sub = try withSubmodule(&f, false);
-    const sub_wt = try std.fs.path.join(a, &.{ sb.root, "sub-wt" });
+    const sub_wt = try std.Io.Dir.path.join(a, &.{ sb.root, "sub-wt" });
     try testutil.runGit(&sb, sub, &.{ "worktree", "add", "-q", "-b", "side", sub_wt });
     try f.write(sub_wt, "only.txt", "work only this tree holds");
 
@@ -6463,17 +6463,17 @@ test "repo remove --clone: a linked working tree of a submodule whose path two r
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
         const sub = try withSubmodule(&f, false);
-        const sub_wt = try std.fs.path.join(a, &.{ sb.root, "sub-wt" });
+        const sub_wt = try std.Io.Dir.path.join(a, &.{ sb.root, "sub-wt" });
         try testutil.runGit(&sb, sub, &.{ "worktree", "add", "-q", "--detach", sub_wt });
-        const module = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
-        const records = try std.fs.path.join(a, &.{ module, "worktrees" });
-        const own = try std.fs.path.join(a, &.{ records, "sub-wt" });
-        const copy = try std.fs.path.join(a, &.{ records, copy_id });
+        const module = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
+        const records = try std.Io.Dir.path.join(a, &.{ module, "worktrees" });
+        const own = try std.Io.Dir.path.join(a, &.{ records, "sub-wt" });
+        const copy = try std.Io.Dir.path.join(a, &.{ records, copy_id });
         const cp = try proc.runEnv(a, &.{ "cp", "-R", own, copy }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), cp.status);
         const wt = try fsutil.realPathOrSelf(a, sub_wt);
         const wq = try q_test(a, wt);
-        const lead = try std.fmt.allocPrint(a, "the delete would leave a linked working tree of its submodules without their repository: {s}; ", .{wq});
+        const lead = try a.print("the delete would leave a linked working tree of its submodules without their repository: {s}; ", .{wq});
         const roots: []const []const u8 = &.{ records, sub_wt };
         const before = try treesState(a, roots);
 
@@ -6484,7 +6484,7 @@ test "repo remove --clone: a linked working tree of a submodule whose path two r
                 std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ copy_id, lead, refused.err });
                 return error.TestUnexpectedResult;
             }
-            try expectUnresolved(&f, refused.err, wt, shared_seen, try std.fmt.allocPrint(a, "git --git-dir {s}", .{try q_test(a, module)}));
+            try expectUnresolved(&f, refused.err, wt, shared_seen, try a.print("git --git-dir {s}", .{try q_test(a, module)}));
             try testing.expectEqualStrings(before, try treesState(a, roots));
             try testing.expect(fsutil.exists(f.clone));
         }
@@ -6492,7 +6492,7 @@ test "repo remove --clone: a linked working tree of a submodule whose path two r
         try std.Io.Dir.cwd().deleteTree(io(), copy);
         const next = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), next.code);
-        const one = try std.fmt.allocPrint(a, "without their repository: {s}; remove it first (run: git -C {s} worktree remove {s})", .{ wq, wq, wq });
+        const one = try a.print("without their repository: {s}; remove it first (run: git -C {s} worktree remove {s})", .{ wq, wq, wq });
         if (!contains(next.err, one)) {
             std.debug.print("{s}: wanted {s}\nin:\n{s}\n", .{ copy_id, one, next.err });
             return error.TestUnexpectedResult;
@@ -6534,8 +6534,8 @@ test "repo remove --clone: refs are asked of the remote's push URL alone, whatev
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const pushed = try std.fs.path.join(a, &.{ sb.root, "push.git" });
-    const unreachable_url = try std.fs.path.join(a, &.{ f.bare, "unreachable.git" });
+    const pushed = try std.Io.Dir.path.join(a, &.{ sb.root, "push.git" });
+    const unreachable_url = try std.Io.Dir.path.join(a, &.{ f.bare, "unreachable.git" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", pushed });
     try testutil.markElsewhere(pushed);
     try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", unreachable_url });
@@ -6543,13 +6543,13 @@ test "repo remove --clone: refs are asked of the remote's push URL alone, whatev
 
     const unasked = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), unasked.code);
-    try testing.expect(contains(unasked.err, try std.fmt.allocPrint(a, "1 ref not confirmed held, in {s}: refs/tags/v1 (remote origin could not be asked at {s}: ", .{ cq, unreachable_url })));
+    try testing.expect(contains(unasked.err, try a.print("1 ref not confirmed held, in {s}: refs/tags/v1 (remote origin could not be asked at {s}: ", .{ cq, unreachable_url })));
 
     try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", pushed });
     const asked = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), asked.code);
     const tag_lead = "the tag only refs/tags/v1 names, no remote has, in ";
-    try testing.expect(contains(asked.err, try std.fmt.allocPrint(a, "{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/tags/v1:refs/tags/holt-kept/tags/v1)", .{ tag_lead, cq, cq })));
+    try testing.expect(contains(asked.err, try a.print("{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/tags/v1:refs/tags/holt-kept/tags/v1)", .{ tag_lead, cq, cq })));
     try runHint(&f, asked.err, tag_lead, "");
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -6568,7 +6568,7 @@ test "repo remove --clone: a commit only a gone remote's tracking ref holds hint
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const inner = try std.fs.path.join(a, &.{ f.clone, ".git", "inner.git" });
+    const inner = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "inner.git" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", inner });
     try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "inner", inner });
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "-c", "exp" });
@@ -6582,7 +6582,7 @@ test "repo remove --clone: a commit only a gone remote's tracking ref holds hint
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const lead = "commits only 1 ref of remote inner holds, no remote has, in ";
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept/remotes/inner/exp)", .{ lead, cq, cq })));
+    try testing.expect(contains(refused.err, try a.print("{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept/remotes/inner/exp)", .{ lead, cq, cq })));
     try runHint(&f, refused.err, lead, "");
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -6595,14 +6595,14 @@ test "repo remove --clone: a commit only a gone remote's tracking ref holds hint
 /// comes before `,` or `;`, with `<url>` replaced by `url`; fails when it
 /// does.
 fn runHint(f: *const Fixture, text: []const u8, lead: []const u8, url: []const u8) !void {
-    const at = std.mem.indexOf(u8, text, lead) orelse return error.TestUnexpectedResult;
+    const at = std.mem.find(u8, text, lead) orelse return error.TestUnexpectedResult;
     const rest = text[at + lead.len ..];
-    const open = std.mem.indexOf(u8, rest, "(run: ") orelse return error.TestUnexpectedResult;
+    const open = std.mem.find(u8, rest, "(run: ") orelse return error.TestUnexpectedResult;
     const cmd_start = rest[open + "(run: ".len ..];
     var close: usize = 0;
     while (true) : (close += 1) {
-        close = std.mem.indexOfScalarPos(u8, cmd_start, close, ')') orelse return error.TestUnexpectedResult;
-        if (close + 1 == cmd_start.len or std.mem.indexOfScalar(u8, "\n,;", cmd_start[close + 1]) != null) break;
+        close = std.mem.findScalarPos(u8, cmd_start, close, ')') orelse return error.TestUnexpectedResult;
+        if (close + 1 == cmd_start.len or std.mem.findScalar(u8, "\n,;", cmd_start[close + 1]) != null) break;
         if (std.mem.startsWith(u8, cmd_start[close + 1 ..], " (in ")) break;
     }
     const placeholder = ", with <url> a URL on another machine";
@@ -6643,7 +6643,7 @@ test "repo remove --clone: a gone remote's tracking ref whose branch the survivi
     try testutil.runGit(&sb, f.clone, &.{ "push", "-q", "origin", "exp" });
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "main" });
     try testutil.runGit(&sb, f.clone, &.{ "branch", "-q", "-D", "exp" });
-    const inner = try std.fs.path.join(a, &.{ f.clone, ".git", "inner.git" });
+    const inner = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "inner.git" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", inner });
     try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "inner", inner });
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "-c", "other" });
@@ -6658,7 +6658,7 @@ test "repo remove --clone: a gone remote's tracking ref whose branch the survivi
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const lead = "commits only 1 ref of remote inner holds, no remote has, in ";
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept/remotes/inner/exp)", .{ lead, cq, cq })));
+    try testing.expect(contains(refused.err, try a.print("{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept/remotes/inner/exp)", .{ lead, cq, cq })));
     try runHint(&f, refused.err, lead, "");
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -6677,7 +6677,7 @@ test "repo remove --clone: a push URL that cannot be asked is named once, with t
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const unreachable_url = try std.fs.path.join(a, &.{ f.bare, "unreachable.git" });
+    const unreachable_url = try std.Io.Dir.path.join(a, &.{ f.bare, "unreachable.git" });
     try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "backup", f.bare });
     try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", unreachable_url });
     try testutil.runGit(&sb, f.clone, &.{ "tag", "-a", "-m", "v1", "v1" });
@@ -6690,7 +6690,7 @@ test "repo remove --clone: a push URL that cannot be asked is named once, with t
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "  2 refs not confirmed held, in {s}: refs/tags/t2, refs/tags/v1 (remote origin could not be asked at {s}: repository not found); replace this push URL (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes them\n", .{ cq, unreachable_url, cq, unreachable_url, cq })));
+    try testing.expect(contains(got.err, try a.print("  2 refs not confirmed held, in {s}: refs/tags/t2, refs/tags/v1 (remote origin could not be asked at {s}: repository not found); replace this push URL (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes them\n", .{ cq, unreachable_url, cq, unreachable_url, cq })));
     try testing.expectEqual(@as(usize, 1), count(got.err, "not confirmed held"));
     try testing.expect(!contains(got.err, "refs/heads/main"));
 }
@@ -6706,12 +6706,12 @@ test "repo remove --clone: a push URL an insteadOf rule rewrote into one its pre
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const short = try std.fmt.allocPrint(a, "{s}/", .{sb.root});
-    const long = try std.fmt.allocPrint(a, "{s}/real/", .{sb.root});
-    try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", try std.fmt.allocPrint(a, "{s}push.git", .{long}) });
+    const short = try a.print("{s}/", .{sb.root});
+    const long = try a.print("{s}/real/", .{sb.root});
+    try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", try a.print("{s}push.git", .{long}) });
     try testutil.markElsewhere(long);
-    try testutil.runGit(&sb, f.clone, &.{ "config", try std.fmt.allocPrint(a, "url.{s}.insteadOf", .{long}), short });
-    try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", try std.fmt.allocPrint(a, "{s}push.git", .{short}) });
+    try testutil.runGit(&sb, f.clone, &.{ "config", try a.print("url.{s}.insteadOf", .{long}), short });
+    try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", try a.print("{s}push.git", .{short}) });
     try testutil.runGit(&sb, f.clone, &.{ "push", "-q", "origin", "main" });
 
     _ = cq;
@@ -6733,19 +6733,19 @@ test "repo remove --clone and archive --prune: after a backend switch that left 
     for (try w.ws.list(a)) |p| _ = try @import("../hub.zig").reconcile(a, &w.ws, &p, false);
     try w.keep(a, ".clasp.json", "{}\n");
     var moved = w.ws;
-    moved.cfg.synced_root = try std.fs.path.join(a, &.{ sb.root, "new-synced" });
-    try fsutil.copyTree(a, try std.fs.path.join(a, &.{ w.ws.cfg.synced_root, "projects" }), try std.fs.path.join(a, &.{ moved.cfg.synced_root, "projects" }));
+    moved.cfg.synced_root = try std.Io.Dir.path.join(a, &.{ sb.root, "new-synced" });
+    try fsutil.copyTree(a, try std.Io.Dir.path.join(a, &.{ w.ws.cfg.synced_root, "projects" }), try std.Io.Dir.path.join(a, &.{ moved.cfg.synced_root, "projects" }));
     for (try moved.list(a)) |p| _ = try @import("../hub.zig").reconcile(a, &moved, &p, false);
     const env = app.envOf_current();
-    const line = try std.fmt.allocPrint(a, "kept/ is at {s}: copy it to {s}", .{ try ui.quotePath(a, env, w.ws.cfg.synced_root), try ui.quotePath(a, env, moved.cfg.synced_root) });
+    const line = try a.print("kept/ is at {s}: copy it to {s}", .{ try ui.quotePath(a, env, w.ws.cfg.synced_root), try ui.quotePath(a, env, moved.cfg.synced_root) });
 
     const removed = try testutil.runCmd(a, repo_cmd.remove_command.run, moved, &.{ "widget", "-p", "acme/proj", "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), removed.code);
-    try testing.expect(contains(removed.err, try std.fmt.allocPrint(a, ": {s}; refusing to delete", .{line})));
+    try testing.expect(contains(removed.err, try a.print(": {s}; refusing to delete", .{line})));
     try testing.expect(!contains(removed.err, "cannot be reached"));
 
     const archived = try testutil.runCmd(a, project_cmd.archive_command.run, moved, &.{ "proj", "--prune", "--yes" });
-    try testing.expect(contains(archived.out, try std.fmt.allocPrint(a, "not pruned widget: {s}; once settled, delete it with: holt repo remove {s} --clone\n", .{ line, w.key })));
+    try testing.expect(contains(archived.out, try a.print("not pruned widget: {s}; once settled, delete it with: holt repo remove {s} --clone\n", .{ line, w.key })));
     try testing.expect(fsutil.exists(w.clone));
 }
 
@@ -6762,7 +6762,7 @@ test "repo remove --clone: a branch another clone force-pushed over, whose remot
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
     try addExp(&f);
     try testutil.runGit(&sb, f.clone, &.{ "push", "-q", "-u", "origin", "exp" });
-    const other = try std.fs.path.join(a, &.{ sb.root, "other" });
+    const other = try std.Io.Dir.path.join(a, &.{ sb.root, "other" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", f.bare, other });
     try testutil.runGit(&sb, other, &.{ "commit", "-q", "--allow-empty", "-m", "rewritten elsewhere" });
     try testutil.runGit(&sb, other, &.{ "push", "-q", "-f", "origin", "HEAD:exp" });
@@ -6770,7 +6770,7 @@ test "repo remove --clone: a branch another clone force-pushed over, whose remot
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const lead = "commits of branch exp no remote has, in ";
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/exp:refs/heads/holt-kept/exp)", .{ lead, cq, cq })));
+    try testing.expect(contains(refused.err, try a.print("{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/exp:refs/heads/holt-kept/exp)", .{ lead, cq, cq })));
     try testing.expect(contains(refused.err, "commits only 1 ref of remote origin holds, no remote has, in "));
     try runHint(&f, refused.err, lead, "");
 
@@ -6782,7 +6782,7 @@ test "repo remove --clone: a branch another clone force-pushed over, whose remot
 /// Adds the remote `inner` inside the clone's `.git`, whose branch `exp`
 /// holds a commit only it has, fetched as `refs/remotes/inner/exp`.
 fn addInnerExp(f: *const Fixture) !void {
-    const inner = try std.fs.path.join(f.a, &.{ f.clone, ".git", "inner.git" });
+    const inner = try std.Io.Dir.path.join(f.a, &.{ f.clone, ".git", "inner.git" });
     try testutil.runGit(f.sb, null, &.{ "init", "-q", "--bare", inner });
     try testutil.runGit(f.sb, f.clone, &.{ "remote", "add", "inner", inner });
     try testutil.runGit(f.sb, f.clone, &.{ "switch", "-q", "-c", "other" });
@@ -6798,7 +6798,7 @@ fn addInnerExp(f: *const Fixture) !void {
 /// Pushes, from a clone of its own, a branch `exp` with a commit this clone
 /// lacks to the fixture's origin, which this clone never fetches.
 fn pushOtherExp(f: *const Fixture) !void {
-    const other = try std.fs.path.join(f.a, &.{ f.sb.root, "other" });
+    const other = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "other" });
     try testutil.runGit(f.sb, null, &.{ "clone", "-q", f.bare, other });
     try testutil.runGit(f.sb, other, &.{ "commit", "-q", "--allow-empty", "-m", "origin's own exp" });
     try testutil.runGit(f.sb, other, &.{ "push", "-q", "origin", "HEAD:exp" });
@@ -6826,7 +6826,7 @@ test "repo remove --clone: a gone remote's tracking ref is hinted to a branch gi
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
         const lead = "commits only 1 ref of remote inner holds, no remote has, in ";
-        try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept/remotes/inner/exp)", .{ lead, cq, cq })));
+        try testing.expect(contains(refused.err, try a.print("{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept/remotes/inner/exp)", .{ lead, cq, cq })));
         try runHint(&f, refused.err, lead, "");
 
         const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -6852,7 +6852,7 @@ test "repo remove --clone: when the surviving remote has a branch holt-kept itse
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const lead = "commits only 1 ref of remote inner holds, no remote has, in ";
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept-2/remotes/inner/exp)", .{ lead, cq, cq })));
+    try testing.expect(contains(refused.err, try a.print("{s}{s}: refs/remotes/inner/exp (run: git -C {s} push --recurse-submodules=no -- origin refs/remotes/inner/exp:refs/heads/holt-kept-2/remotes/inner/exp)", .{ lead, cq, cq })));
     try runHint(&f, refused.err, lead, "");
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -6870,7 +6870,7 @@ test "repo remove --clone: refs are asked of the push URL pushInsteadOf rewrites
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const pushed = try std.fs.path.join(a, &.{ sb.root, "push.git" });
+    const pushed = try std.Io.Dir.path.join(a, &.{ sb.root, "push.git" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", pushed });
     try testutil.markElsewhere(pushed);
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "--detach" });
@@ -6879,12 +6879,12 @@ test "repo remove --clone: refs are asked of the push URL pushInsteadOf rewrites
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "-m", "tagged" });
     try testutil.runGit(&sb, f.clone, &.{ "tag", "t1" });
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "main" });
-    try testutil.runGit(&sb, f.clone, &.{ "config", try std.fmt.allocPrint(a, "url.{s}.pushInsteadOf", .{pushed}), f.bare });
+    try testutil.runGit(&sb, f.clone, &.{ "config", try a.print("url.{s}.pushInsteadOf", .{pushed}), f.bare });
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const tag_lead = "commits only refs/tags/t1 holds, no remote has, in ";
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/tags/t1:refs/tags/holt-kept/tags/t1)", .{ tag_lead, cq, cq })));
+    try testing.expect(contains(refused.err, try a.print("{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/tags/t1:refs/tags/holt-kept/tags/t1)", .{ tag_lead, cq, cq })));
     try runHint(&f, refused.err, tag_lead, "");
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -6901,7 +6901,7 @@ test "repo remove --clone: a pushurl list git resets with an empty value is not 
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const inner = try std.fs.path.join(a, &.{ f.clone, ".git", "backup.git" });
+    const inner = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "backup.git" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", inner });
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "--detach" });
     try f.write(f.clone, "t.txt", "only the tag and the inner repo");
@@ -6934,7 +6934,7 @@ test "repo remove --clone: origin with no URL is said to have none, and the hint
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "; no remote counts as a copy: remote origin has no URL; set a URL (run: git -C {s} config --local remote.origin.url <url>, with <url> a URL on another machine), or ", .{cq})));
+    try testing.expect(contains(refused.err, try a.print("; no remote counts as a copy: remote origin has no URL; set a URL (run: git -C {s} config --local remote.origin.url <url>, with <url> a URL on another machine), or ", .{cq})));
     try settleWith(&f, &.{"no remote counts as a copy"}, f.bare, 3);
 }
 
@@ -6950,14 +6950,14 @@ test "repo remove --clone: origin git lists but cannot read, defined only outsid
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
     try testutil.runGit(&sb, f.clone, &.{ "remote", "remove", "origin" });
-    const global = try std.fs.path.join(a, &.{ sb.root, "global.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\turl = {s}\n", .{f.bare}) });
+    const global = try std.Io.Dir.path.join(a, &.{ sb.root, "global.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try a.print("[remote \"origin\"]\n\turl = {s}\n", .{f.bare}) });
     const env = try testutil.EnvOverride.install(a, "GIT_CONFIG_GLOBAL", global);
     defer env.restore();
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "; no remote counts as a copy: git cannot read the URLs of remote origin; add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or ", .{cq})));
+    try testing.expect(contains(refused.err, try a.print("; no remote counts as a copy: git cannot read the URLs of remote origin; add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or ", .{cq})));
     try settleWith(&f, &.{"no remote counts as a copy"}, f.bare, 3);
 }
 
@@ -6979,8 +6979,8 @@ test "repo remove --clone: a graft in the clone that makes a listed commit a chi
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "main" });
     const tip = std.mem.trim(u8, (try git.runInRepoScoped(a, &.{ "rev-parse", "main" }, f.clone)).stdout, "\n");
     const tagged = std.mem.trim(u8, (try git.runInRepoScoped(a, &.{ "rev-parse", "t" }, f.clone)).stdout, "\n");
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ f.clone, ".git", "info", "grafts" }), .data = try std.fmt.allocPrint(a, "{s} {s}\n", .{ tip, tagged }) });
-    try f.write(f.clone, "holt-no-grafts/none", try std.fmt.allocPrint(a, "{s} {s}\n", .{ tip, tagged }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "info", "grafts" }), .data = try a.print("{s} {s}\n", .{ tip, tagged }) });
+    try f.write(f.clone, "holt-no-grafts/none", try a.print("{s} {s}\n", .{ tip, tagged }));
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -7025,7 +7025,7 @@ test "repo remove --clone: a branch that shares its name with a tag is hinted by
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const lead = "branch exp no remote has, in ";
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/exp:refs/heads/exp)", .{ lead, cq, cq })));
+    try testing.expect(contains(refused.err, try a.print("{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/exp:refs/heads/exp)", .{ lead, cq, cq })));
     try runHint(&f, refused.err, lead, "");
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -7046,7 +7046,7 @@ fn setOrigin(f: *const Fixture, url: []const u8) ![]const u8 {
 }
 
 fn bareCopy(f: *const Fixture, name: []const u8, extra: []const []const u8) ![]const u8 {
-    const path = try std.fs.path.join(f.a, &.{ f.sb.root, name });
+    const path = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, name });
     try testutil.runGit(f.sb, null, try std.mem.concat(f.a, []const u8, &.{ &.{ "clone", "-q", "--bare" }, extra, &.{ try std.mem.concat(f.a, u8, &.{ "file://", f.clone }), path } }));
     return path;
 }
@@ -7071,12 +7071,12 @@ const local_remotes = [_]LocalRemote{
     .{ .what = "a URL without the .git git adds", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
             _ = try bareCopy(f, "copy.git", &.{});
-            return setOrigin(f, try std.fs.path.join(f.a, &.{ f.sb.root, "copy" }));
+            return setOrigin(f, try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "copy" }));
         }
     }.make },
     .{ .what = "a repository inside the clone's .git", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
-            const inner = try std.fs.path.join(f.a, &.{ f.clone, ".git", "backup.git" });
+            const inner = try std.Io.Dir.path.join(f.a, &.{ f.clone, ".git", "backup.git" });
             try testutil.runGit(f.sb, null, &.{ "init", "-q", "--bare", inner });
             try testutil.runGit(f.sb, f.clone, &.{ "push", "-q", inner, "main" });
             return setOrigin(f, inner);
@@ -7085,7 +7085,7 @@ const local_remotes = [_]LocalRemote{
     .{ .what = "the clone itself, %-escaped", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
             const last = f.clone[f.clone.len - 1];
-            return setOrigin(f, try std.fmt.allocPrint(f.a, "file://{s}%{X:0>2}", .{ f.clone[0 .. f.clone.len - 1], last }));
+            return setOrigin(f, try f.a.print("file://{s}%{X:0>2}", .{ f.clone[0 .. f.clone.len - 1], last }));
         }
     }.make },
     .{ .what = "a repository borrowing its objects from the clone", .make = struct {
@@ -7095,11 +7095,11 @@ const local_remotes = [_]LocalRemote{
     }.make },
     .{ .what = "a repository whose objects directory is a link into the clone", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
-            const mirror = try std.fs.path.join(f.a, &.{ f.sb.root, "linked.git" });
+            const mirror = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "linked.git" });
             try testutil.runGit(f.sb, null, &.{ "init", "-q", "--bare", mirror });
-            const objects = try std.fs.path.join(f.a, &.{ mirror, "objects" });
+            const objects = try std.Io.Dir.path.join(f.a, &.{ mirror, "objects" });
             try std.Io.Dir.cwd().deleteTree(io(), objects);
-            try std.Io.Dir.cwd().symLink(io(), try std.fs.path.join(f.a, &.{ f.clone, ".git", "objects" }), objects, .{ .is_directory = true });
+            try std.Io.Dir.cwd().symLink(io(), try std.Io.Dir.path.join(f.a, &.{ f.clone, ".git", "objects" }), objects, .{ .is_directory = true });
             try testutil.runGit(f.sb, f.clone, &.{ "push", "-q", mirror, "main" });
             return setOrigin(f, mirror);
         }
@@ -7107,11 +7107,11 @@ const local_remotes = [_]LocalRemote{
     .{ .what = "a repository whose objects/pack is a link into the clone", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
             try testutil.runGit(f.sb, f.clone, &.{ "repack", "-q", "-a", "-d" });
-            const rem = try std.fs.path.join(f.a, &.{ f.sb.root, "pack.git" });
+            const rem = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "pack.git" });
             try testutil.runGit(f.sb, null, &.{ "init", "-q", "--bare", rem });
-            const pack = try std.fs.path.join(f.a, &.{ rem, "objects", "pack" });
+            const pack = try std.Io.Dir.path.join(f.a, &.{ rem, "objects", "pack" });
             try std.Io.Dir.cwd().deleteTree(io(), pack);
-            try std.Io.Dir.cwd().symLink(io(), try std.fs.path.join(f.a, &.{ f.clone, ".git", "objects", "pack" }), pack, .{ .is_directory = true });
+            try std.Io.Dir.cwd().symLink(io(), try std.Io.Dir.path.join(f.a, &.{ f.clone, ".git", "objects", "pack" }), pack, .{ .is_directory = true });
             const head = std.mem.trim(u8, (try git.runInRepoScoped(f.a, &.{ "rev-parse", "HEAD" }, f.clone)).stdout, "\n");
             try testutil.runGit(f.sb, rem, &.{ "update-ref", "refs/heads/main", head });
             return setOrigin(f, rem);
@@ -7120,15 +7120,15 @@ const local_remotes = [_]LocalRemote{
     .{ .what = "a repository whose alternates file names a path through a symlink loop", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
             const mirror = try bareCopy(f, "alt.git", &.{});
-            const loop = try std.fs.path.join(f.a, &.{ f.sb.root, "loop" });
+            const loop = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "loop" });
             try std.Io.Dir.cwd().symLink(io(), loop, loop, .{});
-            try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(f.a, &.{ mirror, "objects", "info", "alternates" }), .data = try std.fmt.allocPrint(f.a, "{s}/objects\n", .{loop}) });
+            try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(f.a, &.{ mirror, "objects", "info", "alternates" }), .data = try f.a.print("{s}/objects\n", .{loop}) });
             return setOrigin(f, mirror);
         }
     }.make },
     .{ .what = "a bundle beside a repository of the name git adds .git to", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
-            const bundle = try std.fs.path.join(f.a, &.{ f.sb.root, "rem" });
+            const bundle = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "rem" });
             try testutil.runGit(f.sb, f.clone, &.{ "bundle", "create", "-q", bundle, "main" });
             try testutil.runGit(f.sb, null, &.{ "init", "-q", "--bare", try std.mem.concat(f.a, u8, &.{ bundle, ".git" }) });
             return setOrigin(f, bundle);
@@ -7146,9 +7146,9 @@ const local_remotes = [_]LocalRemote{
     }.make },
     .{ .what = "a path that cannot be resolved", .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
-            const loop = try std.fs.path.join(f.a, &.{ f.sb.root, "loop" });
+            const loop = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "loop" });
             try std.Io.Dir.cwd().symLink(io(), loop, loop, .{});
-            return setOrigin(f, try std.fs.path.join(f.a, &.{ loop, "x.git" }));
+            return setOrigin(f, try std.Io.Dir.path.join(f.a, &.{ loop, "x.git" }));
         }
     }.make },
     .{ .what = "a path an insteadOf rule rewrites to", .make = struct {
@@ -7162,8 +7162,8 @@ const local_remotes = [_]LocalRemote{
     .{ .what = "a push URL a file the clone's config includes holds", .push_only = true, .make = struct {
         fn make(f: *const Fixture) ![]const u8 {
             const copy = try bareCopy(f, "copy.git", &.{});
-            const inc = try std.fs.path.join(f.a, &.{ f.sb.root, "inc.gitconfig" });
-            try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = inc, .data = try std.fmt.allocPrint(f.a, "[remote \"origin\"]\n\tpushurl = {s}\n", .{copy}) });
+            const inc = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, "inc.gitconfig" });
+            try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = inc, .data = try f.a.print("[remote \"origin\"]\n\tpushurl = {s}\n", .{copy}) });
             try testutil.runGit(f.sb, f.clone, &.{ "config", "include.path", inc });
             return copy;
         }
@@ -7192,8 +7192,8 @@ test "repo remove --clone: a remote on this machine never counts as a copy, what
             try testing.expectEqual(@as(u8, 0), got.code);
             continue;
         }
-        const branch = try std.fmt.allocPrint(a, " no remote on another machine holds, in {s}: refs/heads/main", .{cq});
-        const remote = try std.fmt.allocPrint(a, "; no remote counts as a copy: remote origin is on this machine ({s}); add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or {s} deletes ", .{ try shownUrl(a, url), cq, local_force });
+        const branch = try a.print(" no remote on another machine holds, in {s}: refs/heads/main", .{cq});
+        const remote = try a.print("; no remote counts as a copy: remote origin is on this machine ({s}); add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or {s} deletes ", .{ try shownUrl(a, url), cq, local_force });
         if (got.code != 1 or !contains(got.err, branch) or count(got.err, remote) != 1) {
             std.debug.print("{s}: code {d}, stderr:\n{s}\nwanted:\n{s}{s}\n", .{ lr.what, got.code, got.err, branch, remote });
             return error.TestUnexpectedResult;
@@ -7220,7 +7220,7 @@ test "repo remove --clone --force: with origin on this machine, deletes what onl
 
     const forced = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
     try testing.expectEqual(@as(u8, 0), forced.code);
-    try testing.expect(contains(forced.out, try std.fmt.allocPrint(a, "deleting 3 refs no remote on another machine holds, in {s}: refs/heads/exp", .{cq})));
+    try testing.expect(contains(forced.out, try a.print("deleting 3 refs no remote on another machine holds, in {s}: refs/heads/exp", .{cq})));
     try testing.expect(!contains(forced.out, "on this machine"));
     try testing.expect(!fsutil.exists(f.clone));
 }
@@ -7236,7 +7236,7 @@ test "repo remove --clone: a remote whose push also goes to a URL on this machin
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
-    const inner = try std.fs.path.join(a, &.{ f.clone, ".git", "backup.git" });
+    const inner = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "backup.git" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", inner });
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", inner });
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", f.bare });
@@ -7253,7 +7253,7 @@ test "repo remove --clone: a remote whose push also goes to a URL on this machin
     const pushable = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), pushable.code);
     const lead = "commits of branch main no remote has, in ";
-    try testing.expect(contains(pushable.err, try std.fmt.allocPrint(a, "{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/main:refs/heads/holt-kept/main)\n", .{ lead, cq, cq })));
+    try testing.expect(contains(pushable.err, try a.print("{s}{s} (run: git -C {s} push --recurse-submodules=no -- origin refs/heads/main:refs/heads/holt-kept/main)\n", .{ lead, cq, cq })));
     try runHint(&f, pushable.err, lead, "");
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -7271,12 +7271,12 @@ test "repo remove --clone: a remote is asked with no terminal prompt and, unless
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const bin = try std.fs.path.join(a, &.{ sb.root, "bin" });
+    const bin = try std.Io.Dir.path.join(a, &.{ sb.root, "bin" });
     try fsutil.ensureDir(bin);
-    const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
+    const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
     for ([_][]const u8{ "ssh", "myssh" }) |name| {
-        const script = try std.fmt.allocPrint(a, "#!/bin/sh\n{{ printf '{s}:'; for x in \"$@\"; do printf ' %s' \"$x\"; done; printf ' prompt=%s\\n' \"$GIT_TERMINAL_PROMPT\"; }} >> '{s}'\nexit 255\n", .{ name, log });
-        const path = try std.fs.path.join(a, &.{ bin, name });
+        const script = try a.print("#!/bin/sh\n{{ printf '{s}:'; for x in \"$@\"; do printf ' %s' \"$x\"; done; printf ' prompt=%s\\n' \"$GIT_TERMINAL_PROMPT\"; }} >> '{s}'\nexit 255\n", .{ name, log });
+        const path = try std.Io.Dir.path.join(a, &.{ bin, name });
         try testutil.writeExecutable(path, script);
     }
     const old_path = std.process.Environ.getPosix(std.Io.Threaded.global_single_threaded.environ.process_environ, "PATH") orelse "/usr/bin:/bin";
@@ -7296,7 +7296,7 @@ test "repo remove --clone: a remote is asked with no terminal prompt and, unless
 
     for ([_]bool{ false, true }) |in_env| {
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = log, .data = "" });
-        const mine = try std.fs.path.join(a, &.{ bin, "myssh" });
+        const mine = try std.Io.Dir.path.join(a, &.{ bin, "myssh" });
         const env = if (in_env) try testutil.EnvOverride.install(a, "GIT_SSH_COMMAND", mine) else null;
         defer if (env) |e| e.restore();
         if (!in_env) try testutil.runGit(&sb, f.clone, &.{ "config", "core.sshCommand", mine });
@@ -7327,7 +7327,7 @@ test "repo remove --clone: on a terminal, each URL asked is named on stderr firs
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqual(@as(usize, 1), count(got.err, "asking "));
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "asking mirror at {s}...\n", .{f.bare})) or contains(got.err, try std.fmt.allocPrint(a, "asking origin at {s}...\n", .{f.bare})));
+    try testing.expect(contains(got.err, try a.print("asking mirror at {s}...\n", .{f.bare})) or contains(got.err, try a.print("asking origin at {s}...\n", .{f.bare})));
 }
 
 test "doctor --retire: a URL several clones share is asked once for each clone, and no asking line is printed, on a terminal too" {
@@ -7338,8 +7338,8 @@ test "doctor --retire: a URL several clones share is asked once for each clone, 
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const state = try testutil.EnvScope.install(a, &.{
-        .{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ sb.root, "state" }) },
-        .{ "XDG_CONFIG_HOME", try std.fs.path.join(a, &.{ sb.root, "config" }) },
+        .{ "XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "state" }) },
+        .{ "XDG_CONFIG_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "config" }) },
     });
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
@@ -7367,7 +7367,7 @@ test "repo remove --clone: a remote whose server accepts and never answers is gi
     const addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
     var server = try addr.listen(io(), .{ .reuse_address = true });
     defer server.deinit(io());
-    const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{server.socket.address.getPort()});
+    const url = try a.print("http://127.0.0.1:{d}/acme/widget.git", .{server.socket.address.getPort()});
     const elsewhere = try Elsewhere.ports(a, &.{server.socket.address.getPort()});
     defer elsewhere.restore();
     try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", url });
@@ -7378,7 +7378,7 @@ test "repo remove --clone: a remote whose server accepts and never answers is gi
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expect(started.durationTo(std.Io.Clock.awake.now(testing.io)).nanoseconds < 20 * std.time.ns_per_s);
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "(remote origin could not be asked at {s}: no answer in 2 seconds)", .{url})));
+    try testing.expect(contains(got.err, try a.print("(remote origin could not be asked at {s}: no answer in 2 seconds)", .{url})));
     try testing.expect(fsutil.exists(f.clone));
 }
 
@@ -7445,10 +7445,10 @@ test "gitRisks: a push URL git reads as a local path never counts, even with ://
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "--allow-empty", "-m", "only here and in the bundle" });
-    const dir = try std.fs.path.join(a, &.{ sb.root, "d:", "e" });
+    const dir = try std.Io.Dir.path.join(a, &.{ sb.root, "d:", "e" });
     try fsutil.ensureDir(dir);
-    try testutil.runGit(&sb, work, &.{ "bundle", "create", "-q", try std.fs.path.join(a, &.{ dir, "x.bundle" }), "--all" });
-    try testutil.runGit(&sb, work, &.{ "remote", "set-url", "--push", "origin", try std.fmt.allocPrint(a, "{s}/d://e/x.bundle", .{sb.root}) });
+    try testutil.runGit(&sb, work, &.{ "bundle", "create", "-q", try std.Io.Dir.path.join(a, &.{ dir, "x.bundle" }), "--all" });
+    try testutil.runGit(&sb, work, &.{ "remote", "set-url", "--push", "origin", try a.print("{s}/d://e/x.bundle", .{sb.root}) });
     const risks = try gitRisks(try testAsker(a), work);
     try testing.expect(risks.len > 0);
 }
@@ -7456,7 +7456,7 @@ test "gitRisks: a push URL git reads as a local path never counts, even with ://
 /// Makes `core.sshCommand` of `work` a command that connects nowhere and
 /// fails, so a test that reached ssh never reaches the network.
 fn failingSsh(a: std.mem.Allocator, sb: *testutil.Sandbox, work: []const u8) !void {
-    const script = try std.fs.path.join(a, &.{ sb.root, "failing-ssh" });
+    const script = try std.Io.Dir.path.join(a, &.{ sb.root, "failing-ssh" });
     try testutil.writeExecutable(script, "#!/bin/sh\nexit 255\n");
     try testutil.runGit(sb, work, &.{ "config", "core.sshCommand", script });
 }
@@ -7475,7 +7475,7 @@ test "repo remove --clone: each push URL that cannot be asked is one line, namin
     for ([_][]const u8{ "t1", "t2", "t3", "t4", "t5", "t6" }) |t| try testutil.runGit(&sb, f.clone, &.{ "tag", t });
     try testutil.runGit(&sb, f.clone, &.{ "push", "-q", "origin", "--tags" });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
-    const offline = [_][]const u8{ try std.fs.path.join(a, &.{ f.bare, "offline-1.git" }), try std.fs.path.join(a, &.{ f.bare, "offline-2.git" }) };
+    const offline = [_][]const u8{ try std.Io.Dir.path.join(a, &.{ f.bare, "offline-1.git" }), try std.Io.Dir.path.join(a, &.{ f.bare, "offline-2.git" }) };
     for (offline) |u| try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", u });
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -7483,8 +7483,8 @@ test "repo remove --clone: each push URL that cannot be asked is one line, namin
     try testing.expectEqual(@as(usize, 2), count(refused.err, "not confirmed held"));
     try testing.expect(!contains(refused.err, " only "));
     for (offline) |u| {
-        const lead = try std.fmt.allocPrint(a, "  1 ref not confirmed held, in {s}: refs/heads/main (remote origin could not be asked at {s}: repository not found); ", .{ cq, u });
-        try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}replace this push URL (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes it\n", .{ lead, cq, u, cq })));
+        const lead = try a.print("  1 ref not confirmed held, in {s}: refs/heads/main (remote origin could not be asked at {s}: repository not found); ", .{ cq, u });
+        try testing.expect(contains(refused.err, try a.print("{s}replace this push URL (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes it\n", .{ lead, cq, u, cq })));
     }
     try settleWith(&f, &.{ "(remote origin could not be asked at ", "commits of branch main" }, f.bare, 5);
 }
@@ -7546,17 +7546,17 @@ test "repo remove --clone: a push URL that cannot be asked, listed twice in a fi
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const offline = try std.fs.path.join(a, &.{ f.bare, "offline.git" });
-    const inc = try std.fs.path.join(a, &.{ sb.root, "inc.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = inc, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\tpushurl = {s}\n\tpushurl = {s}\n", .{ offline, offline }) });
+    const offline = try std.Io.Dir.path.join(a, &.{ f.bare, "offline.git" });
+    const inc = try std.Io.Dir.path.join(a, &.{ sb.root, "inc.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = inc, .data = try a.print("[remote \"origin\"]\n\tpushurl = {s}\n\tpushurl = {s}\n", .{ offline, offline }) });
     try testutil.runGit(&sb, f.clone, &.{ "config", "include.path", inc });
 
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     try testing.expectEqual(@as(usize, 1), count(refused.err, "not confirmed held"));
-    const lead = try std.fmt.allocPrint(a, "(remote origin could not be asked at {s}: ", .{offline});
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "(run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C ", .{ try q_test(a, try fsutil.realPathOrSelf(a, inc)), offline })));
+    const lead = try a.print("(remote origin could not be asked at {s}: ", .{offline});
+    try testing.expect(contains(refused.err, try a.print("(run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C ", .{ try q_test(a, try fsutil.realPathOrSelf(a, inc)), offline })));
     try settleWith(&f, &.{ lead, "commits of branch main" }, f.bare, 4);
 }
 
@@ -7586,9 +7586,9 @@ test "repo remove --clone: origin git cannot read, defined in several files outs
     const f = try Fixture.init(a, &sb, true);
     const cq = try ui.quotePath(a, app.envOf_current(), f.clone);
     try testutil.runGit(&sb, f.clone, &.{ "remote", "remove", "origin" });
-    const global = try std.fs.path.join(a, &.{ sb.root, "global.gitconfig" });
-    const system = try std.fs.path.join(a, &.{ sb.root, "system.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\turl = {s}\n", .{f.bare}) });
+    const global = try std.Io.Dir.path.join(a, &.{ sb.root, "global.gitconfig" });
+    const system = try std.Io.Dir.path.join(a, &.{ sb.root, "system.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try a.print("[remote \"origin\"]\n\turl = {s}\n", .{f.bare}) });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = system, .data = "[remote \"origin\"]\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n" });
     const env = try testutil.EnvOverride.install(a, "GIT_CONFIG_GLOBAL", global);
     defer env.restore();
@@ -7599,7 +7599,7 @@ test "repo remove --clone: origin git cannot read, defined in several files outs
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "; no remote counts as a copy: git cannot read the URLs of remote origin; add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or ", .{cq})));
+    try testing.expect(contains(refused.err, try a.print("; no remote counts as a copy: git cannot read the URLs of remote origin; add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or ", .{cq})));
     try settleWith(&f, &.{"no remote counts as a copy"}, f.bare, 3);
 }
 
@@ -7613,9 +7613,9 @@ test "repo remove --clone: a push URL that cannot be asked, set in the system co
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const offline = try std.fs.path.join(a, &.{ f.bare, "offline.git" });
-    const system = try std.fs.path.join(a, &.{ sb.root, "system.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = system, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\tpushurl = {s}\n", .{offline}) });
+    const offline = try std.Io.Dir.path.join(a, &.{ f.bare, "offline.git" });
+    const system = try std.Io.Dir.path.join(a, &.{ sb.root, "system.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = system, .data = try a.print("[remote \"origin\"]\n\tpushurl = {s}\n", .{offline}) });
     const nosystem = try testutil.EnvOverride.install(a, "GIT_CONFIG_NOSYSTEM", null);
     defer nosystem.restore();
     const sys = try testutil.EnvOverride.install(a, "GIT_CONFIG_SYSTEM", system);
@@ -7625,8 +7625,8 @@ test "repo remove --clone: a push URL that cannot be asked, set in the system co
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const env_now = app.envOf_current();
-    const lead = try std.fmt.allocPrint(a, "(remote origin could not be asked at {s}: repository not found); ", .{offline});
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}replace this push URL (run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine) (in {s}, which changes every repository and may need an administrator to change, sudo), or --force deletes it\n", .{ lead, try ui.quotePath(a, env_now, system), offline, try q_test(a, f.clone), try fsutil.contractTilde(a, env_now, system) })));
+    const lead = try a.print("(remote origin could not be asked at {s}: repository not found); ", .{offline});
+    try testing.expect(contains(refused.err, try a.print("{s}replace this push URL (run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine) (in {s}, which changes every repository and may need an administrator to change, sudo), or --force deletes it\n", .{ lead, try ui.quotePath(a, env_now, system), offline, try q_test(a, f.clone), try fsutil.contractTilde(a, env_now, system) })));
     try settleWith(&f, &.{ lead, "commits of branch main" }, f.bare, 4);
 }
 
@@ -7689,8 +7689,8 @@ test "repo remove --clone and doctor --retire: a password or token in a remote U
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const state = try testutil.EnvScope.install(a, &.{
-        .{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ sb.root, "state" }) },
-        .{ "XDG_CONFIG_HOME", try std.fs.path.join(a, &.{ sb.root, "config" }) },
+        .{ "XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "state" }) },
+        .{ "XDG_CONFIG_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "config" }) },
     });
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
@@ -7705,10 +7705,10 @@ test "repo remove --clone and doctor --retire: a password or token in a remote U
     const elsewhere = try Elsewhere.ports(a, &.{ port, other_port, 1 });
     defer elsewhere.restore();
     const secret = "ghp_SECRETTOKEN";
-    const own = try std.fmt.allocPrint(a, "http://user:{s}@127.0.0.1:{d}/acme/widget.git", .{ secret, port });
-    const shown = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{port});
-    const global = try std.fs.path.join(a, &.{ sb.root, "global.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\tpushurl = http://{s}@127.0.0.1:{d}/acme/other.git\n", .{ secret, other_port }) });
+    const own = try a.print("http://user:{s}@127.0.0.1:{d}/acme/widget.git", .{ secret, port });
+    const shown = try a.print("http://127.0.0.1:{d}/acme/widget.git", .{port});
+    const global = try std.Io.Dir.path.join(a, &.{ sb.root, "global.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try a.print("[remote \"origin\"]\n\tpushurl = http://{s}@127.0.0.1:{d}/acme/other.git\n", .{ secret, other_port }) });
     const env = try testutil.EnvOverride.install(a, "GIT_CONFIG_GLOBAL", global);
     defer env.restore();
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", own });
@@ -7719,17 +7719,17 @@ test "repo remove --clone and doctor --retire: a password or token in a remote U
     defer ui.stderr_terminal_for_test = null;
 
     const retired = try f.run(@import("doctor.zig").command.run, &.{"--retire"});
-    try testing.expect(contains(retired.out, try std.fmt.allocPrint(a, "could not be asked at {s}: ", .{shown})));
+    try testing.expect(contains(retired.out, try a.print("could not be asked at {s}: ", .{shown})));
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "asking origin at {s}...\n", .{shown})));
+    try testing.expect(contains(refused.err, try a.print("asking origin at {s}...\n", .{shown})));
     for ([_][]const u8{ retired.out, retired.err, refused.out, refused.err }) |text| {
         if (contains(text, secret)) {
             std.debug.print("the token appears in:\n{s}\n", .{text});
             return error.TestUnexpectedResult;
         }
     }
-    try runHint(&f, refused.err, try std.fmt.allocPrint(a, "could not be asked at {s}: ", .{shown}), f.bare);
+    try runHint(&f, refused.err, try a.print("could not be asked at {s}: ", .{shown}), f.bare);
     try settleWith(&f, &.{ "could not be asked at http://127.0.0.1:", "commits of branch main" }, f.bare, 4);
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--force", "--yes" });
     try testing.expect(!contains(got.err, secret) and !contains(got.out, secret));
@@ -7795,7 +7795,7 @@ test "repo remove --clone: a remote whose every URL is on this machine names eac
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "; no remote counts as a copy: remote origin is on this machine ({s}, {s}, {s}); add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or {s} deletes ", .{ one, two, three, cq, local_force })));
+    try testing.expect(contains(refused.err, try a.print("; no remote counts as a copy: remote origin is on this machine ({s}, {s}, {s}); add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine), or {s} deletes ", .{ one, two, three, cq, local_force })));
     try settleWith(&f, &.{"no remote counts as a copy"}, f.bare, 3);
 }
 
@@ -7820,9 +7820,9 @@ test "repo remove --clone: a remote whose push URL alone is on this machine says
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
         const want = if (rule)
-            try std.fmt.allocPrint(a, "; no remote counts as a copy: remote origin has its push URLs on this machine ({s}), through a pushInsteadOf rule; add a push URL (run: git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or {s} deletes it\n", .{ copy, cq, local_force })
+            try a.print("; no remote counts as a copy: remote origin has its push URLs on this machine ({s}), through a pushInsteadOf rule; add a push URL (run: git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or {s} deletes it\n", .{ copy, cq, local_force })
         else
-            try std.fmt.allocPrint(a, "; no remote counts as a copy: remote origin has its push URLs on this machine ({s}); replace its push URLs (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s}), or {s} deletes it\n", .{ copy, cq, copy, local_force });
+            try a.print("; no remote counts as a copy: remote origin has its push URLs on this machine ({s}); replace its push URLs (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s}), or {s} deletes it\n", .{ copy, cq, copy, local_force });
         if (!contains(refused.err, want)) {
             std.debug.print("wanted {s} in:\n{s}\n", .{ want, refused.err });
             return error.TestUnexpectedResult;
@@ -7846,17 +7846,17 @@ test "archive --prune: a clone kept for a remote on this machine, or one that co
         const f = try Fixture.init(a, &sb, true);
         try withProject(&f);
         if (unasked) {
-            try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", try std.fs.path.join(a, &.{ f.bare, "offline.git" }) });
+            try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", try std.Io.Dir.path.join(a, &.{ f.bare, "offline.git" }) });
             try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
         } else _ = try setOrigin(&f, try bareCopy(&f, "copy.git", &.{}));
 
         const got = try f.run(project_cmd.archive_command.run, &.{ "acme/proj", "--prune", "--yes" });
         try testing.expectEqual(@as(u8, 0), got.code);
-        const force = try std.fmt.allocPrint(a, "holt repo remove {s} --clone --force", .{Fixture.key});
+        const force = try a.print("holt repo remove {s} --clone --force", .{Fixture.key});
         try testing.expect(contains(got.out, if (unasked)
-            try std.fmt.allocPrint(a, "), or {s} deletes it", .{force})
+            try a.print("), or {s} deletes it", .{force})
         else
-            try std.fmt.allocPrint(a, "), or {s} deletes them", .{force})));
+            try a.print("), or {s} deletes them", .{force})));
         try testing.expect(!contains(got.out, "or --force"));
         try testing.expect(fsutil.exists(f.clone));
 
@@ -7904,7 +7904,7 @@ test "repo remove --clone: no part of a password holding an unencoded @ appears 
     const port = try closedPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    const own = try std.fmt.allocPrint(a, "http://user:p@SECRETPART@127.0.0.1:{d}/acme/widget.git", .{port});
+    const own = try a.print("http://user:p@SECRETPART@127.0.0.1:{d}/acme/widget.git", .{port});
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", own });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "not pushed yet" });
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -7930,10 +7930,10 @@ test "repo remove --clone: why a URL could not be asked is named by holt, not qu
     const port = try closedPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "http://bob:1@127.0.0.1:{d}/acme/widget.git", .{port}) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try a.print("http://bob:1@127.0.0.1:{d}/acme/widget.git", .{port}) });
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    const want = try std.fmt.allocPrint(a, "(remote origin could not be asked at http://127.0.0.1:{d}/acme/widget.git: connection refused); ", .{port});
+    const want = try a.print("(remote origin could not be asked at http://127.0.0.1:{d}/acme/widget.git: connection refused); ", .{port});
     if (!contains(got.err, want)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ want, got.err });
         return error.TestUnexpectedResult;
@@ -7957,7 +7957,7 @@ test "repo remove --clone: a URL's query and fragment never appear in its output
     const port = server.port();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    const own = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git?token=SECRETQUERY#SECRETFRAGMENT", .{port});
+    const own = try a.print("http://127.0.0.1:{d}/acme/widget.git?token=SECRETQUERY#SECRETFRAGMENT", .{port});
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", own });
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", f.bare });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "not pushed yet" });
@@ -7969,7 +7969,7 @@ test "repo remove --clone: a URL's query and fragment never appear in its output
             return error.TestUnexpectedResult;
         }
     }
-    const lead = try std.fmt.allocPrint(a, "could not be asked at http://127.0.0.1:{d}/acme/widget.git: ", .{port});
+    const lead = try a.print("could not be asked at http://127.0.0.1:{d}/acme/widget.git: ", .{port});
     try runHint(&f, refused.err, lead, "");
     const next = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), next.code);
@@ -7995,8 +7995,8 @@ test "repo remove --clone: a push URL whose expression would match a value that 
     const port = server.port();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    const alice = try std.fmt.allocPrint(a, "http://alice:TOKENA@127.0.0.1:{d}/acme/widget.git", .{port});
-    const bob = try std.fmt.allocPrint(a, "http://bob:TOKENB@127.0.0.1:{d}/acme/widget.git", .{port});
+    const alice = try a.print("http://alice:TOKENA@127.0.0.1:{d}/acme/widget.git", .{port});
+    const bob = try a.print("http://bob:TOKENB@127.0.0.1:{d}/acme/widget.git", .{port});
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", alice });
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", f.bare });
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", bob });
@@ -8005,7 +8005,7 @@ test "repo remove --clone: a push URL whose expression would match a value that 
     try testing.expectEqual(@as(u8, 1), refused.code);
     try testing.expect(!contains(refused.err, "TOKEN") and !contains(refused.err, "alice"));
     try testing.expect(contains(refused.err, "edit remote.origin.pushurl to replace this push URL (run: git -C "));
-    try runHintEditing(&f, refused.err, try std.fmt.allocPrint(a, "could not be asked at http://127.0.0.1:{d}/acme/widget.git: ", .{port}), f.bare, "TOKENA");
+    try runHintEditing(&f, refused.err, try a.print("could not be asked at http://127.0.0.1:{d}/acme/widget.git: ", .{port}), f.bare, "TOKENA");
     const left = try git.runInRepoScoped(a, &.{ "config", "--get-all", "remote.origin.pushurl" }, f.clone);
     if (!contains(left.stdout, "TOKENB") or contains(left.stdout, "TOKENA")) {
         std.debug.print("left:\n{s}\nstderr was:\n{s}\n", .{ left.stdout, refused.err });
@@ -8021,8 +8021,8 @@ test "repo remove --clone: when the expression matching a push URL without its p
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const state = try testutil.EnvScope.install(a, &.{
-        .{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ sb.root, "state" }) },
-        .{ "XDG_CONFIG_HOME", try std.fs.path.join(a, &.{ sb.root, "config" }) },
+        .{ "XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "state" }) },
+        .{ "XDG_CONFIG_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "config" }) },
     });
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
@@ -8037,23 +8037,23 @@ test "repo remove --clone: when the expression matching a push URL without its p
     const other_port = other.port();
     const elsewhere = try Elsewhere.ports(a, &.{ port, other_port });
     defer elsewhere.restore();
-    const shown = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{port});
-    const global = try std.fs.path.join(a, &.{ sb.root, "global.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\tpushurl = http://TOKENX@127.0.0.1:{d}/acme/other.git\n\tpushurl = http://TOKENY@127.0.0.1:{d}/acme/other.git\n", .{ other_port, other_port }) });
+    const shown = try a.print("http://127.0.0.1:{d}/acme/widget.git", .{port});
+    const global = try std.Io.Dir.path.join(a, &.{ sb.root, "global.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try a.print("[remote \"origin\"]\n\tpushurl = http://TOKENX@127.0.0.1:{d}/acme/other.git\n\tpushurl = http://TOKENY@127.0.0.1:{d}/acme/other.git\n", .{ other_port, other_port }) });
     const env = try testutil.EnvOverride.install(a, "GIT_CONFIG_GLOBAL", global);
     defer env.restore();
     try f.sb.git_env.map.put("GIT_CONFIG_GLOBAL", global);
     defer _ = f.sb.git_env.map.swapRemove("GIT_CONFIG_GLOBAL");
-    for ([_][]const u8{ "TOKENA", "TOKENB" }) |t| try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", try std.fmt.allocPrint(a, "http://alice:{s}@127.0.0.1:{d}/acme/widget.git", .{ t, port }) });
+    for ([_][]const u8{ "TOKENA", "TOKENB" }) |t| try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", try a.print("http://alice:{s}@127.0.0.1:{d}/acme/widget.git", .{ t, port }) });
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", f.bare });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "not pushed yet" });
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     for ([_][]const u8{ "TOKEN", "alice" }) |part| try testing.expect(!contains(refused.err, part));
-    const own_line = try std.fmt.allocPrint(a, "(remote origin could not be asked at {s}: repository not found); edit remote.origin.pushurl to replace this push URL (run: git -C {s} config --local --edit && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes it\n", .{ shown, cq, cq });
+    const own_line = try a.print("(remote origin could not be asked at {s}: repository not found); edit remote.origin.pushurl to replace this push URL (run: git -C {s} config --local --edit && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes it\n", .{ shown, cq, cq });
     try testing.expectEqual(@as(usize, 2), count(refused.err, own_line));
-    const global_line = try std.fmt.allocPrint(a, "edit remote.origin.pushurl to replace this push URL (run: git config --file {s} --edit && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine) (in {s}, which changes every repository), or --force deletes it\n", .{ try ui.quotePath(a, app.envOf_current(), global), cq, try fsutil.contractTilde(a, app.envOf_current(), global) });
+    const global_line = try a.print("edit remote.origin.pushurl to replace this push URL (run: git config --file {s} --edit && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine) (in {s}, which changes every repository), or --force deletes it\n", .{ try ui.quotePath(a, app.envOf_current(), global), cq, try fsutil.contractTilde(a, app.envOf_current(), global) });
     try testing.expectEqual(@as(usize, 2), count(refused.err, global_line));
 }
 
@@ -8067,7 +8067,7 @@ test "repo remove --clone: a remote-helper push URL is never asked and never a c
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const here = try std.fs.path.join(a, &.{ sb.root, "helper-here.git" });
+    const here = try std.Io.Dir.path.join(a, &.{ sb.root, "helper-here.git" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", "--bare", f.bare, here });
     try testutil.markElsewhere(here);
     const url = try std.mem.concat(a, u8, &.{ "testhelper::", here });
@@ -8152,9 +8152,9 @@ test "gitRisks: a loopback URL is on this machine and never asked, a helper URL 
     defer testing.allocator.free(bare);
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
-    const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
-    const script = try std.fs.path.join(a, &.{ sb.root, "logging-ssh" });
-    try testutil.writeExecutable(script, try std.fmt.allocPrint(a, "#!/bin/sh\necho called >> '{s}'\nexit 255\n", .{log}));
+    const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
+    const script = try std.Io.Dir.path.join(a, &.{ sb.root, "logging-ssh" });
+    try testutil.writeExecutable(script, try a.print("#!/bin/sh\necho called >> '{s}'\nexit 255\n", .{log}));
     try testutil.runGit(&sb, work, &.{ "config", "core.sshCommand", script });
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
     for ([_][]const u8{ "ssh://127.1/acme/widget.git", "hg::https://holt-test.invalid/acme/widget" }) |url| {
@@ -8184,7 +8184,7 @@ test "repo remove --clone: a push URL set in config.worktree is hinted away ther
         const port = server.port();
         const elsewhere = try Elsewhere.ports(a, &.{port});
         defer elsewhere.restore();
-        const url = if (local) try std.fs.path.join(a, &.{ sb.root, "here.git" }) else try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{port});
+        const url = if (local) try std.Io.Dir.path.join(a, &.{ sb.root, "here.git" }) else try a.print("http://127.0.0.1:{d}/acme/widget.git", .{port});
         if (local) try testutil.runGit(&sb, null, &.{ "clone", "-q", "--bare", f.bare, url });
         try testutil.runGit(&sb, f.clone, &.{ "config", "extensions.worktreeConfig", "true" });
         try testutil.runGit(&sb, f.clone, &.{ "config", "--worktree", "remote.origin.pushurl", url });
@@ -8193,9 +8193,9 @@ test "repo remove --clone: a push URL set in config.worktree is hinted away ther
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
         const cmd = if (local)
-            try std.fmt.allocPrint(a, "replace its push URLs (run: git -C {s} config --worktree --fixed-value --unset-all remote.origin.pushurl {s})", .{ cq, url })
+            try a.print("replace its push URLs (run: git -C {s} config --worktree --fixed-value --unset-all remote.origin.pushurl {s})", .{ cq, url })
         else
-            try std.fmt.allocPrint(a, "replace this push URL (run: git -C {s} config --worktree --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ cq, try ui.shellQuote(a, url), cq });
+            try a.print("replace this push URL (run: git -C {s} config --worktree --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ cq, try ui.shellQuote(a, url), cq });
         if (!contains(refused.err, cmd)) {
             std.debug.print("wanted {s} in:\n{s}\n", .{ cmd, refused.err });
             return error.TestUnexpectedResult;
@@ -8217,8 +8217,8 @@ test "repo remove --clone: a push URL set in config.worktree is hinted away ther
 /// path, which answers as `bare` would, with no network, wherever the
 /// sandbox is (a path holding `@` would make a URL naming it ambiguous).
 fn localSsh(a: std.mem.Allocator, sb: *testutil.Sandbox, work: []const u8, log: []const u8, bare: []const u8) ![]const u8 {
-    const script = try std.fs.path.join(a, &.{ sb.root, "local-ssh" });
-    try testutil.writeExecutable(script, try std.fmt.allocPrint(a, "#!/bin/sh\n[ \"$1\" = -G ] && exit 1\necho called >> '{s}'\nfor last; do :; done\nexec sh -c \"$(printf '%s' \"$last\" | sed 's|/holt-remote.git|{s}|')\"\n", .{ log, bare }));
+    const script = try std.Io.Dir.path.join(a, &.{ sb.root, "local-ssh" });
+    try testutil.writeExecutable(script, try a.print("#!/bin/sh\n[ \"$1\" = -G ] && exit 1\necho called >> '{s}'\nfor last; do :; done\nexec sh -c \"$(printf '%s' \"$last\" | sed 's|/holt-remote.git|{s}|')\"\n", .{ log, bare }));
     try testutil.runGit(sb, work, &.{ "config", "core.sshCommand", script });
     return "ssh://localhost/holt-remote.git";
 }
@@ -8242,9 +8242,9 @@ test "repo remove --clone: once an ssh connection to a host times out, no other 
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
-    const script = try std.fs.path.join(a, &.{ sb.root, "timing-out-ssh" });
-    try testutil.writeExecutable(script, try std.fmt.allocPrint(a, "#!/bin/sh\n[ \"$1\" = -G ] && exit 1\necho called >> '{s}'\necho 'ssh: connect to host 127.0.0.1 port 22: Operation timed out' >&2\nexit 255\n", .{log}));
+    const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
+    const script = try std.Io.Dir.path.join(a, &.{ sb.root, "timing-out-ssh" });
+    try testutil.writeExecutable(script, try a.print("#!/bin/sh\n[ \"$1\" = -G ] && exit 1\necho called >> '{s}'\necho 'ssh: connect to host 127.0.0.1 port 22: Operation timed out' >&2\nexit 255\n", .{log}));
     try testutil.runGit(&sb, f.clone, &.{ "config", "core.sshCommand", script });
     const elsewhere = try Elsewhere.ports(a, &.{22});
     defer elsewhere.restore();
@@ -8274,10 +8274,10 @@ test "repo remove --clone: once a host gives no answer in time, no other URL on 
     const port = server.socket.address.getPort();
     const elsewhere = try Elsewhere.ports(a, &.{ port, 22 });
     defer elsewhere.restore();
-    const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
+    const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
     const ssh_url = try localSsh(a, &sb, f.clone, log, f.bare);
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/r0.git", .{port}) });
-    for (1..3) |n| try testutil.runGit(&sb, f.clone, &.{ "remote", "add", try std.fmt.allocPrint(a, "r{d}", .{n}), try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/r{d}.git", .{ port, n }) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try a.print("http://127.0.0.1:{d}/r0.git", .{port}) });
+    for (1..3) |n| try testutil.runGit(&sb, f.clone, &.{ "remote", "add", try a.print("r{d}", .{n}), try a.print("http://127.0.0.1:{d}/r{d}.git", .{ port, n }) });
     try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "zz", ssh_url });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "not pushed yet" });
     ask_limit_for_test = 1;
@@ -8288,7 +8288,7 @@ test "repo remove --clone: once a host gives no answer in time, no other URL on 
     try testing.expect(started.durationTo(std.Io.Clock.awake.now(testing.io)).nanoseconds < 20 * std.time.ns_per_s);
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expectEqual(@as(usize, 1), count(got.err, ": no answer in 1 seconds); reconnect and run again, or --force deletes "));
-    const skipped = try std.fmt.allocPrint(a, " not asked: 127.0.0.1:{d} did not answer earlier in this run; reconnect and run again\n", .{port});
+    const skipped = try a.print(" not asked: 127.0.0.1:{d} did not answer earlier in this run; reconnect and run again\n", .{port});
     try testing.expectEqual(@as(usize, 0), count(got.err, skipped));
     try testing.expect(!contains(got.err, "remote zz"));
     try testing.expect((try lineCount(a, log)) > 0);
@@ -8307,7 +8307,7 @@ test "repo remove --clone --yes and archive --prune --yes: with no prompt betwee
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
         if (archive) try withProject(&f);
-        const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
+        const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
         const elsewhere = try Elsewhere.ports(a, &.{22});
         defer elsewhere.restore();
         try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try localSsh(a, &sb, f.clone, log, f.bare) });
@@ -8335,7 +8335,7 @@ test "repo remove --clone and archive --prune: after a prompt on a terminal, eac
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
         if (archive) try withProject(&f);
-        const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
+        const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
         const elsewhere = try Elsewhere.ports(a, &.{22});
         defer elsewhere.restore();
         const url = try localSsh(a, &sb, f.clone, log, f.bare);
@@ -8354,7 +8354,7 @@ test "repo remove --clone and archive --prune: after a prompt on a terminal, eac
         try testing.expectEqual(@as(u8, 0), got.code);
         try testing.expect(!fsutil.exists(f.clone));
         try testing.expectEqual(@as(usize, 2), try lineCount(a, log));
-        try testing.expectEqual(@as(usize, if (archive) 0 else 1), count(got.err, try std.fmt.allocPrint(a, "asking origin at {s}...\n", .{url})));
+        try testing.expectEqual(@as(usize, if (archive) 0 else 1), count(got.err, try a.print("asking origin at {s}...\n", .{url})));
     }
 }
 
@@ -8374,7 +8374,7 @@ test "repo remove --clone: off a terminal, a query that has run 5 seconds says w
     const port = server.socket.address.getPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{port}) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try a.print("http://127.0.0.1:{d}/acme/widget.git", .{port}) });
     ask_limit_for_test = 7;
     defer ask_limit_for_test = null;
 
@@ -8382,7 +8382,7 @@ test "repo remove --clone: off a terminal, a query that has run 5 seconds says w
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expect(started.durationTo(std.Io.Clock.awake.now(testing.io)).nanoseconds < 30 * std.time.ns_per_s);
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expectEqual(@as(usize, 1), count(got.err, try std.fmt.allocPrint(a, "waiting for 127.0.0.1:{d}...\n", .{port})));
+    try testing.expectEqual(@as(usize, 1), count(got.err, try a.print("waiting for 127.0.0.1:{d}...\n", .{port})));
     try testing.expect(!contains(got.err, "asking "));
 }
 
@@ -8438,9 +8438,9 @@ test "delete gate: reads and queries run with no prompt, no tracing, and git's m
     defer sb.deinit();
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
-    const log = try std.fs.path.join(a, &.{ sb.root, "query-env" });
-    const script = try std.fs.path.join(a, &.{ sb.root, "env-ssh" });
-    try testutil.writeExecutable(script, try std.fmt.allocPrint(a, "#!/bin/sh\nenv > '{s}'\nexit 1\n", .{log}));
+    const log = try std.Io.Dir.path.join(a, &.{ sb.root, "query-env" });
+    const script = try std.Io.Dir.path.join(a, &.{ sb.root, "env-ssh" });
+    try testutil.writeExecutable(script, try a.print("#!/bin/sh\nenv > '{s}'\nexit 1\n", .{log}));
     try testutil.runGit(&sb, bare, &.{ "config", "core.sshCommand", script });
     const env = try EnvPairs.install(a, &prompting_env);
     defer env.restore();
@@ -8486,18 +8486,18 @@ test "delete gate: a query never follows a redirect, even one a user's key for i
     try elsewhere.start("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     defer elsewhere.stop();
     var redirecting: testutil.LoopbackStub = undefined;
-    try redirecting.start(try std.fmt.allocPrint(a, "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{d}/moved.git/info/refs?service=git-upload-pack\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{elsewhere.port()}));
+    try redirecting.start(try a.print("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{d}/moved.git/info/refs?service=git-upload-pack\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{elsewhere.port()}));
     defer redirecting.stop();
-    const origin = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}", .{redirecting.port()});
-    try testutil.runGit(&sb, bare, &.{ "config", try std.fmt.allocPrint(a, "http.{s}.followRedirects", .{origin}), "true" });
+    const origin = try a.print("http://127.0.0.1:{d}", .{redirecting.port()});
+    try testutil.runGit(&sb, bare, &.{ "config", try a.print("http.{s}.followRedirects", .{origin}), "true" });
 
-    const url = try std.fmt.allocPrint(a, "{s}/acme/widget.git", .{origin});
+    const url = try a.print("{s}/acme/widget.git", .{origin});
     const res = try (At{ .repo = bare }).runQuery(a, url, url, .{ .limit = .fromSeconds(20) });
     try testing.expect(res.status != 0);
     try testing.expect(redirecting.count() >= 1);
     try testing.expectEqual(@as(u32, 0), elsewhere.count());
 
-    try testutil.runGit(&sb, bare, &.{ "config", try std.fmt.allocPrint(a, "url.{s}/.insteadOf", .{origin}), "http://holt-alias.invalid/" });
+    try testutil.runGit(&sb, bare, &.{ "config", try a.print("url.{s}/.insteadOf", .{origin}), "http://holt-alias.invalid/" });
     const rewritten = try (At{ .repo = bare }).runQuery(a, "http://holt-alias.invalid/acme/widget.git", url, .{ .limit = .fromSeconds(20) });
     try testing.expect(rewritten.status != 0);
     try testing.expect(redirecting.count() >= 2);
@@ -8518,10 +8518,10 @@ test "delete gate: a credential helper a query runs is told never to wait on a p
     var server: testutil.LoopbackStub = undefined;
     try server.start("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"holt\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     defer server.stop();
-    const log = try std.fs.path.join(a, &.{ sb.root, "helper-saw" });
-    try testutil.runGit(&sb, bare, &.{ "config", "credential.helper", try std.fmt.allocPrint(a, "!f() {{ git config --get credential.interactive >> '{s}'; echo \"${{GCM_INTERACTIVE-unset}}\" >> '{s}'; }}; f", .{ log, log }) });
+    const log = try std.Io.Dir.path.join(a, &.{ sb.root, "helper-saw" });
+    try testutil.runGit(&sb, bare, &.{ "config", "credential.helper", try a.print("!f() {{ git config --get credential.interactive >> '{s}'; echo \"${{GCM_INTERACTIVE-unset}}\" >> '{s}'; }}; f", .{ log, log }) });
 
-    const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{server.port()});
+    const url = try a.print("http://127.0.0.1:{d}/acme/widget.git", .{server.port()});
     const res = try (At{ .repo = bare }).runQuery(a, url, url, .{ .limit = .fromSeconds(20) });
     try testing.expect(res.status != 0);
     const saw = try kept.content.readSmall(a, log);
@@ -8553,7 +8553,7 @@ test "delete gate: a read runs no transport whatever the user allows, and a quer
     var silent: testutil.LoopbackStub = undefined;
     try silent.start("");
     defer silent.stop();
-    const url = try std.fmt.allocPrint(a, "git://127.0.0.1:{d}/acme/widget.git", .{silent.port()});
+    const url = try a.print("git://127.0.0.1:{d}/acme/widget.git", .{silent.port()});
     const query = try at.runQuery(a, url, url, .{ .limit = .fromSeconds(2) });
     try testing.expect(query.status != 0);
     try testing.expect(silent.count() >= 1);
@@ -8569,12 +8569,12 @@ test "delete gate: a read of an object a partial clone lacks never waits on its 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
     try testutil.runGit(&sb, bare, &.{ "config", "uploadpack.allowFilter", "true" });
-    const partial = try std.fs.path.join(a, &.{ sb.root, "partial" });
+    const partial = try std.Io.Dir.path.join(a, &.{ sb.root, "partial" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", "--no-checkout", "--filter=blob:none", try std.mem.concat(a, u8, &.{ "file://", bare }), partial });
     var silent: testutil.LoopbackStub = undefined;
     try silent.start("");
     defer silent.stop();
-    try testutil.runGit(&sb, partial, &.{ "config", "remote.origin.url", try std.fmt.allocPrint(a, "git://127.0.0.1:{d}/acme/widget.git", .{silent.port()}) });
+    try testutil.runGit(&sb, partial, &.{ "config", "remote.origin.url", try a.print("git://127.0.0.1:{d}/acme/widget.git", .{silent.port()}) });
     for ([_][]const u8{ "protocol.allow", "protocol.git.allow" }) |key| try testutil.runGit(&sb, partial, &.{ "config", key, "always" });
     const allow = try testutil.EnvOverride.install(a, "GIT_ALLOW_PROTOCOL", "git");
     defer allow.restore();
@@ -8678,8 +8678,8 @@ test "gitRisks: a listener that closes without an answer is queried once for thr
     defer slow.stop();
     const elsewhere = try Elsewhere.ports(a, &.{slow.port()});
     defer elsewhere.restore();
-    try testutil.runGit(&sb, work, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/r0.git", .{slow.port()}) });
-    for (1..3) |n| try testutil.runGit(&sb, work, &.{ "remote", "add", try std.fmt.allocPrint(a, "r{d}", .{n}), try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/r{d}.git", .{ slow.port(), n }) });
+    try testutil.runGit(&sb, work, &.{ "remote", "set-url", "origin", try a.print("http://127.0.0.1:{d}/r0.git", .{slow.port()}) });
+    for (1..3) |n| try testutil.runGit(&sb, work, &.{ "remote", "add", try a.print("r{d}", .{n}), try a.print("http://127.0.0.1:{d}/r{d}.git", .{ slow.port(), n }) });
     ask_limit_for_test = 10;
     defer ask_limit_for_test = null;
     ask_budget_for_test = 2;
@@ -8700,7 +8700,7 @@ test "gitRisks: a host not found over ssh is not asked over another transport th
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
-    const script = try std.fs.path.join(a, &.{ sb.root, "lost-ssh" });
+    const script = try std.Io.Dir.path.join(a, &.{ sb.root, "lost-ssh" });
     try testutil.writeExecutable(script, "#!/bin/sh\necho 'ssh: Could not resolve hostname 127.0.0.1: nodename nor servname provided, or not known' >&2\nexit 255\n");
     try testutil.runGit(&sb, work, &.{ "config", "core.sshCommand", script });
     var server: testutil.LoopbackStub = undefined;
@@ -8709,11 +8709,11 @@ test "gitRisks: a host not found over ssh is not asked over another transport th
     const elsewhere = try Elsewhere.ports(a, &.{ 22, server.port() });
     defer elsewhere.restore();
     try testutil.runGit(&sb, work, &.{ "remote", "set-url", "origin", "ssh://127.0.0.1/acme/widget.git" });
-    try testutil.runGit(&sb, work, &.{ "remote", "add", "web", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{server.port()}) });
+    try testutil.runGit(&sb, work, &.{ "remote", "add", "web", try a.print("http://127.0.0.1:{d}/acme/widget.git", .{server.port()}) });
     const asker = try testAsker(a);
     _ = try gitRisks(asker, work);
     try testing.expectEqual(@as(u32, 0), server.count());
-    const web = (try asker.answerOf(try scopeOf(a, .{ .repo = work }), try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{server.port()}))).?;
+    const web = (try asker.answerOf(try scopeOf(a, .{ .repo = work }), try a.print("http://127.0.0.1:{d}/acme/widget.git", .{server.port()}))).?;
     try testing.expect(web == .unasked and web.unasked.host != null);
 }
 
@@ -8722,7 +8722,7 @@ const InventoryWork = struct { path: []const u8, object: []const u8 };
 /// Test-only: a linked working tree `name` of `f`'s clone, detached, with
 /// a commit only it holds.
 fn inventoryWork(f: *const Fixture, name: []const u8) !InventoryWork {
-    const path = try std.fs.path.join(f.a, &.{ f.sb.root, name });
+    const path = try std.Io.Dir.path.join(f.a, &.{ f.sb.root, name });
     try testutil.runGit(f.sb, f.clone, &.{ "worktree", "add", "-q", "--detach", path });
     try f.write(path, "inventory.txt", name);
     try testutil.runGit(f.sb, path, &.{ "add", "inventory.txt" });
@@ -8740,8 +8740,8 @@ test "git inventory: a commit only a linked worktree's detached HEAD holds is we
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const state = try testutil.EnvScope.install(a, &.{
-        .{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ sb.root, "state" }) },
-        .{ "XDG_CONFIG_HOME", try std.fs.path.join(a, &.{ sb.root, "config" }) },
+        .{ "XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "state" }) },
+        .{ "XDG_CONFIG_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "config" }) },
     });
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
@@ -8754,7 +8754,7 @@ test "git inventory: a commit only a linked worktree's detached HEAD holds is we
     try testing.expect(found);
     const retired = try f.run(@import("doctor.zig").command.run, &.{"--retire"});
     try testing.expectEqual(@as(u8, 1), retired.code);
-    try testing.expect(contains(retired.out, try std.fmt.allocPrint(a, "commit {s}, which only the HEAD of worktree linked-inventory holds and no remote has, in ", .{work.object})));
+    try testing.expect(contains(retired.out, try a.print("commit {s}, which only the HEAD of worktree linked-inventory holds and no remote has, in ", .{work.object})));
 }
 
 test "git inventory: a commit only a linked worktree's refs/bisect/bad holds is weighed, its directory gone or not" {
@@ -8770,7 +8770,7 @@ test "git inventory: a commit only a linked worktree's refs/bisect/bad holds is 
     try testutil.runGit(&sb, work.path, &.{ "update-ref", "refs/bisect/bad", work.object });
     try testutil.runGit(&sb, work.path, &.{ "checkout", "-q", "--detach", "origin/main" });
     for ([_]bool{ false, true }) |gone| {
-        if (gone) try std.Io.Dir.cwd().rename(work.path, .cwd(), try std.fs.path.join(a, &.{ sb.root, "aside-inventory" }), io());
+        if (gone) try std.Io.Dir.cwd().rename(work.path, .cwd(), try std.Io.Dir.path.join(a, &.{ sb.root, "aside-inventory" }), io());
         var found = false;
         for (try gitRisks(try testAsker(a), f.clone)) |r| if (r.what == .ref_unheld and std.mem.eql(u8, r.name, "refs/bisect/bad")) {
             try testing.expectEqualStrings("bisect-inventory", r.worktree.?);
@@ -8836,7 +8836,7 @@ test "git inventory: a worktree record git cannot read makes the clone's git sta
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    try std.Io.Dir.cwd().createDirPath(io(), try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees", "incomplete" }));
+    try std.Io.Dir.cwd().createDirPath(io(), try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees", "incomplete" }));
     var unreadable = false;
     for (try gitRisks(try testAsker(a), f.clone)) |r| if (r.what == .unreadable) {
         unreadable = true;
@@ -8867,8 +8867,8 @@ test "git inventory: worktree -r weighs the worktree's own refs and a HEAD on on
     try testing.expectEqual(@as(usize, 2), on_ref.len);
     try testing.expect(on_ref[1].what == .head_unheld);
 
-    const original = try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees", "private-inventory" });
-    try std.Io.Dir.cwd().symLink(io(), original, try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees", "alias" }), .{ .is_directory = true });
+    const original = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees", "private-inventory" });
+    try std.Io.Dir.cwd().symLink(io(), original, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees", "alias" }), .{ .is_directory = true });
     try testing.expectError(error.GitFailed, worktreeRisks(try testAsker(a), work.path));
 }
 
@@ -8884,12 +8884,12 @@ test "heldCommits: 300 candidates against 1000 listed tips take two git reads" {
     defer testing.allocator.free(work);
     const head = std.mem.trim(u8, (try git.runInRepoScoped(a, &.{ "rev-parse", "HEAD" }, work)).stdout, "\n");
     const tips = try a.alloc([]const u8, 1000);
-    for (tips, 1..) |*tip, n| tip.* = try std.fmt.allocPrint(a, "{x:0>40}", .{n});
+    for (tips, 1..) |*tip, n| tip.* = try a.print("{x:0>40}", .{n});
     var import_data: std.Io.Writer.Allocating = .init(a);
     for (0..300) |n| {
         try import_data.writer.print("commit refs/heads/candidate-{d}\ncommitter holt-test <test@holt.invalid> {d} +0000\ndata 0\nfrom {s}\n\n", .{ n, n + 1, head });
     }
-    const input = try std.fs.path.join(a, &.{ sb.root, "commits" });
+    const input = try std.Io.Dir.path.join(a, &.{ sb.root, "commits" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = input, .data = import_data.written() });
     const imported = try git.runInRepoScopedWith(a, &.{ "fast-import", "--quiet" }, work, .{ .stdin_path = input });
     try testing.expectEqual(@as(u8, 0), imported.status);
@@ -8930,8 +8930,8 @@ test "heldCommits: failed ancestry does not erase direct evidence or confirm pen
     defer testing.allocator.free(work);
     const head = std.mem.trim(u8, (try git.runInRepoScoped(a, &.{ "rev-parse", "HEAD" }, work)).stdout, "\n");
     const tree = std.mem.trim(u8, (try git.runInRepoScoped(a, &.{ "rev-parse", "HEAD^{tree}" }, work)).stdout, "\n");
-    const input = try std.fs.path.join(a, &.{ sb.root, "broken-commit" });
-    const data = try std.fmt.allocPrint(a, "tree {s}\nparent 0123456789abcdef0123456789abcdef01234567\nauthor holt-test <test@holt.invalid> 1 +0000\ncommitter holt-test <test@holt.invalid> 1 +0000\n\nbroken parent\n", .{tree});
+    const input = try std.Io.Dir.path.join(a, &.{ sb.root, "broken-commit" });
+    const data = try a.print("tree {s}\nparent 0123456789abcdef0123456789abcdef01234567\nauthor holt-test <test@holt.invalid> 1 +0000\ncommitter holt-test <test@holt.invalid> 1 +0000\n\nbroken parent\n", .{tree});
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = input, .data = data });
     const hashed = try git.runInRepoScopedWith(a, &.{ "hash-object", "-t", "commit", "-w", "--stdin" }, work, .{ .stdin_path = input });
     try testing.expectEqual(@as(u8, 0), hashed.status);
@@ -8998,7 +8998,7 @@ test "repo remove --clone: a ref that moves, a stash made, or a HEAD git cannot 
 
         const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), got.code);
-        try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "holt: {s} changed while it was being weighed (a ref or HEAD moved, or git could not read them again); the clone was kept; run the command again\n", .{try q_test(a, f.clone)})));
+        try testing.expect(contains(got.err, try a.print("holt: {s} changed while it was being weighed (a ref or HEAD moved, or git could not read them again); the clone was kept; run the command again\n", .{try q_test(a, f.clone)})));
         try testing.expect(fsutil.exists(try f.path(".git")));
     }
 }
@@ -9014,13 +9014,13 @@ test "repo remove --clone: a delete that fails partway says part of the clone ma
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const locked = try f.path("locked");
-    const seam = Seam.install(&sb, &.{try std.fmt.allocPrint(a, "mkdir '{s}' && echo x > '{s}/f' && chmod 0500 '{s}'", .{ locked, locked, locked })});
+    const seam = Seam.install(&sb, &.{try a.print("mkdir '{s}' && echo x > '{s}/f' && chmod 0500 '{s}'", .{ locked, locked, locked })});
     defer seam.restore();
     defer if (proc.run(a, &.{ "chmod", "0700", locked }, null)) |_| {} else |_| {};
 
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "holt: failed to delete {s}: ", .{try fsutil.contractTilde(a, app.envOf_current(), f.clone)})));
+    try testing.expect(contains(got.err, try a.print("holt: failed to delete {s}: ", .{try fsutil.contractTilde(a, app.envOf_current(), f.clone)})));
     try testing.expect(contains(got.err, "; part of it may already be gone\n"));
 }
 
@@ -9047,7 +9047,7 @@ test "worktree -r: its HEAD moving, or another worktree's per-worktree ref, afte
         const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
         try testing.expectEqual(@as(u8, 0), made.code);
         const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
-        const other = try std.fs.path.join(a, &.{ sb.root, "other-worktree" });
+        const other = try std.Io.Dir.path.join(a, &.{ sb.root, "other-worktree" });
         try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", other, "main" });
         try testutil.runGit(&sb, other, &.{ "update-ref", "refs/bisect/bad", "HEAD" });
         const cmd = try std.mem.replaceOwned(u8, a, try std.mem.replaceOwned(u8, a, case.cmd, "{w}", wt), "{o}", other);
@@ -9088,7 +9088,7 @@ test "repo remove --clone: branch.<b>.pushRemote, then remote.pushDefault, pick 
 
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
-        try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "(run: git -C {s} push --recurse-submodules=no -- backup ", .{try q_test(a, f.clone)})));
+        try testing.expect(contains(refused.err, try a.print("(run: git -C {s} push --recurse-submodules=no -- backup ", .{try q_test(a, f.clone)})));
         try testing.expect(!contains(refused.err, " push origin "));
     }
 }
@@ -9231,7 +9231,7 @@ test "repo remove --clone: with a listed Holt-Kept/main on the target, the ahead
                 want = "push --recurse-submodules=no -- origin refs/tags/v1:refs/tags/holt-kept/tags/v1)";
             },
             else => {
-                const empty = try std.fs.path.join(a, &.{ sb.root, "empty.git" });
+                const empty = try std.Io.Dir.path.join(a, &.{ sb.root, "empty.git" });
                 try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", empty });
                 try testutil.markElsewhere(empty);
                 try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", empty });
@@ -9240,7 +9240,7 @@ test "repo remove --clone: with a listed Holt-Kept/main on the target, the ahead
         }
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
-        const line = try std.fmt.allocPrint(a, "(run: git -C {s} {s}", .{ cq, want });
+        const line = try a.print("(run: git -C {s} {s}", .{ cq, want });
         if (!contains(refused.err, line)) {
             std.debug.print("wanted {s} in:\n{s}\n", .{ line, refused.err });
             return error.TestUnexpectedResult;
@@ -9285,11 +9285,11 @@ test "repo remove --clone: the stale refs of one remote under refs/remotes are o
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "upstream", try std.fs.path.join(a, &.{ sb.root, "gone.git" }) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "upstream", try std.Io.Dir.path.join(a, &.{ sb.root, "gone.git" }) });
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "--detach" });
     for (1..6) |n| {
-        try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", try std.fmt.allocPrint(a, "stale {d}", .{n}) });
-        try testutil.runGit(&sb, f.clone, &.{ "update-ref", try std.fmt.allocPrint(a, "refs/remotes/upstream/b{d}", .{n}), "HEAD" });
+        try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", try a.print("stale {d}", .{n}) });
+        try testutil.runGit(&sb, f.clone, &.{ "update-ref", try a.print("refs/remotes/upstream/b{d}", .{n}), "HEAD" });
     }
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "main" });
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -9313,7 +9313,7 @@ test "worktree -r: a HEAD and a per-worktree ref no remote has are kept by refs 
     const port = try closedPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{port}) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try a.print("http://127.0.0.1:{d}/acme/widget.git", .{port}) });
     try testutil.runGit(&sb, f.clone, &.{ "branch", "feature" });
     const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
@@ -9326,8 +9326,8 @@ test "worktree -r: a HEAD and a per-worktree ref no remote has are kept by refs 
     const wip = std.mem.trim(u8, (try (At{ .repo = wt }).run(a, &.{ "rev-parse", "refs/worktree/wip" })).stdout, "\r\n");
     const refused = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "(run: git -C {s} branch holt-kept/head-{s} {s})", .{ wq, head[0..12], head })));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "(run: git -C {s} update-ref refs/holt-kept/feature/worktree/wip {s})", .{ wq, wip })));
+    try testing.expect(contains(refused.err, try a.print("(run: git -C {s} branch holt-kept/head-{s} {s})", .{ wq, head[0..12], head })));
+    try testing.expect(contains(refused.err, try a.print("(run: git -C {s} update-ref refs/holt-kept/feature/worktree/wip {s})", .{ wq, wip })));
     try runHint(&f, refused.err, "which only the HEAD of worktree", "");
     try runHint(&f, refused.err, "commits only refs/worktree/wip", "");
     const after = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
@@ -9344,7 +9344,7 @@ test "gitRisks: a fetch URL that holds a commit is a witness, though its remote'
     defer testing.allocator.free(bare);
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
-    try testutil.runGit(&sb, work, &.{ "config", "remote.origin.pushurl", try std.fs.path.join(a, &.{ sb.root, "here.git" }) });
+    try testutil.runGit(&sb, work, &.{ "config", "remote.origin.pushurl", try std.Io.Dir.path.join(a, &.{ sb.root, "here.git" }) });
     for (try gitRisks(try testAsker(a), work)) |r| switch (r.what) {
         .ahead, .ref_unheld, .object_unheld, .remote_refs, .head_unheld, .unasked => {
             std.debug.print("held by the fetch URL, yet at risk: {s} {s}\n", .{ @tagName(r.what), r.name });
@@ -9369,7 +9369,7 @@ test "repo remove --clone: with origin holding everything, a backup URL is never
     defer silent.stop();
     const elsewhere = try Elsewhere.ports(a, &.{silent.port()});
     defer elsewhere.restore();
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "backup", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{silent.port()}) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "backup", try a.print("http://127.0.0.1:{d}/acme/widget.git", .{silent.port()}) });
     ask_limit_for_test = 3;
     defer ask_limit_for_test = null;
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -9388,9 +9388,9 @@ test "gitRisks: a remote with remote.<name>.vcs set is never asked, and no URL n
     defer testing.allocator.free(bare);
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
-    const mark = try std.fs.path.join(a, &.{ sb.root, "helper-ran" });
-    const helper = try std.fs.path.join(a, &.{ sb.root, "git-remote-probe" });
-    try testutil.writeExecutable(helper, try std.fmt.allocPrint(a, "#!/bin/sh\necho ran >> '{s}'\nexit 1\n", .{mark}));
+    const mark = try std.Io.Dir.path.join(a, &.{ sb.root, "helper-ran" });
+    const helper = try std.Io.Dir.path.join(a, &.{ sb.root, "git-remote-probe" });
+    try testutil.writeExecutable(helper, try a.print("#!/bin/sh\necho ran >> '{s}'\nexit 1\n", .{mark}));
     const old_path = std.process.Environ.getPosix(std.Io.Threaded.global_single_threaded.environ.process_environ, "PATH") orelse "/usr/bin:/bin";
     const path_scope = try testutil.EnvOverride.install(a, "PATH", try std.mem.concat(a, u8, &.{ sb.root, ":", old_path }));
     defer path_scope.restore();
@@ -9399,7 +9399,7 @@ test "gitRisks: a remote with remote.<name>.vcs set is never asked, and no URL n
     defer server.stop();
     const elsewhere = try Elsewhere.ports(a, &.{server.port()});
     defer elsewhere.restore();
-    const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{server.port()});
+    const url = try a.print("http://127.0.0.1:{d}/acme/widget.git", .{server.port()});
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
     try testutil.runGit(&sb, work, &.{ "remote", "add", "probe", url });
     try testutil.runGit(&sb, work, &.{ "config", "remote.probe.vcs", "probe" });
@@ -9407,8 +9407,8 @@ test "gitRisks: a remote with remote.<name>.vcs set is never asked, and no URL n
     try testing.expect(!fsutil.exists(mark));
     try testing.expectEqual(@as(u32, 0), server.count());
 
-    try testutil.runGit(&sb, work, &.{ "config", try std.fmt.allocPrint(a, "remote.{s}.vcs", .{url}), "probe" });
-    try testutil.runGit(&sb, work, &.{ "config", try std.fmt.allocPrint(a, "remote.{s}.url", .{url}), url });
+    try testutil.runGit(&sb, work, &.{ "config", try a.print("remote.{s}.vcs", .{url}), "probe" });
+    try testutil.runGit(&sb, work, &.{ "config", try a.print("remote.{s}.url", .{url}), url });
     try testutil.runGit(&sb, work, &.{ "remote", "add", "web", url });
     const answer = try (try testAsker(a)).ask(.{ .repo = work }, try scopeOf(a, .{ .repo = work }), "web", url, &.{});
     try testing.expect(answer == .unasked);
@@ -9444,7 +9444,7 @@ test "repo remove --clone: a target's push URL that does not answer takes only t
     const port = try closedPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "backup", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{port}) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "backup", try a.print("http://127.0.0.1:{d}/acme/widget.git", .{port}) });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "main only here" });
     try testutil.runGit(&sb, f.clone, &.{ "switch", "-q", "-c", "side" });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "side only here" });
@@ -9489,7 +9489,7 @@ test "worktree -r: a HEAD a tag holds, and a per-worktree ref kept by the hinted
 /// Test-only: `runHint` with `<url>` standing for `url`, and, when `drop`
 /// is set, an editor that deletes each line matching it.
 fn runHintEditing(f: *const Fixture, text: []const u8, lead: []const u8, url: []const u8, drop: ?[]const u8) !void {
-    if (drop) |d| try f.sb.git_env.map.put("GIT_EDITOR", try std.fmt.allocPrint(f.a, "sed -i.orig '/{s}/d'", .{d}));
+    if (drop) |d| try f.sb.git_env.map.put("GIT_EDITOR", try f.a.print("sed -i.orig '/{s}/d'", .{d}));
     defer if (drop != null) {
         _ = f.sb.git_env.map.swapRemove("GIT_EDITOR");
     };
@@ -9507,9 +9507,9 @@ test "repo remove --clone: a push URL that does not answer for good, with no oth
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try q_test(a, f.clone);
-    const offline = try std.fs.path.join(a, &.{ f.bare, "offline.git" });
-    const inc = try std.fs.path.join(a, &.{ sb.root, "inc.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = inc, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\tpushurl = {s}\n", .{offline}) });
+    const offline = try std.Io.Dir.path.join(a, &.{ f.bare, "offline.git" });
+    const inc = try std.Io.Dir.path.join(a, &.{ sb.root, "inc.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = inc, .data = try a.print("[remote \"origin\"]\n\tpushurl = {s}\n", .{offline}) });
     try testutil.runGit(&sb, f.clone, &.{ "config", "include.path", inc });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
     const backup = try testutil.makeBareRepo(&sb, "backup.git");
@@ -9517,7 +9517,7 @@ test "repo remove --clone: a push URL that does not answer for good, with no oth
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    const want = try std.fmt.allocPrint(a, "(remote origin could not be asked at {s}: repository not found); replace this push URL (run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes it\n", .{ offline, try q_test(a, try fsutil.realPathOrSelf(a, inc)), offline, cq });
+    const want = try a.print("(remote origin could not be asked at {s}: repository not found); replace this push URL (run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine), or --force deletes it\n", .{ offline, try q_test(a, try fsutil.realPathOrSelf(a, inc)), offline, cq });
     if (!contains(refused.err, want)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ want, refused.err });
         return error.TestUnexpectedResult;
@@ -9541,9 +9541,9 @@ test "repo remove --clone: a push URL whose value two files hold is removed from
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try q_test(a, f.clone);
-    const offline = try std.fs.path.join(a, &.{ f.bare, "offline.git" });
-    const global = try std.fs.path.join(a, &.{ sb.root, "global.gitconfig" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try std.fmt.allocPrint(a, "[remote \"origin\"]\n\tpushurl = {s}\n", .{offline}) });
+    const offline = try std.Io.Dir.path.join(a, &.{ f.bare, "offline.git" });
+    const global = try std.Io.Dir.path.join(a, &.{ sb.root, "global.gitconfig" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = try a.print("[remote \"origin\"]\n\tpushurl = {s}\n", .{offline}) });
     const env = try testutil.EnvOverride.install(a, "GIT_CONFIG_GLOBAL", global);
     defer env.restore();
     try f.sb.git_env.map.put("GIT_CONFIG_GLOBAL", global);
@@ -9555,7 +9555,7 @@ test "repo remove --clone: a push URL whose value two files hold is removed from
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     const gq = try q_test(a, try fsutil.realPathOrSelf(a, global));
-    const want = try std.fmt.allocPrint(a, "remove that URL (run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s}) (in {s}, which changes every repository), or --force deletes it\n", .{ gq, offline, cq, offline, try fsutil.contractTilde(a, app.envOf_current(), try fsutil.realPathOrSelf(a, global)) });
+    const want = try a.print("remove that URL (run: git config --file {s} --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s}) (in {s}, which changes every repository), or --force deletes it\n", .{ gq, offline, cq, offline, try fsutil.contractTilde(a, app.envOf_current(), try fsutil.realPathOrSelf(a, global)) });
     if (!contains(refused.err, want)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ want, refused.err });
         return error.TestUnexpectedResult;
@@ -9575,15 +9575,15 @@ test "repo remove --clone: a push URL read from a value that can be read two way
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const cq = try q_test(a, f.clone);
-    const offline = try std.fs.path.join(a, &.{ f.bare, "offline" });
-    try testutil.runGit(&sb, f.clone, &.{ "config", try std.fmt.allocPrint(a, "url.{s}/.insteadOf", .{offline}), "http://alice:AB/CD@nowhere.invalid/" });
+    const offline = try std.Io.Dir.path.join(a, &.{ f.bare, "offline" });
+    try testutil.runGit(&sb, f.clone, &.{ "config", try a.print("url.{s}/.insteadOf", .{offline}), "http://alice:AB/CD@nowhere.invalid/" });
     try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", "http://alice:AB/CD@nowhere.invalid/x.git" });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     try testing.expect(!contains(refused.err, "AB/CD") and !contains(refused.err, "alice"));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "edit remote.origin.pushurl to replace this push URL (run: git -C {s} config --local --edit && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ cq, cq })));
+    try testing.expect(contains(refused.err, try a.print("edit remote.origin.pushurl to replace this push URL (run: git -C {s} config --local --edit && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ cq, cq })));
     try runHintEditing(&f, refused.err, "(remote origin could not be asked at ", f.bare, "AB\\/CD");
     try settleAll(&f, &.{"commits of branch main"}, 3);
 }
@@ -9600,7 +9600,7 @@ test "repo remove --clone: two push URLs that do not answer for good, beside one
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
         if (one_answers) try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", f.bare });
-        for ([_][]const u8{ "offline-1.git", "offline-2.git" }) |n| try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", try std.fs.path.join(a, &.{ f.bare, n }) });
+        for ([_][]const u8{ "offline-1.git", "offline-2.git" }) |n| try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", try std.Io.Dir.path.join(a, &.{ f.bare, n }) });
         try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
 
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -9630,15 +9630,15 @@ test "repo remove --clone: a push URL that gives no answer names only the ways o
     const port = try closedPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{port});
-    const backup = try std.fs.path.join(a, &.{ f.bare, "backup-offline.git" });
+    const url = try a.print("http://127.0.0.1:{d}/acme/widget.git", .{port});
+    const backup = try std.Io.Dir.path.join(a, &.{ f.bare, "backup-offline.git" });
     try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", url });
     try testutil.runGit(&sb, f.clone, &.{ "remote", "add", "backup", backup });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "(remote origin could not be asked at {s}: connection refused); reconnect and run again, or --force deletes it\n", .{url})));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "  could not be asked, in {s}: remote backup at {s} (repository not found)\n", .{ cq, backup })));
+    try testing.expect(contains(refused.err, try a.print("(remote origin could not be asked at {s}: connection refused); reconnect and run again, or --force deletes it\n", .{url})));
+    try testing.expect(contains(refused.err, try a.print("  could not be asked, in {s}: remote backup at {s} (repository not found)\n", .{ cq, backup })));
 }
 
 /// Test-only: whether git lists the empty URL of origin of `clone` among
@@ -9688,39 +9688,39 @@ test "repo remove --clone: with no push target, one line names every ref, why ea
         switch (case) {
             .lone_empty => {
                 try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.url", "" });
-                way = try std.fmt.allocPrint(a, "remote origin {s}; remove the empty URL (run: git -C {s} config --local --unset-all remote.origin.url '^$' && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ if (try listsEmptyUrl(a, f.clone)) "has an empty URL" else "has no URL", cq, cq });
+                way = try a.print("remote origin {s}; remove the empty URL (run: git -C {s} config --local --unset-all remote.origin.url '^$' && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ if (try listsEmptyUrl(a, f.clone)) "has an empty URL" else "has no URL", cq, cq });
             },
             .url_then_empty => {
                 try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.url", "" });
                 // Where git lists the empty URL, it keeps the URL before
                 // it, which answered, so removing the empty one is enough.
                 way = if (try listsEmptyUrl(a, f.clone))
-                    try std.fmt.allocPrint(a, "remote origin has an empty URL; remove the empty URL (run: git -C {s} config --local --unset-all remote.origin.url '^$'), or ", .{cq})
+                    try a.print("remote origin has an empty URL; remove the empty URL (run: git -C {s} config --local --unset-all remote.origin.url '^$'), or ", .{cq})
                 else
-                    try std.fmt.allocPrint(a, "remote origin has no URL; remove the empty URL (run: git -C {s} config --local --unset-all remote.origin.url '^$' && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ cq, cq });
+                    try a.print("remote origin has no URL; remove the empty URL (run: git -C {s} config --local --unset-all remote.origin.url '^$' && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ cq, cq });
             },
             .local_pushurl => {
                 const here = try bareCopy(&f, "here.git", &.{});
                 try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", here });
-                way = try std.fmt.allocPrint(a, "remote origin has its push URLs on this machine ({s}); replace its push URLs (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s})", .{ here, cq, here });
+                way = try a.print("remote origin has its push URLs on this machine ({s}); replace its push URLs (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s})", .{ here, cq, here });
             },
             .pushinsteadof_mirror => {
                 const here = try bareCopy(&f, "here.git", &.{});
                 const mirror = try bareCopy(&f, "mirror.git", &.{});
                 try testutil.runGit(&sb, f.clone, &.{ "config", "remote.origin.pushurl", here });
-                try testutil.runGit(&sb, f.clone, &.{ "config", try std.fmt.allocPrint(a, "url.{s}.pushInsteadOf", .{mirror}), f.bare });
-                way = try std.fmt.allocPrint(a, "remote origin has its push URLs on this machine ({s}); replace its push URLs (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ here, cq, here, cq });
+                try testutil.runGit(&sb, f.clone, &.{ "config", try a.print("url.{s}.pushInsteadOf", .{mirror}), f.bare });
+                way = try a.print("remote origin has its push URLs on this machine ({s}); replace its push URLs (run: git -C {s} config --local --fixed-value --unset-all remote.origin.pushurl {s} && git -C {s} config --local --add remote.origin.pushurl <url>, with <url> a URL on another machine)", .{ here, cq, here, cq });
             },
             .bundle => {
-                const bundle = try std.fs.path.join(a, &.{ sb.root, "only.bundle" });
+                const bundle = try std.Io.Dir.path.join(a, &.{ sb.root, "only.bundle" });
                 try testutil.runGit(&sb, f.clone, &.{ "bundle", "create", "-q", bundle, "main" });
                 _ = try setOrigin(&f, bundle);
-                way = try std.fmt.allocPrint(a, "remote origin is on this machine ({s}); add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine)", .{ bundle, cq });
+                way = try a.print("remote origin is on this machine ({s}); add a remote on another machine (run: git -C {s} remote add holt-kept <url>, with <url> a URL on another machine)", .{ bundle, cq });
             },
         }
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
-        try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, " no remote on another machine ", .{})));
+        try testing.expect(contains(refused.err, try a.print(" no remote on another machine ", .{})));
         try testing.expect(contains(refused.err, "; no remote counts as a copy: "));
         if (!contains(refused.err, way)) {
             std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ @tagName(case), way, refused.err });
@@ -9742,17 +9742,17 @@ test "archive --prune: clones a host that is not found held back are named once,
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const names = [_][]const u8{ "widget", "gadget", "gizmo" };
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     for (names) |n| {
-        const url = try std.fmt.allocPrint(a, "https://holt-test.invalid/acme/{s}", .{n});
+        const url = try a.print("https://holt-test.invalid/acme/{s}", .{n});
         try repos.put(a, n, url);
-        const path = try fsutil.joinSlashy(a, f.ws.cfg.code_root, try std.fmt.allocPrint(a, "holt-test.invalid/acme/{s}", .{n}));
+        const path = try fsutil.joinSlashy(a, f.ws.cfg.code_root, try a.print("holt-test.invalid/acme/{s}", .{n}));
         if (!std.mem.eql(u8, n, "widget")) try testutil.runGit(&sb, null, &.{ "clone", "-q", f.bare, path });
         try testutil.runGit(&sb, path, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
-        try testutil.runGit(&sb, path, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "ssh://127.0.0.1/acme/{s}.git", .{n}) });
+        try testutil.runGit(&sb, path, &.{ "remote", "set-url", "origin", try a.print("ssh://127.0.0.1/acme/{s}.git", .{n}) });
     }
     try testutil.writeMarker(a, try f.ws.projectsRoot(a), "acme", "proj", repos, .empty);
-    const script = try std.fs.path.join(a, &.{ sb.root, "lost-ssh" });
+    const script = try std.Io.Dir.path.join(a, &.{ sb.root, "lost-ssh" });
     try testutil.writeExecutable(script, "#!/bin/sh\necho 'ssh: Could not resolve hostname 127.0.0.1: nodename nor servname provided, or not known' >&2\nexit 255\n");
     const ssh = try testutil.EnvOverride.install(a, "GIT_SSH_COMMAND", script);
     defer ssh.restore();
@@ -9804,7 +9804,7 @@ test "heldCommits: weighing writes no file, so a temporary directory that cannot
     const base = std.mem.trim(u8, (try git.runInRepoScoped(a, &.{ "rev-parse", "HEAD" }, work)).stdout, "\n");
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "--allow-empty", "-m", "on top" });
     const tip = std.mem.trim(u8, (try git.runInRepoScoped(a, &.{ "rev-parse", "HEAD" }, work)).stdout, "\n");
-    const tmp = try std.fs.path.join(a, &.{ sb.root, "no-such-tmp" });
+    const tmp = try std.Io.Dir.path.join(a, &.{ sb.root, "no-such-tmp" });
     const over = try testutil.EnvOverride.install(a, "TMPDIR", tmp);
     defer over.restore();
     var h: Holdings = .{};
@@ -9823,11 +9823,11 @@ test "gitRisks: two repositories weighed in one pass, whose configuration sends 
     defer sb.deinit();
     const bare_a = try testutil.makeBareRepo(&sb, "a/remote.git");
     defer testing.allocator.free(bare_a);
-    const bare_b = try std.fs.path.join(a, &.{ sb.root, "b", "remote.git" });
+    const bare_b = try std.Io.Dir.path.join(a, &.{ sb.root, "b", "remote.git" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", "--bare", bare_a, bare_b });
     try testutil.markElsewhere(bare_b);
-    const work_a = try std.fs.path.join(a, &.{ sb.root, "a", "work" });
-    const work_b = try std.fs.path.join(a, &.{ sb.root, "b", "work" });
+    const work_a = try std.Io.Dir.path.join(a, &.{ sb.root, "a", "work" });
+    const work_b = try std.Io.Dir.path.join(a, &.{ sb.root, "b", "work" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", bare_a, work_a });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", bare_b, work_b });
     for ([_][]const u8{ work_a, work_b }) |w| try testutil.runGit(&sb, w, &.{ "remote", "set-url", "origin", "../remote.git" });
@@ -9862,16 +9862,16 @@ test "worktree -r: with nothing at risk once the refs that survive are counted, 
     try testing.expectEqual(@as(u8, 0), made.code);
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
     try testutil.runGit(&sb, wt, &.{ "commit", "-q", "--allow-empty", "-m", "on feature only" });
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/widget.git", .{silent.port()}) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try a.print("http://127.0.0.1:{d}/acme/widget.git", .{silent.port()}) });
 
     const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqual(@as(u32, 0), silent.count());
     try testing.expect(!contains(got.err, "waiting for "));
 
-    const empty = try std.fs.path.join(a, &.{ sb.root, "empty" });
+    const empty = try std.Io.Dir.path.join(a, &.{ sb.root, "empty" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", empty });
-    try testutil.runGit(&sb, empty, &.{ "remote", "add", "origin", try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/acme/empty.git", .{silent.port()}) });
+    try testutil.runGit(&sb, empty, &.{ "remote", "add", "origin", try a.print("http://127.0.0.1:{d}/acme/empty.git", .{silent.port()}) });
     try testing.expectEqual(@as(usize, 0), (try gitRisks(try testAsker(a), empty)).len);
     try testing.expectEqual(@as(u32, 0), silent.count());
 }
@@ -9900,7 +9900,7 @@ test "riskLine: a removal whose value holds a control character opens the file i
     const values = [_]Configured{.{ .value = value }};
     const risk: Risk = .{ .what = .unasked, .remote = "origin", .url = value, .why = "repository not found", .refs = &.{"refs/heads/main"}, .class = .persistent, .values = &values, .pushurl = true, .mapped = true, .others_answered = true };
     const line = try riskLine(&ctx, .{ .repo = "/srv/code/widget", .risk = risk }, "--force");
-    try testing.expect(std.mem.indexOfScalar(u8, line, 0x1b) == null);
+    try testing.expect(std.mem.findScalar(u8, line, 0x1b) == null);
     try testing.expect(contains(line, "; edit remote.origin.pushurl to remove that URL (run: git -C /srv/code/widget config --local --edit), or --force deletes it"));
 }
 
@@ -9938,7 +9938,7 @@ test "repo remove --clone: the closing --force line is printed only when some li
     const port = try closedPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try std.fmt.allocPrint(a, "git://127.0.0.1:{d}/acme/widget.git", .{port}) });
+    try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", try a.print("git://127.0.0.1:{d}/acme/widget.git", .{port}) });
     const offline = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), offline.code);
     try testing.expect(contains(offline.err, ": connection refused); reconnect and run again, or --force deletes them\n"));
@@ -9958,15 +9958,15 @@ test "repo remove --clone: the push URLs of one remote on one host that did not 
     const port = try closedPort();
     const elsewhere = try Elsewhere.ports(a, &.{port});
     defer elsewhere.restore();
-    const first = try std.fmt.allocPrint(a, "git://127.0.0.1:{d}/acme/a.git", .{port});
-    const second = try std.fmt.allocPrint(a, "git://127.0.0.1:{d}/acme/b.git", .{port});
+    const first = try a.print("git://127.0.0.1:{d}/acme/a.git", .{port});
+    const second = try a.print("git://127.0.0.1:{d}/acme/b.git", .{port});
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", first });
     try testutil.runGit(&sb, f.clone, &.{ "config", "--add", "remote.origin.pushurl", second });
     try testutil.runGit(&sb, f.clone, &.{ "commit", "-q", "--allow-empty", "-m", "not pushed yet" });
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expectEqual(@as(usize, 1), count(got.err, "not confirmed held"));
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "(remote origin could not be asked at {s}, {s}: connection refused); reconnect and run again, or --force deletes it\n", .{ first, second })));
+    try testing.expect(contains(got.err, try a.print("(remote origin could not be asked at {s}, {s}: connection refused); reconnect and run again, or --force deletes it\n", .{ first, second })));
 }
 
 test "repo remove --clone: each linked worktree is named with the command that removes it, git worktree remove for one whose directory is gone, which removes that record alone, and running them lets the delete through" {
@@ -9979,23 +9979,23 @@ test "repo remove --clone: each linked worktree is named with the command that r
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const live = try std.fs.path.join(a, &.{ sb.root, "live-wt" });
-    const gone = try std.fs.path.join(a, &.{ sb.root, "gone-wt" });
-    const also = try std.fs.path.join(a, &.{ sb.root, "also-gone-wt" });
+    const live = try std.Io.Dir.path.join(a, &.{ sb.root, "live-wt" });
+    const gone = try std.Io.Dir.path.join(a, &.{ sb.root, "gone-wt" });
+    const also = try std.Io.Dir.path.join(a, &.{ sb.root, "also-gone-wt" });
     for ([_][]const u8{ live, gone, also }) |wt| try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     try std.Io.Dir.cwd().deleteTree(io(), gone);
     try std.Io.Dir.cwd().deleteTree(io(), also);
     const cq = try q_test(a, f.clone);
-    const records = try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" });
+    const records = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" });
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "(run: git -C {s} worktree remove {s})", .{ cq, try q_test(a, try fsutil.realPathOrSelf(a, live)) })));
-    for ([_][]const u8{ gone, also }) |wt| try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, ", which is gone (run: git -C {s} worktree remove {s})", .{ cq, try q_test(a, try resolvedPath(a, wt)) })));
+    try testing.expect(contains(refused.err, try a.print("(run: git -C {s} worktree remove {s})", .{ cq, try q_test(a, try fsutil.realPathOrSelf(a, live)) })));
+    for ([_][]const u8{ gone, also }) |wt| try testing.expect(contains(refused.err, try a.print(", which is gone (run: git -C {s} worktree remove {s})", .{ cq, try q_test(a, try resolvedPath(a, wt)) })));
     try testing.expect(!contains(refused.err, "worktree prune"));
     try runHint(&f, refused.err, "/gone-wt, which is gone", "");
-    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.fs.path.join(a, &.{ records, "gone-wt" })));
-    for ([_][]const u8{ "live-wt", "also-gone-wt" }) |id| try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try std.fs.path.join(a, &.{ records, id })));
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ records, "gone-wt" })));
+    for ([_][]const u8{ "live-wt", "also-gone-wt" }) |id| try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ records, id })));
     try runHint(&f, refused.err, "live-wt", "");
     try runHint(&f, refused.err, "/also-gone-wt, which is gone", "");
     const after = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -10015,11 +10015,11 @@ test "repo remove --clone: two records naming one path, as a copied record leave
         const state = try testutil.stateScope(a, sb.root);
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
-        const wt = try std.fs.path.join(a, &.{ sb.root, "shared-wt" });
+        const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "shared-wt" });
         try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
-        const records = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" }));
-        const own = try std.fs.path.join(a, &.{ records, "shared-wt" });
-        const copy = try std.fs.path.join(a, &.{ records, if (case == .copy_first) "a-copy" else "z-copy" });
+        const records = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" }));
+        const own = try std.Io.Dir.path.join(a, &.{ records, "shared-wt" });
+        const copy = try std.Io.Dir.path.join(a, &.{ records, if (case == .copy_first) "a-copy" else "z-copy" });
         const cp = try proc.runEnv(a, &.{ "cp", "-R", own, copy }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), cp.status);
         if (case == .gone) try std.Io.Dir.cwd().deleteTree(io(), wt);
@@ -10029,18 +10029,18 @@ test "repo remove --clone: two records naming one path, as a copied record leave
 
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
-        try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try std.fmt.allocPrint(a, "git -C {s}", .{cq}));
+        try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try a.print("git -C {s}", .{cq}));
         try testing.expectEqual(@as(usize, 1), std.mem.count(u8, refused.err, shared_seen));
         try testing.expectEqualStrings(before, try treesState(a, roots));
 
         try std.Io.Dir.cwd().deleteTree(io(), copy);
         const next = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
-        const line = try std.fmt.allocPrint(a, "/shared-wt{s} (run: git -C {s} worktree remove {s})\n", .{ if (case == .gone) ", which is gone" else "", cq, try q_test(a, try resolvedPath(a, wt)) });
+        const line = try a.print("/shared-wt{s} (run: git -C {s} worktree remove {s})\n", .{ if (case == .gone) ", which is gone" else "", cq, try q_test(a, try resolvedPath(a, wt)) });
         if (next.code != 1 or !contains(next.err, line)) {
             std.debug.print("{s}: wanted {s} in:\n{s}\n", .{ @tagName(case), line, next.err });
             return error.TestUnexpectedResult;
         }
-        try runHint(&f, next.err, line[0..std.mem.indexOf(u8, line, "(run: ").?], "");
+        try runHint(&f, next.err, line[0..std.mem.find(u8, line, "(run: ").?], "");
         try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(own));
         const after = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expect(!contains(after.err, "other worktree"));
@@ -10069,16 +10069,16 @@ test "worktree -r: two records naming one path, as a copied record leaves, refus
         const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
         try testing.expectEqual(@as(u8, 0), made.code);
         const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
-        const records = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" }));
-        const own = try std.fs.path.join(a, &.{ records, "feature" });
-        const copy = try std.fs.path.join(a, &.{ records, case.copy });
+        const records = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" }));
+        const own = try std.Io.Dir.path.join(a, &.{ records, "feature" });
+        const copy = try std.Io.Dir.path.join(a, &.{ records, case.copy });
         const cp = try proc.runEnv(a, &.{ "cp", "-R", own, copy }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), cp.status);
         if (case.gone) try std.Io.Dir.cwd().deleteTree(io(), wt);
         const before = try f.snapshot(true);
         const roots: []const []const u8 = &.{ records, wt };
         const trees = try treesState(a, roots);
-        const want = try std.fmt.allocPrint(a, "holt: {s}: {s}; holt does not change it: resolve it with git (git -C {s} worktree list), then run again\n", .{ try q_test(a, try resolvedPath(a, wt)), shared_seen, try q_test(a, f.clone) });
+        const want = try a.print("holt: {s}: {s}; holt does not change it: resolve it with git (git -C {s} worktree list), then run again\n", .{ try q_test(a, try resolvedPath(a, wt)), shared_seen, try q_test(a, f.clone) });
 
         for ([_]bool{ false, true }) |force| {
             const argv: []const []const u8 = if (force) &.{ "proj/widget", "feature", "-r", "--force" } else &.{ "proj/widget", "feature", "-r" };
@@ -10087,7 +10087,7 @@ test "worktree -r: two records naming one path, as a copied record leaves, refus
                 std.debug.print("{s} gone={} force={}: wanted only {s}got {d}:\n{s}{s}\n", .{ case.copy, case.gone, force, want, refused.code, refused.out, refused.err });
                 return error.TestUnexpectedResult;
             }
-            try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+            try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try a.print("git -C {s}", .{try q_test(a, f.clone)}));
             try testing.expectEqualStrings(trees, try treesState(a, roots));
             try testing.expectEqualDeep(before, try f.snapshot(true));
         }
@@ -10116,16 +10116,16 @@ test "worktree -r --force: a record that comes to name the worktree's path too a
     try testing.expectEqual(@as(u8, 0), made.code);
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
     try f.write(wt, "notes.txt", "only here\n");
-    const records = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" }));
-    const own = try std.fs.path.join(a, &.{ records, "feature" });
-    const copy = try std.fs.path.join(a, &.{ records, "a-copy" });
+    const records = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" }));
+    const own = try std.Io.Dir.path.join(a, &.{ records, "feature" });
+    const copy = try std.Io.Dir.path.join(a, &.{ records, "a-copy" });
     const before = try f.snapshot(true);
     const roots: []const []const u8 = &.{ records, wt };
     const trees = try treesState(a, roots);
-    const want = try std.fmt.allocPrint(a, "holt: {s}: {s}; holt does not change it: resolve it with git (git -C {s} worktree list), then run again\n", .{ try q_test(a, try resolvedPath(a, wt)), shared_seen, try q_test(a, f.clone) });
+    const want = try a.print("holt: {s}: {s}; holt does not change it: resolve it with git (git -C {s} worktree list), then run again\n", .{ try q_test(a, try resolvedPath(a, wt)), shared_seen, try q_test(a, f.clone) });
 
     seam_sb = &sb;
-    seam_steps = &.{try std.fmt.allocPrint(a, "cp -R '{s}' '{s}'", .{ own, copy })};
+    seam_steps = &.{try a.print("cp -R '{s}' '{s}'", .{ own, copy })};
     worktree_cmd.before_recheck_for_test = runSeam;
     defer {
         worktree_cmd.before_recheck_for_test = null;
@@ -10137,7 +10137,7 @@ test "worktree -r --force: a record that comes to name the worktree's path too a
         std.debug.print("wanted only {s}got {d}:\n{s}{s}\n", .{ want, refused.code, refused.out, refused.err });
         return error.TestUnexpectedResult;
     }
-    try testing.expectEqualStrings("only here\n", try kept.content.readSmall(a, try std.fs.path.join(a, &.{ wt, "notes.txt" })));
+    try testing.expectEqualStrings("only here\n", try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ wt, "notes.txt" })));
     try std.Io.Dir.cwd().deleteTree(io(), copy);
     try testing.expectEqualStrings(trees, try treesState(a, roots));
     try testing.expectEqualDeep(before, try f.snapshot(true));
@@ -10154,12 +10154,12 @@ test "archive --prune: a clone that changed after the weighing is kept, naming t
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     try withProject(&f);
-    const seam = Seam.install(&sb, &.{try std.fmt.allocPrint(a, "git -C '{s}' update-ref refs/heads/moved HEAD", .{f.clone})});
+    const seam = Seam.install(&sb, &.{try a.print("git -C '{s}' update-ref refs/heads/moved HEAD", .{f.clone})});
     defer seam.restore();
 
     const got = try f.run(project_cmd.archive_command.run, &.{ "acme/proj", "--prune", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(contains(got.out, try std.fmt.allocPrint(a, "not pruned widget: {s} changed while it was being weighed (a ref or HEAD moved, or git could not read them again); the clone was kept; delete it with: holt repo remove holt-test.invalid/acme/widget --clone\n", .{try q_test(a, f.clone)})));
+    try testing.expect(contains(got.out, try a.print("not pruned widget: {s} changed while it was being weighed (a ref or HEAD moved, or git could not read them again); the clone was kept; delete it with: holt repo remove holt-test.invalid/acme/widget --clone\n", .{try q_test(a, f.clone)})));
     try testing.expect(!contains(got.out, "run the command again"));
     try testing.expect(!contains(got.err, "run the command again"));
     try testing.expect(fsutil.exists(try f.path(".git")));
@@ -10198,20 +10198,20 @@ test "archive --prune: clones a host that did not answer, or whose key was not v
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
         const names = [_][]const u8{ "widget", "gadget", "gizmo" };
-        var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        var repos: std.array_hash_map.String([]const u8) = .empty;
         var paths: [names.len][]const u8 = undefined;
         for (names, &paths) |n, *p| {
-            const url = try std.fmt.allocPrint(a, "https://holt-test.invalid/acme/{s}", .{n});
+            const url = try a.print("https://holt-test.invalid/acme/{s}", .{n});
             try repos.put(a, n, url);
-            p.* = try fsutil.joinSlashy(a, f.ws.cfg.code_root, try std.fmt.allocPrint(a, "holt-test.invalid/acme/{s}", .{n}));
+            p.* = try fsutil.joinSlashy(a, f.ws.cfg.code_root, try a.print("holt-test.invalid/acme/{s}", .{n}));
             if (!std.mem.eql(u8, n, "widget")) try testutil.runGit(&sb, null, &.{ "clone", "-q", f.bare, p.* });
             try testutil.runGit(&sb, p.*, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
             try testutil.runGit(&sb, p.*, &.{ "remote", "set-url", "origin", "ssh://127.0.0.1/holt-remote.git" });
         }
         try testutil.writeMarker(a, try f.ws.projectsRoot(a), "acme", "proj", repos, .empty);
-        const script = try std.fs.path.join(a, &.{ sb.root, "failing-ssh" });
+        const script = try std.Io.Dir.path.join(a, &.{ sb.root, "failing-ssh" });
         const failure = if (host_key) "Host key verification failed." else "ssh: connect to host 127.0.0.1 port 22: Connection refused";
-        try testutil.writeExecutable(script, try std.fmt.allocPrint(a, "#!/bin/sh\necho '{s}' >&2\nexit 255\n", .{failure}));
+        try testutil.writeExecutable(script, try a.print("#!/bin/sh\necho '{s}' >&2\nexit 255\n", .{failure}));
         const ssh = try testutil.EnvOverride.install(a, "GIT_SSH_COMMAND", script);
         defer ssh.restore();
         const elsewhere = try Elsewhere.ports(a, &.{22});
@@ -10221,8 +10221,8 @@ test "archive --prune: clones a host that did not answer, or whose key was not v
         try testing.expectEqual(@as(u8, 0), got.code);
         try testing.expect(!contains(got.out, "run again"));
         const way = if (host_key) "verify the host key of 127.0.0.1" else "reconnect";
-        const first = try std.fmt.allocPrint(a, "; {s}, then delete it with: holt repo remove holt-test.invalid/acme/", .{way});
-        const summary = try std.fmt.allocPrint(a, "; {s}, then delete each with: holt repo remove <key> --clone, or holt repo remove <key> --clone --force deletes one\n", .{way});
+        const first = try a.print("; {s}, then delete it with: holt repo remove holt-test.invalid/acme/", .{way});
+        const summary = try a.print("; {s}, then delete each with: holt repo remove <key> --clone, or holt repo remove <key> --clone --force deletes one\n", .{way});
         if (!contains(got.out, first) or !contains(got.out, summary)) {
             std.debug.print("wanted {s} and {s} in:\n{s}\n", .{ first, summary, got.out });
             return error.TestUnexpectedResult;
@@ -10233,10 +10233,10 @@ test "archive --prune: clones a host that did not answer, or whose key was not v
         try testing.expect(!contains(got.out, "once settled"));
 
         ssh.restore();
-        const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
+        const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
         for (names, paths) |n, p| {
             _ = try localSsh(a, &sb, p, log, f.bare);
-            const key = try std.fmt.allocPrint(a, "holt-test.invalid/acme/{s}", .{n});
+            const key = try a.print("holt-test.invalid/acme/{s}", .{n});
             const refused = try f.run(repo_cmd.remove_command.run, &.{ key, "--clone", "--yes" });
             try testing.expect(!contains(refused.err, "could not be asked"));
             if (refused.code != 0) {
@@ -10262,11 +10262,11 @@ fn shIn(f: *const Fixture, dir: []const u8, script: []const u8) !void {
 /// Runs the `which`-th of the commands the `(run: <a>, or <b>)` after
 /// `lead` in `text` names, as `runHint` runs one.
 fn runAlternative(f: *const Fixture, text: []const u8, lead: []const u8, which: usize) !void {
-    const at = std.mem.indexOf(u8, text, lead) orelse return error.TestUnexpectedResult;
+    const at = std.mem.find(u8, text, lead) orelse return error.TestUnexpectedResult;
     const rest = text[at + lead.len ..];
-    const open = std.mem.indexOf(u8, rest, "(run: ") orelse return error.TestUnexpectedResult;
+    const open = std.mem.find(u8, rest, "(run: ") orelse return error.TestUnexpectedResult;
     const body = rest[open + "(run: ".len ..];
-    const close = std.mem.indexOf(u8, body, ")\n") orelse return error.TestUnexpectedResult;
+    const close = std.mem.find(u8, body, ")\n") orelse return error.TestUnexpectedResult;
     var parts = std.mem.splitSequence(u8, body[0..close], ", or ");
     var i: usize = 0;
     while (parts.next()) |cmd| : (i += 1) {
@@ -10304,13 +10304,13 @@ test "repo remove --clone: each operation git has in progress refuses the delete
         const f = try Fixture.init(a, &sb, true);
         try shIn(&f, f.clone, c.script);
         const cq = try q_test(a, f.clone);
-        const lead = try std.fmt.allocPrint(a, "  {s} in progress in {s}; finish it or abort it ", .{ c.op, try fsutil.contractTilde(a, app.envOf_current(), f.clone) });
+        const lead = try a.print("  {s} in progress in {s}; finish it or abort it ", .{ c.op, try fsutil.contractTilde(a, app.envOf_current(), f.clone) });
         const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), refused.code);
         const cmds = if (bisect)
-            try std.fmt.allocPrint(a, "(run: git -C {s} bisect reset)\n", .{cq})
+            try a.print("(run: git -C {s} bisect reset)\n", .{cq})
         else
-            try std.fmt.allocPrint(a, "(run: git -C {s} {s} --continue, or git -C {s} {s} --abort)\n", .{ cq, c.op, cq, c.op });
+            try a.print("(run: git -C {s} {s} --continue, or git -C {s} {s} --abort)\n", .{ cq, c.op, cq, c.op });
         if (!contains(refused.err, try std.mem.concat(a, u8, &.{ lead, cmds }))) {
             std.debug.print("wanted {s}{s} in:\n{s}\n", .{ lead, cmds, refused.err });
             return error.TestUnexpectedResult;
@@ -10335,7 +10335,7 @@ test "repo remove --clone --force: an operation in progress is named as deleted,
     const id = std.mem.trim(u8, try kept.content.readSmall(a, try f.path(".git/rebase-merge/autostash")), " \r\n");
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes", "--force" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(contains(got.out, try std.fmt.allocPrint(a, "deleting the rebase in progress in {s}, with its autostash {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), f.clone), id })));
+    try testing.expect(contains(got.out, try a.print("deleting the rebase in progress in {s}, with its autostash {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), f.clone), id })));
     try testing.expect(!fsutil.exists(f.clone));
 }
 
@@ -10354,11 +10354,11 @@ test "worktree -r: a worktree whose uncommitted change only a paused rebase --au
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
     try shIn(&f, wt, "echo dirty >> README && git -c sequence.editor='sed -i.orig s/^pick/edit/' rebase -i --autostash --root");
     const wq = try q_test(a, wt);
-    const lead = try std.fmt.allocPrint(a, "  rebase in progress in {s}; finish it or abort it ", .{try fsutil.contractTilde(a, app.envOf_current(), wt)});
+    const lead = try a.print("  rebase in progress in {s}; finish it or abort it ", .{try fsutil.contractTilde(a, app.envOf_current(), wt)});
     const refused = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     try testing.expect(fsutil.exists(wt));
-    try testing.expect(contains(refused.err, try std.fmt.allocPrint(a, "{s}(run: git -C {s} rebase --continue, or git -C {s} rebase --abort)\n", .{ lead, wq, wq })));
+    try testing.expect(contains(refused.err, try a.print("{s}(run: git -C {s} rebase --continue, or git -C {s} rebase --abort)\n", .{ lead, wq, wq })));
     try runAlternative(&f, refused.err, lead, 1);
     const after = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     try testing.expect(!contains(after.err, " in progress in "));
@@ -10396,7 +10396,7 @@ fn goneCase(holds: GoneHolds, force: bool) !void {
     const only = switch (holds) {
         .head => std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, wt)).stdout, " \r\n"),
         .ref => std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "refs/bisect/bad" }, wt)).stdout, " \r\n"),
-        .autostash => std.mem.trim(u8, try kept.content.readSmall(a, try std.fs.path.join(a, &.{ record, "rebase-merge", "autostash" })), " \r\n"),
+        .autostash => std.mem.trim(u8, try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ record, "rebase-merge", "autostash" })), " \r\n"),
     };
     try std.Io.Dir.cwd().deleteTree(io(), wt);
     const shown = try fsutil.contractTilde(a, app.envOf_current(), wt);
@@ -10406,9 +10406,9 @@ fn goneCase(holds: GoneHolds, force: bool) !void {
     if (force) {
         const forced = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r", "--force" });
         const lost = switch (holds) {
-            .head => try std.fmt.allocPrint(a, "deleting commit {s}, which only the HEAD of worktree feature holds and no remote has, in {s}\n", .{ only, cshown }),
-            .ref => try std.fmt.allocPrint(a, "deleting commits only refs/bisect/bad of worktree feature holds, no remote has, in {s}\n", .{cshown}),
-            .autostash => try std.fmt.allocPrint(a, "deleting the rebase in progress in {s}, with its autostash {s}\n", .{ shown, only }),
+            .head => try a.print("deleting commit {s}, which only the HEAD of worktree feature holds and no remote has, in {s}\n", .{ only, cshown }),
+            .ref => try a.print("deleting commits only refs/bisect/bad of worktree feature holds, no remote has, in {s}\n", .{cshown}),
+            .autostash => try a.print("deleting the rebase in progress in {s}, with its autostash {s}\n", .{ shown, only }),
         };
         if (forced.code != 0 or !contains(forced.out, lost)) {
             std.debug.print("{s}: wanted {s} in:\n{s}{s}\n", .{ @tagName(holds), lost, forced.out, forced.err });
@@ -10420,9 +10420,9 @@ fn goneCase(holds: GoneHolds, force: bool) !void {
 
     const refused = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     const line = switch (holds) {
-        .head => try std.fmt.allocPrint(a, "  {s}: commit {s}, which only the HEAD of worktree feature holds and no remote has, in {s} (run: ", .{ shown, only, cshown }),
-        .ref => try std.fmt.allocPrint(a, "  {s}: commits only refs/bisect/bad of worktree feature holds, no remote has, in {s} (run: ", .{ shown, cshown }),
-        .autostash => try std.fmt.allocPrint(a, "  {s}: rebase in progress in {s}; finish it or abort it (run: git -C {s} rebase --continue, or git -C {s} rebase --abort)\n", .{ shown, shown, wq, wq }),
+        .head => try a.print("  {s}: commit {s}, which only the HEAD of worktree feature holds and no remote has, in {s} (run: ", .{ shown, only, cshown }),
+        .ref => try a.print("  {s}: commits only refs/bisect/bad of worktree feature holds, no remote has, in {s} (run: ", .{ shown, cshown }),
+        .autostash => try a.print("  {s}: rebase in progress in {s}; finish it or abort it (run: git -C {s} rebase --continue, or git -C {s} rebase --abort)\n", .{ shown, shown, wq, wq }),
     };
     if (refused.code != 1 or !contains(refused.err, line)) {
         std.debug.print("{s}: wanted {s} in:\n{s}{s}\n", .{ @tagName(holds), line, refused.out, refused.err });
@@ -10430,15 +10430,15 @@ fn goneCase(holds: GoneHolds, force: bool) !void {
     }
     try testing.expect(fsutil.exists(record));
     if (holds == .autostash) {
-        const back = try std.fmt.allocPrint(a, "  {s}: its directory is gone; bring it back from its record first ", .{shown});
+        const back = try a.print("  {s}: its directory is gone; bring it back from its record first ", .{shown});
         try runHint(&f, refused.err, back, "");
         const there = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
         try testing.expectEqual(@as(u8, 1), there.code);
         try runAlternative(&f, there.err, "rebase in progress in ", 1);
         const dirty = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
         try testing.expectEqual(@as(u8, 1), dirty.code);
-        const run_at = (std.mem.indexOf(u8, dirty.err, "\nrun: ") orelse return error.TestUnexpectedResult) + "\nrun: ".len;
-        try shIn(&f, f.clone, dirty.err[run_at .. std.mem.indexOfScalarPos(u8, dirty.err, run_at, '\n') orelse return error.TestUnexpectedResult]);
+        const run_at = (std.mem.find(u8, dirty.err, "\nrun: ") orelse return error.TestUnexpectedResult) + "\nrun: ".len;
+        try shIn(&f, f.clone, dirty.err[run_at .. std.mem.findScalarPos(u8, dirty.err, run_at, '\n') orelse return error.TestUnexpectedResult]);
         const removed = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
         if (removed.code != 0) {
             std.debug.print("autostash: the removal after the hints failed:\n{s}\n", .{removed.err});
@@ -10449,7 +10449,7 @@ fn goneCase(holds: GoneHolds, force: bool) !void {
         try testing.expect(std.mem.endsWith(u8, stashed.stdout, "dirty\n"));
         return;
     }
-    try runHint(&f, refused.err, line[0..std.mem.indexOf(u8, line, "(run: ").?], "");
+    try runHint(&f, refused.err, line[0..std.mem.find(u8, line, "(run: ").?], "");
     const removed = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     if (removed.code != 0) {
         std.debug.print("{s}: the removal after the hint failed:\n{s}\n", .{ @tagName(holds), removed.err });
@@ -10499,7 +10499,7 @@ fn linkedCase(kind: LinkedKind, at_risk: bool) !void {
             const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
             break :blk try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
         } else blk: {
-            const p = try std.fs.path.join(a, &.{ sb.root, "linked" });
+            const p = try std.Io.Dir.path.join(a, &.{ sb.root, "linked" });
             try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", p });
             break :blk p;
         };
@@ -10515,12 +10515,12 @@ fn linkedCase(kind: LinkedKind, at_risk: bool) !void {
             .dirty => try f.write(wt, "untracked.txt", "work"),
             else => {},
         }
-        const dot_git = try std.fs.path.join(a, &.{ wt, ".git" });
+        const dot_git = try std.Io.Dir.path.join(a, &.{ wt, ".git" });
         const link = kept.content.readSmall(a, dot_git) catch "";
         switch (kind) {
             .gone, .locked_gone, .holt_gone => try std.Io.Dir.cwd().deleteTree(io(), wt),
             .unlinked => try fsutil.removePath(dot_git),
-            .dangling => try f.write(wt, ".git", try linkText(a, try std.fs.path.join(a, &.{ sb.root, "moved-away", ".git", "worktrees", "linked" }))),
+            .dangling => try f.write(wt, ".git", try linkText(a, try std.Io.Dir.path.join(a, &.{ sb.root, "moved-away", ".git", "worktrees", "linked" }))),
             else => {},
         }
         const remove_args: []const []const u8 = if (holt) &.{ "widget", "-p", "acme/proj", "--clone", "--yes" } else &.{ Fixture.key, "--clone", "--yes" };
@@ -10530,11 +10530,11 @@ fn linkedCase(kind: LinkedKind, at_risk: bool) !void {
 
         var got = try f.run(repo_cmd.remove_command.run, remove_args);
         if (kind == .unlinked or kind == .dangling) {
-            const roots: []const []const u8 = &.{ wt, std.fs.path.dirname(record).? };
+            const roots: []const []const u8 = &.{ wt, std.Io.Dir.path.dirname(record).? };
             const before = try treesState(a, roots);
             try testing.expectEqual(@as(u8, 1), got.code);
             const seen = if (kind == .unlinked) "a linked working tree whose .git is gone" else "a linked working tree whose .git names a git directory that is not there";
-            try expectUnresolved(&f, got.err, wt, seen, try std.fmt.allocPrint(a, "git -C {s}", .{cq}));
+            try expectUnresolved(&f, got.err, wt, seen, try a.print("git -C {s}", .{cq}));
             if (at_risk) try testing.expect(!contains(got.err, only));
             try testing.expectEqualStrings(before, try treesState(a, roots));
             try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = dot_git, .data = link });
@@ -10542,7 +10542,7 @@ fn linkedCase(kind: LinkedKind, at_risk: bool) !void {
         }
         try testing.expectEqual(@as(u8, 1), got.code);
         if (at_risk) {
-            const risk = try std.fmt.allocPrint(a, "  {s}: commit {s}, which only the HEAD of worktree ", .{ shown, only });
+            const risk = try a.print("  {s}: commit {s}, which only the HEAD of worktree ", .{ shown, only });
             if (!contains(got.err, risk)) {
                 std.debug.print("{s}/{}: wanted {s} in:\n{s}\n", .{ @tagName(kind), at_risk, risk, got.err });
                 return error.TestUnexpectedResult;
@@ -10553,26 +10553,26 @@ fn linkedCase(kind: LinkedKind, at_risk: bool) !void {
             try testing.expectEqual(@as(u8, 1), got.code);
         }
         const removal = switch (kind) {
-            .live, .unlinked, .dangling => try std.fmt.allocPrint(a, "  {s} (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq }),
-            .gone => try std.fmt.allocPrint(a, "  {s}, which is gone (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq }),
-            .locked => try std.fmt.allocPrint(a, "  {s}, which is locked (run: git -C {s} worktree unlock {s} && git -C {s} worktree remove {s})\n", .{ shown, cq, wq, cq, wq }),
-            .locked_gone => try std.fmt.allocPrint(a, "  {s}, which is gone (run: git -C {s} worktree unlock {s} && git -C {s} worktree remove {s})\n", .{ shown, cq, wq, cq, wq }),
-            .dirty => try std.fmt.allocPrint(a, "  commit or discard the changes in {s}, then (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq }),
-            .holt => try std.fmt.allocPrint(a, "  {s} (run: holt worktree acme/proj/widget feature -r)\n", .{shown}),
-            .holt_gone => try std.fmt.allocPrint(a, "  {s}, which is gone (run: holt worktree acme/proj/widget feature -r)\n", .{shown}),
+            .live, .unlinked, .dangling => try a.print("  {s} (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq }),
+            .gone => try a.print("  {s}, which is gone (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq }),
+            .locked => try a.print("  {s}, which is locked (run: git -C {s} worktree unlock {s} && git -C {s} worktree remove {s})\n", .{ shown, cq, wq, cq, wq }),
+            .locked_gone => try a.print("  {s}, which is gone (run: git -C {s} worktree unlock {s} && git -C {s} worktree remove {s})\n", .{ shown, cq, wq, cq, wq }),
+            .dirty => try a.print("  commit or discard the changes in {s}, then (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq }),
+            .holt => try a.print("  {s} (run: holt worktree acme/proj/widget feature -r)\n", .{shown}),
+            .holt_gone => try a.print("  {s}, which is gone (run: holt worktree acme/proj/widget feature -r)\n", .{shown}),
         };
         if (!contains(got.err, removal)) {
             std.debug.print("{s}/{}: wanted {s} in:\n{s}\n", .{ @tagName(kind), at_risk, removal, got.err });
             return error.TestUnexpectedResult;
         }
-        if (kind == .dirty) try fsutil.removePath(try std.fs.path.join(a, &.{ wt, "untracked.txt" }));
+        if (kind == .dirty) try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ wt, "untracked.txt" }));
         if (holt) {
             const removed = try f.run(worktree_cmd.command.run, &.{ "acme/proj/widget", "feature", "-r" });
             if (removed.code != 0) {
                 std.debug.print("{s}/{}: holt worktree -r failed:\n{s}\n", .{ @tagName(kind), at_risk, removed.err });
                 return error.TestUnexpectedResult;
             }
-        } else try runHint(&f, got.err, removal[0..std.mem.indexOf(u8, removal, "(run: ").?], "");
+        } else try runHint(&f, got.err, removal[0..std.mem.find(u8, removal, "(run: ").?], "");
         got = try f.run(repo_cmd.remove_command.run, remove_args);
         try testing.expect(!contains(got.err, "other worktree"));
         if (at_risk) {
@@ -10617,13 +10617,13 @@ test "repo remove --clone: a linked worktree's per-worktree ref is weighed, whet
         const state = try testutil.stateScope(a, sb.root);
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
-        const wt = try std.fs.path.join(a, &.{ sb.root, "linked" });
+        const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "linked" });
         try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
         try shIn(&f, wt, "git switch -q --detach && git commit -q --allow-empty -m only-in-bisect && git update-ref refs/bisect/bad HEAD && git switch -q --detach main");
         const only = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "refs/bisect/bad" }, wt)).stdout, " \r\n");
         if (gone) try std.Io.Dir.cwd().deleteTree(io(), wt);
         const shown = try fsutil.contractTilde(a, app.envOf_current(), wt);
-        const risk = try std.fmt.allocPrint(a, "  {s}: commits only refs/bisect/bad of worktree linked holds, no remote has, in ", .{shown});
+        const risk = try a.print("  {s}: commits only refs/bisect/bad of worktree linked holds, no remote has, in ", .{shown});
         var got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         if (!contains(got.err, risk)) {
             std.debug.print("wanted {s} in:\n{s}\n", .{ risk, got.err });
@@ -10650,7 +10650,7 @@ test "repo remove --clone: a rebase paused in a linked worktree is named with th
         const state = try testutil.stateScope(a, sb.root);
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
-        const wt = try std.fs.path.join(a, &.{ sb.root, "linked" });
+        const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "linked" });
         try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
         try shIn(&f, wt, "echo dirty >> README && git -c sequence.editor='sed -i.orig s/^pick/edit/' rebase -i --autostash --root");
         const record = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n");
@@ -10659,14 +10659,14 @@ test "repo remove --clone: a rebase paused in a linked worktree is named with th
         const wq = try q_test(a, wt);
         var got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expectEqual(@as(u8, 1), got.code);
-        const line = try std.fmt.allocPrint(a, "  {s}: rebase in progress in {s}; finish it or abort it (run: git -C {s} rebase --continue, or git -C {s} rebase --abort)\n", .{ shown, shown, wq, wq });
-        const back = try std.fmt.allocPrint(a, "  {s}: its directory is gone; bring it back from its record first ", .{shown});
+        const line = try a.print("  {s}: rebase in progress in {s}; finish it or abort it (run: git -C {s} rebase --continue, or git -C {s} rebase --abort)\n", .{ shown, shown, wq, wq });
+        const back = try a.print("  {s}: its directory is gone; bring it back from its record first ", .{shown});
         if (!contains(got.err, line) or contains(got.err, back) != gone) {
             std.debug.print("gone={}: wanted {s} in:\n{s}\n", .{ gone, line, got.err });
             return error.TestUnexpectedResult;
         }
         try testing.expect(!contains(got.err, " worktree prune") and !contains(got.err, " worktree remove "));
-        try testing.expect(fsutil.exists(try std.fs.path.join(a, &.{ record, "rebase-merge", "autostash" })));
+        try testing.expect(fsutil.exists(try std.Io.Dir.path.join(a, &.{ record, "rebase-merge", "autostash" })));
         if (gone) {
             try runHint(&f, got.err, back, "");
             got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
@@ -10675,11 +10675,11 @@ test "repo remove --clone: a rebase paused in a linked worktree is named with th
                 return error.TestUnexpectedResult;
             }
         }
-        try runAlternative(&f, got.err, line[0..std.mem.indexOf(u8, line, "(run: ").?], 1);
+        try runAlternative(&f, got.err, line[0..std.mem.find(u8, line, "(run: ").?], 1);
         got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
         try testing.expect(!contains(got.err, " in progress in "));
         try testing.expect(contains(got.err, "  commit or discard the changes in "));
-        const readme = try kept.content.readSmall(a, try std.fs.path.join(a, &.{ wt, "README" }));
+        const readme = try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ wt, "README" }));
         try testing.expect(std.mem.endsWith(u8, readme, "dirty\n"));
     }
 }
@@ -10694,7 +10694,7 @@ test "repo remove --clone: a linked worktree holding files holt does not keep is
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const wt = try std.fs.path.join(a, &.{ sb.root, "linked" });
+    const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     try f.ignore("/secret.env");
     try f.write(wt, "secret.env", "only in the worktree");
@@ -10704,8 +10704,8 @@ test "repo remove --clone: a linked worktree holding files holt does not keep is
 
     var got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    const listed = try std.fmt.allocPrint(a, "  {s}: not kept: {s}/secret.env\n", .{ shown, shown });
-    const review = try std.fmt.allocPrint(a, "  {s}: keep or skip each first (run: holt keep --review {s})\n", .{ shown, wq });
+    const listed = try a.print("  {s}: not kept: {s}/secret.env\n", .{ shown, shown });
+    const review = try a.print("  {s}: keep or skip each first (run: holt keep --review {s})\n", .{ shown, wq });
     if (!contains(got.err, listed) or !contains(got.err, review)) {
         std.debug.print("wanted {s}{s} in:\n{s}\n", .{ listed, review, got.err });
         return error.TestUnexpectedResult;
@@ -10721,12 +10721,12 @@ test "repo remove --clone: a linked worktree holding files holt does not keep is
 
     got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expect(!contains(got.err, "not kept: "));
-    const removal = try std.fmt.allocPrint(a, "  {s} (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq });
+    const removal = try a.print("  {s} (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq });
     if (!contains(got.err, removal)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ removal, got.err });
         return error.TestUnexpectedResult;
     }
-    try runHint(&f, got.err, removal[0..std.mem.indexOf(u8, removal, "(run: ").?], "");
+    try runHint(&f, got.err, removal[0..std.mem.find(u8, removal, "(run: ").?], "");
     got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     if (got.code != 0) {
         std.debug.print("delete refused:\n{s}\n", .{got.err});
@@ -10751,31 +10751,31 @@ test "repo remove --clone: two linked worktrees whose config.worktree sends one 
     const has_owned = try testutil.makeBareRepo(&sb, "has.git");
     defer testing.allocator.free(has_owned);
     const has = try a.dupe(u8, has_owned);
-    const log = try std.fs.path.join(a, &.{ sb.root, "ssh.log" });
+    const log = try std.Io.Dir.path.join(a, &.{ sb.root, "ssh.log" });
     const url = try localSsh(a, &sb, f.clone, log, has);
     const to_has = std.mem.trim(u8, (try git.runInRepo(a, &.{ "config", "core.sshCommand" }, f.clone)).stdout, " \r\n");
-    const to_bare = try std.fs.path.join(a, &.{ sb.root, "bare-ssh" });
-    try testutil.writeExecutable(to_bare, try std.fmt.allocPrint(a, "#!/bin/sh\n[ \"$1\" = -G ] && exit 1\nfor last; do :; done\nexec sh -c \"$(printf '%s' \"$last\" | sed 's|/holt-remote.git|{s}|')\"\n", .{f.bare}));
+    const to_bare = try std.Io.Dir.path.join(a, &.{ sb.root, "bare-ssh" });
+    try testutil.writeExecutable(to_bare, try a.print("#!/bin/sh\n[ \"$1\" = -G ] && exit 1\nfor last; do :; done\nexec sh -c \"$(printf '%s' \"$last\" | sed 's|/holt-remote.git|{s}|')\"\n", .{f.bare}));
     try testutil.runGit(&sb, f.clone, &.{ "config", "--unset", "core.sshCommand" });
     try testutil.runGit(&sb, f.clone, &.{ "remote", "set-url", "origin", url });
     try testutil.runGit(&sb, f.clone, &.{ "config", "extensions.worktreeConfig", "true" });
     var heads: [2][]const u8 = undefined;
     for ([_][]const u8{ "a", "b" }, [_][]const u8{ to_has, to_bare }, &heads) |name, ssh, *head| {
-        const wt = try std.fs.path.join(a, &.{ sb.root, name });
+        const wt = try std.Io.Dir.path.join(a, &.{ sb.root, name });
         try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
         try testutil.runGit(&sb, wt, &.{ "config", "--worktree", "core.sshCommand", ssh });
-        try shIn(&f, wt, try std.fmt.allocPrint(a, "git commit -q --allow-empty -m only-in-{s} && git push -q '{s}' HEAD:refs/heads/{s}", .{ name, has, name }));
+        try shIn(&f, wt, try a.print("git commit -q --allow-empty -m only-in-{s} && git push -q '{s}' HEAD:refs/heads/{s}", .{ name, has, name }));
         head.* = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, wt)).stdout, " \r\n");
     }
     const got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    const b_shown = try fsutil.contractTilde(a, app.envOf_current(), try std.fs.path.join(a, &.{ sb.root, "b" }));
-    const a_shown = try fsutil.contractTilde(a, app.envOf_current(), try std.fs.path.join(a, &.{ sb.root, "a" }));
-    if (!contains(got.err, try std.fmt.allocPrint(a, "  {s}: commit {s}, which only the HEAD of worktree b holds and no remote has", .{ b_shown, heads[1] }))) {
+    const b_shown = try fsutil.contractTilde(a, app.envOf_current(), try std.Io.Dir.path.join(a, &.{ sb.root, "b" }));
+    const a_shown = try fsutil.contractTilde(a, app.envOf_current(), try std.Io.Dir.path.join(a, &.{ sb.root, "a" }));
+    if (!contains(got.err, try a.print("  {s}: commit {s}, which only the HEAD of worktree b holds and no remote has", .{ b_shown, heads[1] }))) {
         std.debug.print("got:\n{s}\n", .{got.err});
         return error.TestUnexpectedResult;
     }
-    try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "  {s} (run: git -C ", .{a_shown})));
+    try testing.expect(contains(got.err, try a.print("  {s} (run: git -C ", .{a_shown})));
 }
 
 test "repo remove --clone: push URLs whose host key was not verified share a line only on the same port, and a shared line names every host it covers" {
@@ -10799,7 +10799,7 @@ test "repo remove --clone: push URLs whose host key was not verified share a lin
         const state = try testutil.stateScope(a, sb.root);
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
-        const script = try std.fs.path.join(a, &.{ sb.root, "badkey-ssh" });
+        const script = try std.Io.Dir.path.join(a, &.{ sb.root, "badkey-ssh" });
         try testutil.writeExecutable(script, "#!/bin/sh\necho 'Host key verification failed.' >&2\nexit 255\n");
         try testutil.runGit(&sb, f.clone, &.{ "config", "core.sshCommand", script });
         try testutil.runGit(&sb, f.clone, &.{ "config", "ssh.variant", "ssh" });
@@ -10827,10 +10827,10 @@ test "repo remove --clone: a nested repository in a linked worktree is named wit
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const wt = try std.fs.path.join(a, &.{ sb.root, "linked" });
+    const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     try f.ignore("/vendor/");
-    const nested = try std.fs.path.join(a, &.{ wt, "vendor", "lib" });
+    const nested = try std.Io.Dir.path.join(a, &.{ wt, "vendor", "lib" });
     try fsutil.ensureDir(nested);
     try testutil.runGit(&sb, nested, &.{ "init", "-q", "-b", "main" });
     try testutil.runGit(&sb, nested, &.{ "commit", "-q", "--allow-empty", "-m", "only here" });
@@ -10842,7 +10842,7 @@ test "repo remove --clone: a nested repository in a linked worktree is named wit
 
     var got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    const line = try std.fmt.allocPrint(a, "  {s}: nested repository {s} (run: holt repo adopt {s})\n", .{ shown, nq, nq });
+    const line = try a.print("  {s}: nested repository {s} (run: holt repo adopt {s})\n", .{ shown, nq, nq });
     if (!contains(got.err, line)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ line, got.err });
         return error.TestUnexpectedResult;
@@ -10854,15 +10854,15 @@ test "repo remove --clone: a nested repository in a linked worktree is named wit
         std.debug.print("adopt failed:\n{s}\n", .{adopted.err});
         return error.TestUnexpectedResult;
     }
-    try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try std.fs.path.join(a, &.{ wt, "vendor" })));
+    try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ wt, "vendor" })));
     got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expect(!contains(got.err, "nested repository") and !contains(got.err, "not kept"));
-    const removal = try std.fmt.allocPrint(a, "  {s} (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq });
+    const removal = try a.print("  {s} (run: git -C {s} worktree remove {s})\n", .{ shown, cq, wq });
     if (!contains(got.err, removal)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ removal, got.err });
         return error.TestUnexpectedResult;
     }
-    try runHint(&f, got.err, removal[0..std.mem.indexOf(u8, removal, "(run: ").?], "");
+    try runHint(&f, got.err, removal[0..std.mem.find(u8, removal, "(run: ").?], "");
     got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     if (got.code != 0) {
         std.debug.print("delete refused:\n{s}\n", .{got.err});
@@ -10891,7 +10891,7 @@ fn treesState(a: std.mem.Allocator, roots: []const []const u8) ![]const u8 {
 /// anything; then runs the `<git_in> worktree list` it names in this
 /// state, which must succeed.
 fn expectUnresolved(f: *const Fixture, text: []const u8, path: []const u8, seen: []const u8, git_in: []const u8) !void {
-    const want = try std.fmt.allocPrint(f.a, "{s}: {s}; holt does not change it: resolve it with git ({s} worktree list), then run again", .{ try q_test(f.a, path), seen, git_in });
+    const want = try f.a.print("{s}: {s}; holt does not change it: resolve it with git ({s} worktree list), then run again", .{ try q_test(f.a, path), seen, git_in });
     if (!contains(text, want)) {
         std.debug.print("wanted {s}in:\n{s}\n", .{ want, text });
         return error.TestUnexpectedResult;
@@ -10902,7 +10902,7 @@ fn expectUnresolved(f: *const Fixture, text: []const u8, path: []const u8, seen:
             return error.TestUnexpectedResult;
         }
     }
-    const res = try proc.runEnv(f.a, &.{ "sh", "-c", try std.fmt.allocPrint(f.a, "{s} worktree list", .{git_in}) }, null, &f.sb.git_env.map);
+    const res = try proc.runEnv(f.a, &.{ "sh", "-c", try f.a.print("{s} worktree list", .{git_in}) }, null, &f.sb.git_env.map);
     if (res.status != 0) {
         std.debug.print("{s} worktree list failed:\n{s}\n", .{ git_in, res.stderr });
         return error.TestUnexpectedResult;
@@ -10934,18 +10934,18 @@ fn unlinkedCase(at_risk: bool, force: bool, how: UnlinkedHow) !void {
     const record = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n");
     if (at_risk) try shIn(&f, wt, "git switch -q --detach && git commit -q --allow-empty -m only-in-head");
     const only = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, wt)).stdout, " \r\n");
-    const dot_git = try std.fs.path.join(a, &.{ wt, ".git" });
+    const dot_git = try std.Io.Dir.path.join(a, &.{ wt, ".git" });
     const link = try kept.content.readSmall(a, dot_git);
     switch (how) {
         .removed => try fsutil.removePath(dot_git),
-        .dangling => try f.write(wt, ".git", try linkText(a, try std.fs.path.join(a, &.{ sb.root, "moved-away", ".git", "worktrees", "feature" }))),
+        .dangling => try f.write(wt, ".git", try linkText(a, try std.Io.Dir.path.join(a, &.{ sb.root, "moved-away", ".git", "worktrees", "feature" }))),
     }
     const seen = switch (how) {
         .removed => "a linked working tree whose .git is gone",
         .dangling => "a linked working tree whose .git names a git directory that is not there",
     };
     const shown = try fsutil.contractTilde(a, app.envOf_current(), wt);
-    const roots: []const []const u8 = &.{ wt, std.fs.path.dirname(record).? };
+    const roots: []const []const u8 = &.{ wt, std.Io.Dir.path.dirname(record).? };
     const before = try treesState(a, roots);
 
     const argv: []const []const u8 = if (force) &.{ "proj/widget", "feature", "-r", "--force" } else &.{ "proj/widget", "feature", "-r" };
@@ -10954,15 +10954,15 @@ fn unlinkedCase(at_risk: bool, force: bool, how: UnlinkedHow) !void {
         std.debug.print("{s} at_risk={} force={}: wanted the refusal alone, got {d}:\n{s}{s}\n", .{ @tagName(how), at_risk, force, got.code, got.out, got.err });
         return error.TestUnexpectedResult;
     }
-    try expectUnresolved(&f, got.err, wt, seen, try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+    try expectUnresolved(&f, got.err, wt, seen, try a.print("git -C {s}", .{try q_test(a, f.clone)}));
     try testing.expectEqualStrings(before, try treesState(a, roots));
 
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = dot_git, .data = link });
     got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     if (at_risk) {
         try testing.expectEqual(@as(u8, 1), got.code);
-        try testing.expect(contains(got.err, try std.fmt.allocPrint(a, "commit {s}, which only the HEAD of worktree feature holds and no remote has, in ", .{only})));
-        try runHint(&f, got.err, try std.fmt.allocPrint(a, "commit {s}, ", .{only}), "");
+        try testing.expect(contains(got.err, try a.print("commit {s}, which only the HEAD of worktree feature holds and no remote has, in ", .{only})));
+        try runHint(&f, got.err, try a.print("commit {s}, ", .{only}), "");
         got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
     }
     if (got.code != 0) {
@@ -10999,39 +10999,39 @@ test "linkOf and linkSeen: a worktree path that is a symlink to the tree leads b
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const wt = try std.fs.path.join(a, &.{ sb.root, "linked" });
+    const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     const record = try fsutil.realPathOrSelf(a, std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n"));
     const common = try commonDirOf(a, .{ .repo = f.clone });
-    const alias = try std.fs.path.join(a, &.{ sb.root, "alias" });
+    const alias = try std.Io.Dir.path.join(a, &.{ sb.root, "alias" });
     try kept.content.createLink(wt, alias, .dir);
     for ([_][]const u8{ wt, alias }) |p| {
         try testing.expectEqual(Link.there, try linkOf(a, common, record, p));
         try testing.expect(try linkSeen(a, common, record, p) == null);
     }
-    const gone = try std.fs.path.join(a, &.{ sb.root, "gone-wt" });
+    const gone = try std.Io.Dir.path.join(a, &.{ sb.root, "gone-wt" });
     try testing.expectEqual(Link.absent, try linkOf(a, common, record, gone));
     try testing.expect(try linkSeen(a, common, record, gone) == null);
 
-    const link = try kept.content.readSmall(a, try std.fs.path.join(a, &.{ wt, ".git" }));
-    const other = try std.fs.path.join(a, &.{ sb.root, "other" });
+    const link = try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ wt, ".git" }));
+    const other = try std.Io.Dir.path.join(a, &.{ sb.root, "other" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", other });
     const Case = struct { text: ?[]const u8, seen: []const u8 };
     for ([_]Case{
         .{ .text = null, .seen = "a linked working tree whose .git is gone" },
-        .{ .text = try linkText(a, try std.fs.path.join(a, &.{ sb.root, "gone", "worktrees", "linked" })), .seen = "a linked working tree whose .git names a git directory that is not there" },
+        .{ .text = try linkText(a, try std.Io.Dir.path.join(a, &.{ sb.root, "gone", "worktrees", "linked" })), .seen = "a linked working tree whose .git names a git directory that is not there" },
         .{ .text = "not a link\n", .seen = "a linked working tree whose .git does not read as a link to a git directory" },
-        .{ .text = try linkText(a, try std.fs.path.join(a, &.{ other, ".git" })), .seen = "a linked working tree whose .git leads to another git directory than its record" },
+        .{ .text = try linkText(a, try std.Io.Dir.path.join(a, &.{ other, ".git" })), .seen = "a linked working tree whose .git leads to another git directory than its record" },
     }) |c| {
-        const dot_git = try std.fs.path.join(a, &.{ wt, ".git" });
+        const dot_git = try std.Io.Dir.path.join(a, &.{ wt, ".git" });
         if (c.text) |t| try f.write(wt, ".git", t) else try fsutil.removePath(dot_git);
         for ([_][]const u8{ wt, alias }) |p| {
             try testing.expectEqual(Link.unresolved, try linkOf(a, common, record, p));
             try testing.expectEqualStrings(c.seen, (try linkSeen(a, common, record, p)).?);
         }
     }
-    const dot_git = try std.fs.path.join(a, &.{ wt, ".git" });
-    for ([_][2][]const u8{ .{ try std.fs.path.join(a, &.{ other, ".git" }), "a linked working tree whose .git leads to another git directory than its record" }, .{ try std.fs.path.join(a, &.{ sb.root, "no-such-git" }), "a linked working tree whose .git is a symlink to nothing" } }) |c| {
+    const dot_git = try std.Io.Dir.path.join(a, &.{ wt, ".git" });
+    for ([_][2][]const u8{ .{ try std.Io.Dir.path.join(a, &.{ other, ".git" }), "a linked working tree whose .git leads to another git directory than its record" }, .{ try std.Io.Dir.path.join(a, &.{ sb.root, "no-such-git" }), "a linked working tree whose .git is a symlink to nothing" } }) |c| {
         try fsutil.removePath(dot_git);
         try kept.content.createLink(c[0], dot_git, .dir);
         try testing.expectEqual(Link.unresolved, try linkOf(a, common, record, wt));
@@ -11040,7 +11040,7 @@ test "linkOf and linkSeen: a worktree path that is a symlink to the tree leads b
     try fsutil.removePath(dot_git);
     try f.write(wt, ".git", link);
     try testing.expectEqual(Link.there, try linkOf(a, common, record, wt));
-    const head_path = try std.fs.path.join(a, &.{ record, "HEAD" });
+    const head_path = try std.Io.Dir.path.join(a, &.{ record, "HEAD" });
     const head = try kept.content.readSmall(a, head_path);
     try fsutil.removePath(head_path);
     try testing.expectEqual(Link.unresolved, try linkOf(a, common, record, wt));
@@ -11048,10 +11048,10 @@ test "linkOf and linkSeen: a worktree path that is a symlink to the tree leads b
     try f.write(record, "HEAD", head);
     try testing.expectEqual(Link.there, try linkOf(a, common, record, wt));
 
-    const file = try std.fs.path.join(a, &.{ sb.root, "a-file" });
+    const file = try std.Io.Dir.path.join(a, &.{ sb.root, "a-file" });
     try f.write(sb.root, "a-file", "not a tree\n");
-    const nowhere = try std.fs.path.join(a, &.{ sb.root, "nowhere" });
-    try kept.content.createLink(try std.fs.path.join(a, &.{ sb.root, "no-such-dir" }), nowhere, .dir);
+    const nowhere = try std.Io.Dir.path.join(a, &.{ sb.root, "nowhere" });
+    try kept.content.createLink(try std.Io.Dir.path.join(a, &.{ sb.root, "no-such-dir" }), nowhere, .dir);
     for ([_][2][]const u8{ .{ file, "a linked working tree whose path holds something that is not a directory" }, .{ nowhere, "a linked working tree whose path is a symlink to nothing" } }) |c| {
         try testing.expectEqual(Link.unresolved, try linkOf(a, common, record, c[0]));
         try testing.expectEqualStrings(c[1], (try linkSeen(a, common, record, c[0])).?);
@@ -11068,14 +11068,14 @@ test "linkOf and linkSeen: a worktree path under a file, or under a symlink to n
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const blk = try std.fs.path.join(a, &.{ sb.root, "blk" });
-    const wt = try std.fs.path.join(a, &.{ blk, "deep", "linked" });
+    const blk = try std.Io.Dir.path.join(a, &.{ sb.root, "blk" });
+    const wt = try std.Io.Dir.path.join(a, &.{ blk, "deep", "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     const record = try fsutil.realPathOrSelf(a, std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n"));
     const common = try commonDirOf(a, .{ .repo = f.clone });
     for ([_]bool{ false, true }) |dangling| {
         try std.Io.Dir.cwd().deleteTree(io(), blk);
-        if (dangling) try kept.content.createLink(try std.fs.path.join(a, &.{ sb.root, "no-such-dir" }), blk, .dir) else try f.write(sb.root, "blk", "not a tree\n");
+        if (dangling) try kept.content.createLink(try std.Io.Dir.path.join(a, &.{ sb.root, "no-such-dir" }), blk, .dir) else try f.write(sb.root, "blk", "not a tree\n");
         try testing.expectEqual(Link.unresolved, try linkOf(a, common, record, wt));
         try testing.expectEqualStrings("a linked working tree whose path lies under something that is not a directory", (try linkSeen(a, common, record, wt)).?);
     }
@@ -11094,12 +11094,12 @@ test "linkOf and linkSeen: a worktree path holt is denied, and a symlink loop at
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const shut = try std.fs.path.join(a, &.{ sb.root, "shut" });
-    const wt = try std.fs.path.join(a, &.{ shut, "linked" });
+    const shut = try std.Io.Dir.path.join(a, &.{ sb.root, "shut" });
+    const wt = try std.Io.Dir.path.join(a, &.{ shut, "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     const record = try fsutil.realPathOrSelf(a, std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n"));
     const common = try commonDirOf(a, .{ .repo = f.clone });
-    const loop = try std.fs.path.join(a, &.{ sb.root, "loop" });
+    const loop = try std.Io.Dir.path.join(a, &.{ sb.root, "loop" });
     try kept.content.createLink(loop, loop, .dir);
     try testing.expectEqual(@as(u8, 0), (try proc.run(a, &.{ "chmod", "000", shut }, null)).status);
     defer _ = proc.run(a, &.{ "chmod", "700", shut }, null) catch {};
@@ -11120,18 +11120,18 @@ test "linkSeen: a relative .git is read against the real path of its directory, 
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const deep = try std.fs.path.join(a, &.{ sb.root, "deep", "er", "wts" });
+    const deep = try std.Io.Dir.path.join(a, &.{ sb.root, "deep", "er", "wts" });
     try fsutil.ensureDir(deep);
-    const wts = try std.fs.path.join(a, &.{ sb.root, "wts" });
+    const wts = try std.Io.Dir.path.join(a, &.{ sb.root, "wts" });
     try kept.content.createLink(deep, wts, .dir);
-    const wt = try std.fs.path.join(a, &.{ wts, "linked" });
+    const wt = try std.Io.Dir.path.join(a, &.{ wts, "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     const record = try fsutil.realPathOrSelf(a, std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n"));
     const common = try commonDirOf(a, .{ .repo = f.clone });
-    const other = try std.fs.path.join(a, &.{ sb.root, "other" });
+    const other = try std.Io.Dir.path.join(a, &.{ sb.root, "other" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", other });
-    const rel = try std.fs.path.relative(a, ".", null, try fsutil.realPathOrSelf(a, wt), try std.fs.path.join(a, &.{ other, ".git" }));
-    try f.write(wt, ".git", try std.fmt.allocPrint(a, "gitdir: {s}\n", .{rel}));
+    const rel = try std.Io.Dir.path.relativeAlloc(a, ".", null, try fsutil.realPathOrSelf(a, wt), try std.Io.Dir.path.join(a, &.{ other, ".git" }));
+    try f.write(wt, ".git", try a.print("gitdir: {s}\n", .{rel}));
     const found = try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt);
     try testing.expectEqual(@as(u32, 0), found.status);
     try testing.expectEqualStrings("a linked working tree whose .git leads to another git directory than its record", (try linkSeen(a, common, record, wt)).?);
@@ -11148,10 +11148,10 @@ test "worktree -r: a directory no worktree record names, or a path that is not t
     defer state.restore();
     const f = try setupWithProject(a, &sb);
     try f.ignore("/secret.txt");
-    const dirs = try std.fmt.allocPrint(a, "{s}@worktrees", .{f.clone});
-    const plain = try std.fs.path.join(a, &.{ dirs, "plain" });
+    const dirs = try a.print("{s}@worktrees", .{f.clone});
+    const plain = try std.Io.Dir.path.join(a, &.{ dirs, "plain" });
     try f.write(plain, "secret.txt", "only here");
-    const repo = try std.fs.path.join(a, &.{ dirs, "repo" });
+    const repo = try std.Io.Dir.path.join(a, &.{ dirs, "repo" });
     try f.write(repo, "secret.txt", "only here");
     try shIn(&f, repo, "git init -q && git commit -q --allow-empty -m only-here");
     const before = try f.snapshot(true);
@@ -11159,16 +11159,16 @@ test "worktree -r: a directory no worktree record names, or a path that is not t
     for ([_][]const u8{ "plain", "repo", "never" }) |branch| for ([_]bool{ false, true }) |force| {
         const argv: []const []const u8 = if (force) &.{ "proj/widget", branch, "-r", "--force" } else &.{ "proj/widget", branch, "-r" };
         const got = try f.run(worktree_cmd.command.run, argv);
-        const wt = try std.fs.path.join(a, &.{ try fsutil.realPathOrSelf(a, dirs), branch });
-        const want = try std.fmt.allocPrint(a, "holt: {s} is not a working tree of {s}\n", .{ try q_test(a, wt), try q_test(a, f.clone) });
+        const wt = try std.Io.Dir.path.join(a, &.{ try fsutil.realPathOrSelf(a, dirs), branch });
+        const want = try a.print("holt: {s} is not a working tree of {s}\n", .{ try q_test(a, wt), try q_test(a, f.clone) });
         if (got.code != 1 or got.out.len != 0 or !std.mem.eql(u8, got.err, want)) {
             std.debug.print("{s} force={}: wanted only {s}got {d}:\n{s}{s}\n", .{ branch, force, want, got.code, got.out, got.err });
             return error.TestUnexpectedResult;
         }
     };
-    try testing.expectEqualStrings("only here", try kept.content.readSmall(a, try std.fs.path.join(a, &.{ plain, "secret.txt" })));
-    try testing.expectEqualStrings("only here", try kept.content.readSmall(a, try std.fs.path.join(a, &.{ repo, "secret.txt" })));
-    try testing.expect(fsutil.exists(try std.fs.path.join(a, &.{ repo, ".git" })));
+    try testing.expectEqualStrings("only here", try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ plain, "secret.txt" })));
+    try testing.expectEqualStrings("only here", try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ repo, "secret.txt" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(a, &.{ repo, ".git" })));
     try testing.expectEqualDeep(before, try f.snapshot(true));
 }
 
@@ -11253,15 +11253,15 @@ test "worktree -r --force: setting aside that fails partway names each entry it 
 
     const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r", "--force" });
     const shown = try fsutil.contractTilde(a, app.envOf_current(), try fsutil.joinSlashy(a, m.wt, "notes.txt"));
-    const lead = try std.fmt.allocPrint(a, "set aside {s} (kept/.holt-aside/", .{shown});
-    const at = std.mem.indexOf(u8, got.out, lead);
+    const lead = try a.print("set aside {s} (kept/.holt-aside/", .{shown});
+    const at = std.mem.find(u8, got.out, lead);
     if (got.code != 1 or at == null or contains(got.err, "nothing was deleted")) {
         std.debug.print("wanted notes.txt set aside and the refusal, got {d}:\n{s}{s}\n", .{ got.code, got.out, got.err });
         return error.TestUnexpectedResult;
     }
     const rest = got.out[at.? + lead.len ..];
-    const stamp = rest[0 .. std.mem.indexOfScalar(u8, rest, ')') orelse return error.TestUnexpectedResult];
-    const want = try std.fmt.allocPrint(a, "holt: the worktree was kept; set aside: {s} (kept/.holt-aside/{s})\n", .{ shown, stamp });
+    const stamp = rest[0 .. std.mem.findScalar(u8, rest, ')') orelse return error.TestUnexpectedResult];
+    const want = try a.print("holt: the worktree was kept; set aside: {s} (kept/.holt-aside/{s})\n", .{ shown, stamp });
     if (!contains(got.err, want)) {
         std.debug.print("wanted {s}in:\n{s}\n", .{ want, got.err });
         return error.TestUnexpectedResult;
@@ -11288,7 +11288,7 @@ test "worktree -r: a HEAD that moves after holt's links were recorded and remove
     try f.write(m.wt, ".env", "kept");
     try f.keep(m.wt, ".env");
     try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try fsutil.joinSlashy(a, m.wt, ".env")));
-    const seam = Seam.install(&sb, &.{try std.fmt.allocPrint(a, "git -C '{s}' -c user.name=t -c user.email=t@t.invalid commit -q --allow-empty -m moved", .{m.wt})});
+    const seam = Seam.install(&sb, &.{try a.print("git -C '{s}' -c user.name=t -c user.email=t@t.invalid commit -q --allow-empty -m moved", .{m.wt})});
     defer seam.restore();
 
     const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
@@ -11301,7 +11301,7 @@ test "worktree -r: a HEAD that moves after holt's links were recorded and remove
         if (std.mem.eql(u8, man.rel, ".env") and man.links.len == 1) stamp = try a.dupe(u8, e.name);
     }
     const shown = try fsutil.contractTilde(a, app.envOf_current(), try fsutil.joinSlashy(a, m.wt, ".env"));
-    const want = try std.fmt.allocPrint(a, "changed while it was being weighed (a ref or HEAD moved, or git could not read them again); the worktree was kept; set aside: {s} (kept/.holt-aside/{s}); run the command again\n", .{ shown, stamp orelse "" });
+    const want = try a.print("changed while it was being weighed (a ref or HEAD moved, or git could not read them again); the worktree was kept; set aside: {s} (kept/.holt-aside/{s}); run the command again\n", .{ shown, stamp orelse "" });
     if (got.code != 1 or stamp == null or !contains(got.err, want)) {
         std.debug.print("wanted {s}in:\n{s}{s}\n", .{ want, got.out, got.err });
         return error.TestUnexpectedResult;
@@ -11337,13 +11337,13 @@ test "worktree -r: a worktree whose directory is gone and whose record holds a s
         const m = try makeFeature(a, &sb, true);
         const f = &m.f;
         try shIn(f, m.wt, "git -c protocol.file.allow=always submodule update -q --init && cd sub && git commit -q --allow-empty -m only-in-worktree-submodule");
-        const only = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, try std.fs.path.join(a, &.{ m.wt, "sub" }))).stdout, " \r\n");
-        const modgit = try std.fs.path.join(a, &.{ m.record, "modules", "sub" });
+        const only = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, try std.Io.Dir.path.join(a, &.{ m.wt, "sub" }))).stdout, " \r\n");
+        const modgit = try std.Io.Dir.path.join(a, &.{ m.record, "modules", "sub" });
         try std.Io.Dir.cwd().deleteTree(io(), m.wt);
         const mod_shown = try fsutil.contractTilde(a, app.envOf_current(), modgit);
         if (force) {
             const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r", "--force" });
-            if (got.code != 0 or !contains(got.out, try std.fmt.allocPrint(a, "deleting commit {s}, which only the HEAD of {s} holds", .{ only, mod_shown }))) {
+            if (got.code != 0 or !contains(got.out, try a.print("deleting commit {s}, which only the HEAD of {s} holds", .{ only, mod_shown }))) {
                 std.debug.print("wanted {s} named as deleted in:\n{s}{s}\n", .{ only, got.out, got.err });
                 return error.TestUnexpectedResult;
             }
@@ -11351,7 +11351,7 @@ test "worktree -r: a worktree whose directory is gone and whose record holds a s
             continue;
         }
         const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
-        const risk = try std.fmt.allocPrint(a, "commit {s}, which only the HEAD of {s} holds", .{ only, mod_shown });
+        const risk = try a.print("commit {s}, which only the HEAD of {s} holds", .{ only, mod_shown });
         if (got.code != 1 or !contains(got.err, risk)) {
             std.debug.print("wanted {s} in:\n{s}{s}\n", .{ risk, got.out, got.err });
             return error.TestUnexpectedResult;
@@ -11380,17 +11380,17 @@ test "repo remove --clone: a linked worktree whose directory is gone and whose r
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     _ = try withSubmodule(&f, false);
-    const wt = try std.fs.path.join(a, &.{ sb.root, "linked" });
+    const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     const record = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n");
     try shIn(&f, wt, "git -c protocol.file.allow=always submodule update -q --init && cd sub && git commit -q --allow-empty -m only-in-worktree-submodule");
-    const only = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, try std.fs.path.join(a, &.{ wt, "sub" }))).stdout, " \r\n");
-    const modgit = try std.fs.path.join(a, &.{ record, "modules", "sub" });
+    const only = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, try std.Io.Dir.path.join(a, &.{ wt, "sub" }))).stdout, " \r\n");
+    const modgit = try std.Io.Dir.path.join(a, &.{ record, "modules", "sub" });
     try std.Io.Dir.cwd().deleteTree(io(), wt);
     const mod_shown = try fsutil.contractTilde(a, app.envOf_current(), modgit);
 
     var got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
-    const risk = try std.fmt.allocPrint(a, "commit {s}, which only the HEAD of {s} holds", .{ only, mod_shown });
+    const risk = try a.print("commit {s}, which only the HEAD of {s} holds", .{ only, mod_shown });
     if (got.code != 1 or !contains(got.err, risk)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ risk, got.err });
         return error.TestUnexpectedResult;
@@ -11427,7 +11427,7 @@ test "worktree -r: a worktree whose directory is gone keeps its record when a re
         defer state.restore();
         const m = try makeFeature(a, &sb, true);
         try shIn(&m.f, m.wt, "git -c protocol.file.allow=always submodule update -q --init");
-        const modgit = try std.fs.path.join(a, &.{ m.record, "modules", "sub" });
+        const modgit = try std.Io.Dir.path.join(a, &.{ m.record, "modules", "sub" });
         try std.Io.Dir.cwd().deleteTree(io(), m.wt);
         const cmd = try std.mem.replaceOwned(u8, a, try std.mem.replaceOwned(u8, a, case, "{m}", modgit), "{r}", m.record);
         const seam = Seam.install(&sb, &.{cmd});
@@ -11452,14 +11452,14 @@ test "worktree -r --force: a worktree whose .git is gone is refused, writing no 
     defer state.restore();
     const m = try makeFeature(a, &sb, false);
     const f = &m.f;
-    const other = try std.fs.path.join(a, &.{ try fsutil.realPathOrSelf(a, sb.root), "shared-wt" });
+    const other = try std.Io.Dir.path.join(a, &.{ try fsutil.realPathOrSelf(a, sb.root), "shared-wt" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", other });
     try std.Io.Dir.cwd().deleteTree(io(), other);
-    const b = try std.fs.path.join(a, &.{ sb.root, "otherrepo" });
+    const b = try std.Io.Dir.path.join(a, &.{ sb.root, "otherrepo" });
     try fsutil.ensureDir(b);
-    try shIn(f, b, try std.fmt.allocPrint(a, "git init -q -b main && git commit -q --allow-empty -m b && git worktree add -q --detach {s}", .{other}));
-    try fsutil.removePath(try std.fs.path.join(a, &.{ m.wt, ".git" }));
-    const roots: []const []const u8 = &.{ m.wt, other, try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" }), try std.fs.path.join(a, &.{ b, ".git", "worktrees" }) };
+    try shIn(f, b, try a.print("git init -q -b main && git commit -q --allow-empty -m b && git worktree add -q --detach {s}", .{other}));
+    try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ m.wt, ".git" }));
+    const roots: []const []const u8 = &.{ m.wt, other, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" }), try std.Io.Dir.path.join(a, &.{ b, ".git", "worktrees" }) };
     const before = try treesState(a, roots);
 
     const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r", "--force" });
@@ -11467,7 +11467,7 @@ test "worktree -r --force: a worktree whose .git is gone is refused, writing no 
         std.debug.print("wanted the refusal alone, got {d}:\n{s}{s}\n", .{ got.code, got.out, got.err });
         return error.TestUnexpectedResult;
     }
-    try expectUnresolved(f, got.err, m.wt, "a linked working tree whose .git is gone", try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+    try expectUnresolved(f, got.err, m.wt, "a linked working tree whose .git is gone", try a.print("git -C {s}", .{try q_test(a, f.clone)}));
     try testing.expectEqualStrings(before, try treesState(a, roots));
     try testing.expect(fsutil.exists(m.record));
 }
@@ -11484,16 +11484,16 @@ test "worktree -r: an am paused in a worktree whose directory is gone is refused
         defer state.restore();
         const m = try makeFeature(a, &sb, false);
         const f = &m.f;
-        const patch = try std.fs.path.join(a, &.{ sb.root, "one.patch" });
-        try shIn(f, m.wt, try std.fmt.allocPrint(a, "echo one > README && git add README && git commit -q -m one && git format-patch -1 --stdout HEAD > '{s}' && git reset -q --hard HEAD~1 && echo two > README && git add README && git commit -q -m two && ! git am '{s}' >/dev/null 2>&1", .{ patch, patch }));
-        const applying = try std.fs.path.join(a, &.{ m.record, "rebase-apply" });
+        const patch = try std.Io.Dir.path.join(a, &.{ sb.root, "one.patch" });
+        try shIn(f, m.wt, try a.print("echo one > README && git add README && git commit -q -m one && git format-patch -1 --stdout HEAD > '{s}' && git reset -q --hard HEAD~1 && echo two > README && git add README && git commit -q -m two && ! git am '{s}' >/dev/null 2>&1", .{ patch, patch }));
+        const applying = try std.Io.Dir.path.join(a, &.{ m.record, "rebase-apply" });
         try testing.expect(fsutil.exists(applying));
         try std.Io.Dir.cwd().deleteTree(io(), m.wt);
         const shown = try fsutil.contractTilde(a, app.envOf_current(), m.wt);
         const wq = try q_test(a, m.wt);
         if (force) {
             const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r", "--force" });
-            const lost = try std.fmt.allocPrint(a, "deleting the am in progress in {s}\n", .{shown});
+            const lost = try a.print("deleting the am in progress in {s}\n", .{shown});
             if (got.code != 0 or !contains(got.out, lost)) {
                 std.debug.print("wanted {s} in:\n{s}{s}\n", .{ lost, got.out, got.err });
                 return error.TestUnexpectedResult;
@@ -11502,8 +11502,8 @@ test "worktree -r: an am paused in a worktree whose directory is gone is refused
             continue;
         }
         var got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
-        const back = try std.fmt.allocPrint(a, "  {s}: its directory is gone; bring it back from its record first (run: ", .{shown});
-        const op = try std.fmt.allocPrint(a, "  {s}: am in progress in {s}; finish it or abort it (run: git -C {s} am --continue, or git -C {s} am --abort)\n", .{ shown, shown, wq, wq });
+        const back = try a.print("  {s}: its directory is gone; bring it back from its record first (run: ", .{shown});
+        const op = try a.print("  {s}: am in progress in {s}; finish it or abort it (run: git -C {s} am --continue, or git -C {s} am --abort)\n", .{ shown, shown, wq, wq });
         if (got.code != 1 or !contains(got.err, back) or !contains(got.err, op)) {
             std.debug.print("wanted {s} and {s} in:\n{s}{s}\n", .{ back, op, got.out, got.err });
             return error.TestUnexpectedResult;
@@ -11511,7 +11511,7 @@ test "worktree -r: an am paused in a worktree whose directory is gone is refused
         try testing.expect(fsutil.exists(applying));
         try runHint(f, got.err, back[0 .. back.len - "(run: ".len], "");
         got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
-        const there = try std.fmt.allocPrint(a, "am in progress in {s}; finish it or abort it ", .{shown});
+        const there = try a.print("am in progress in {s}; finish it or abort it ", .{shown});
         if (got.code != 1 or !contains(got.err, there)) {
             std.debug.print("wanted {s} once it is back in:\n{s}{s}\n", .{ there, got.out, got.err });
             return error.TestUnexpectedResult;
@@ -11541,25 +11541,25 @@ test "worktree -r: staged changes only the record of a worktree whose directory 
         try shIn(f, m.wt, "echo staged > README && git add README");
         switch (link) {
             .absent => try std.Io.Dir.cwd().deleteTree(io(), m.wt),
-            else => try fsutil.removePath(try std.fs.path.join(a, &.{ m.wt, ".git" })),
+            else => try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ m.wt, ".git" })),
         }
         const shown = try fsutil.contractTilde(a, app.envOf_current(), m.wt);
         const wq = try q_test(a, m.wt);
-        const staged = try std.fmt.allocPrint(a, "staged changes only {s}'s record holds", .{shown});
+        const staged = try a.print("staged changes only {s}'s record holds", .{shown});
         const argv: []const []const u8 = if (force) &.{ "proj/widget", "feature", "-r", "--force" } else &.{ "proj/widget", "feature", "-r" };
         if (link == .unresolved) {
-            const roots: []const []const u8 = &.{ m.wt, std.fs.path.dirname(m.record).? };
+            const roots: []const []const u8 = &.{ m.wt, std.Io.Dir.path.dirname(m.record).? };
             const before = try treesState(a, roots);
             const got = try f.run(worktree_cmd.command.run, argv);
             try testing.expectEqual(@as(u8, 1), got.code);
             try testing.expect(!contains(got.err, staged));
-            try expectUnresolved(f, got.err, m.wt, "a linked working tree whose .git is gone", try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+            try expectUnresolved(f, got.err, m.wt, "a linked working tree whose .git is gone", try a.print("git -C {s}", .{try q_test(a, f.clone)}));
             try testing.expectEqualStrings(before, try treesState(a, roots));
             continue;
         }
         if (force) {
             const got = try f.run(worktree_cmd.command.run, argv);
-            if (got.code != 0 or !contains(got.out, try std.fmt.allocPrint(a, "deleting the {s}\n", .{staged}))) {
+            if (got.code != 0 or !contains(got.out, try a.print("deleting the {s}\n", .{staged}))) {
                 std.debug.print("wanted the staged changes named as deleted in:\n{s}{s}\n", .{ got.out, got.err });
                 return error.TestUnexpectedResult;
             }
@@ -11567,14 +11567,14 @@ test "worktree -r: staged changes only the record of a worktree whose directory 
             continue;
         }
         var got = try f.run(worktree_cmd.command.run, argv);
-        const line = try std.fmt.allocPrint(a, "  {s}: {s}; commit or stash them there (run: git -C {s} stash push)\n", .{ shown, staged, wq });
-        const first = try std.fmt.allocPrint(a, "  {s}: its directory is gone; bring it back from its record first ", .{shown});
+        const line = try a.print("  {s}: {s}; commit or stash them there (run: git -C {s} stash push)\n", .{ shown, staged, wq });
+        const first = try a.print("  {s}: its directory is gone; bring it back from its record first ", .{shown});
         if (got.code != 1 or !contains(got.err, line) or !contains(got.err, first)) {
             std.debug.print("wanted {s} and {s} in:\n{s}{s}\n", .{ first, line, got.out, got.err });
             return error.TestUnexpectedResult;
         }
         try runHint(f, got.err, first, "");
-        try runHint(f, got.err, line[0..std.mem.indexOf(u8, line, "(run: ").?], "");
+        try runHint(f, got.err, line[0..std.mem.find(u8, line, "(run: ").?], "");
         got = try f.run(worktree_cmd.command.run, argv);
         if (got.code != 0) {
             std.debug.print("the removal after the hints failed:\n{s}{s}\n", .{ got.out, got.err });
@@ -11601,12 +11601,12 @@ test "worktree -r: a path a worktree record names that holds another repository'
         if (case == .at_risk) try shIn(f, m.wt, "git switch -q --detach && git commit -q --allow-empty -m only-in-head");
         const only = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "HEAD" }, m.wt)).stdout, " \r\n");
         try std.Io.Dir.cwd().deleteTree(io(), m.wt);
-        const b = try std.fs.path.join(a, &.{ sb.root, "otherrepo" });
+        const b = try std.Io.Dir.path.join(a, &.{ sb.root, "otherrepo" });
         try fsutil.ensureDir(b);
-        try shIn(f, b, try std.fmt.allocPrint(a, "git init -q -b main && git commit -q --allow-empty -m b && git worktree add -q --detach '{s}'", .{m.wt}));
+        try shIn(f, b, try a.print("git init -q -b main && git commit -q --allow-empty -m b && git worktree add -q --detach '{s}'", .{m.wt}));
         try f.write(m.wt, "b-only.txt", "b's own");
         const before = try f.snapshot(true);
-        const roots: []const []const u8 = &.{ m.wt, std.fs.path.dirname(m.record).?, try std.fs.path.join(a, &.{ b, ".git" }) };
+        const roots: []const []const u8 = &.{ m.wt, std.Io.Dir.path.dirname(m.record).?, try std.Io.Dir.path.join(a, &.{ b, ".git" }) };
         const trees = try treesState(a, roots);
 
         const argv: []const []const u8 = if (case == .force) &.{ "proj/widget", "feature", "-r", "--force" } else &.{ "proj/widget", "feature", "-r" };
@@ -11615,14 +11615,14 @@ test "worktree -r: a path a worktree record names that holds another repository'
             std.debug.print("{s}: wanted the refusal alone, got {d}:\n{s}{s}\n", .{ @tagName(case), got.code, got.out, got.err });
             return error.TestUnexpectedResult;
         }
-        try expectUnresolved(f, got.err, m.wt, "a linked working tree whose .git leads to another git directory than its record", try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+        try expectUnresolved(f, got.err, m.wt, "a linked working tree whose .git leads to another git directory than its record", try a.print("git -C {s}", .{try q_test(a, f.clone)}));
         try testing.expectEqualStrings(trees, try treesState(a, roots));
         try expectSame(before, try f.snapshot(true));
 
-        try shIn(f, b, try std.fmt.allocPrint(a, "git worktree remove --force '{s}'", .{m.wt}));
+        try shIn(f, b, try a.print("git worktree remove --force '{s}'", .{m.wt}));
         got = try f.run(worktree_cmd.command.run, argv);
         if (case == .at_risk) {
-            const risk = try std.fmt.allocPrint(a, "commit {s}, which only the HEAD of worktree feature holds", .{only});
+            const risk = try a.print("commit {s}, which only the HEAD of worktree feature holds", .{only});
             if (got.code != 1 or !contains(got.err, risk)) {
                 std.debug.print("wanted {s} in:\n{s}{s}\n", .{ risk, got.out, got.err });
                 return error.TestUnexpectedResult;
@@ -11649,15 +11649,15 @@ test "repo remove --clone: a linked worktree whose path holds another repository
     const state = try testutil.stateScope(a, sb.root);
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
-    const wt = try std.fs.path.join(a, &.{ try fsutil.realPathOrSelf(a, sb.root), "linked" });
+    const wt = try std.Io.Dir.path.join(a, &.{ try fsutil.realPathOrSelf(a, sb.root), "linked" });
     try testutil.runGit(&sb, f.clone, &.{ "worktree", "add", "-q", "--detach", wt });
     const record = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n");
     try std.Io.Dir.cwd().deleteTree(io(), wt);
-    const b = try std.fs.path.join(a, &.{ sb.root, "otherrepo" });
+    const b = try std.Io.Dir.path.join(a, &.{ sb.root, "otherrepo" });
     try fsutil.ensureDir(b);
-    try shIn(&f, b, try std.fmt.allocPrint(a, "git init -q -b main && git commit -q --allow-empty -m b && git worktree add -q --detach '{s}'", .{wt}));
+    try shIn(&f, b, try a.print("git init -q -b main && git commit -q --allow-empty -m b && git worktree add -q --detach '{s}'", .{wt}));
     try f.write(wt, "b-only.txt", "b's own");
-    const roots: []const []const u8 = &.{ wt, std.fs.path.dirname(record).?, try std.fs.path.join(a, &.{ b, ".git" }) };
+    const roots: []const []const u8 = &.{ wt, std.Io.Dir.path.dirname(record).?, try std.Io.Dir.path.join(a, &.{ b, ".git" }) };
     const before = try treesState(a, roots);
     const cq = try q_test(a, f.clone);
 
@@ -11666,17 +11666,17 @@ test "repo remove --clone: a linked worktree whose path holds another repository
         std.debug.print("wanted a refusal in:\n{s}\n", .{got.err});
         return error.TestUnexpectedResult;
     }
-    try expectUnresolved(&f, got.err, wt, "a linked working tree whose .git leads to another git directory than its record", try std.fmt.allocPrint(a, "git -C {s}", .{cq}));
+    try expectUnresolved(&f, got.err, wt, "a linked working tree whose .git leads to another git directory than its record", try a.print("git -C {s}", .{cq}));
     try testing.expectEqualStrings(before, try treesState(a, roots));
 
-    try shIn(&f, b, try std.fmt.allocPrint(a, "git worktree remove --force '{s}'", .{wt}));
+    try shIn(&f, b, try a.print("git worktree remove --force '{s}'", .{wt}));
     got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
-    const line = try std.fmt.allocPrint(a, "  {s}, which is gone (run: git -C {s} worktree remove {s})\n", .{ try fsutil.contractTilde(a, app.envOf_current(), wt), cq, try q_test(a, wt) });
+    const line = try a.print("  {s}, which is gone (run: git -C {s} worktree remove {s})\n", .{ try fsutil.contractTilde(a, app.envOf_current(), wt), cq, try q_test(a, wt) });
     if (got.code != 1 or !contains(got.err, line)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ line, got.err });
         return error.TestUnexpectedResult;
     }
-    try runHint(&f, got.err, line[0..std.mem.indexOf(u8, line, "(run: ").?], "");
+    try runHint(&f, got.err, line[0..std.mem.find(u8, line, "(run: ").?], "");
     got = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     if (got.code != 0) {
         std.debug.print("delete refused:\n{s}\n", .{got.err});
@@ -11695,7 +11695,7 @@ test "a command reaching a git directory alone names it as its own word, which t
     const home = try fsutil.realPathOrSelf(a, sb.root);
     const scope = try testutil.EnvScope.install(a, &.{.{ "HOME", home }});
     defer scope.restore();
-    const dir = try std.fs.path.join(a, &.{ home, "gd.git" });
+    const dir = try std.Io.Dir.path.join(a, &.{ home, "gd.git" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", "--bare", dir });
     const ws = try testutil.testWorkspace(a, sb.root);
     var out: std.Io.Writer.Allocating = .init(a);
@@ -11733,7 +11733,7 @@ test "relinkCmdFor and repointCmdFor: the POSIX form and the PowerShell form eac
     var out: std.Io.Writer.Allocating = .init(a);
     var err_w: std.Io.Writer.Allocating = .init(a);
     var ctx: app.Ctx = .{ .alloc = a, .io = testing.io, .context = null, .out = &out.writer, .err = &err_w.writer, .argv = &.{} };
-    const sep = std.fs.path.sep_str;
+    const sep = std.Io.Dir.path.sep_str;
     const tree = "/w/it's tree";
     const record = "/c/.git/worktrees/it's";
     try testing.expectEqualStrings("printf 'gitdir: %s\\n' '/c/.git/worktrees/it'\\''s' > '/w/it'\\''s tree" ++ sep ++ ".git'", try relinkCmdFor(&ctx, tree, record, false, .posix));
@@ -11750,16 +11750,16 @@ test "relinkCmdFor and repointCmdFor: the POSIX form and the PowerShell form eac
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try a.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    const wt = try std.fs.path.join(a, &.{ root, "it's tree" });
-    const rec = try std.fs.path.join(a, &.{ root, "rec's" });
+    const wt = try std.Io.Dir.path.join(a, &.{ root, "it's tree" });
+    const rec = try std.Io.Dir.path.join(a, &.{ root, "rec's" });
     try fsutil.ensureDir(wt);
     try fsutil.ensureDir(rec);
     for ([_][]const u8{ try relinkCmdFor(&ctx, wt, rec, false, .posix), try repointCmdFor(&ctx, rec, wt, .posix) }) |cmd| {
         const res = try proc.runEnv(a, &.{ "sh", "-c", cmd }, null, null);
         try testing.expectEqual(@as(u8, 0), res.status);
     }
-    try testing.expectEqualStrings(try linkText(a, rec), try kept.content.readSmall(a, try std.fs.path.join(a, &.{ wt, ".git" })));
-    try testing.expectEqualStrings(try recordText(a, wt), try kept.content.readSmall(a, try std.fs.path.join(a, &.{ rec, "gitdir" })));
+    try testing.expectEqualStrings(try linkText(a, rec), try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ wt, ".git" })));
+    try testing.expectEqualStrings(try recordText(a, wt), try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ rec, "gitdir" })));
 }
 
 test "relinkCmdFor and repointCmdFor: the PowerShell forms write the tree's .git and the record's gitdir when both paths hold a typographic single quote" {
@@ -11775,8 +11775,8 @@ test "relinkCmdFor and repointCmdFor: the PowerShell forms write the tree's .git
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try a.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     for ([_][]const u8{ "'", "\u{2018}", "\u{2019}", "\u{201A}", "\u{201B}" }) |quote| {
-        const wt = try std.fs.path.join(a, &.{ root, try std.mem.concat(a, u8, &.{ "Bob", quote, "s tree" }) });
-        const rec = try std.fs.path.join(a, &.{ root, try std.mem.concat(a, u8, &.{ "rec", quote, "; echo x > pwned", quote }) });
+        const wt = try std.Io.Dir.path.join(a, &.{ root, try std.mem.concat(a, u8, &.{ "Bob", quote, "s tree" }) });
+        const rec = try std.Io.Dir.path.join(a, &.{ root, try std.mem.concat(a, u8, &.{ "rec", quote, "; echo x > pwned", quote }) });
         try fsutil.ensureDir(wt);
         try fsutil.ensureDir(rec);
         for ([_][]const u8{ try relinkCmdFor(&ctx, wt, rec, false, .powershell), try repointCmdFor(&ctx, rec, wt, .powershell) }) |cmd| {
@@ -11785,9 +11785,9 @@ test "relinkCmdFor and repointCmdFor: the PowerShell forms write the tree's .git
             if (res.status != 0) std.debug.print("{s}\n{s}\n", .{ cmd, res.stderr });
             try testing.expectEqual(@as(u32, 0), res.status);
         }
-        try testing.expectEqualStrings(try linkText(a, rec), try kept.content.readSmall(a, try std.fs.path.join(a, &.{ wt, ".git" })));
-        try testing.expectEqualStrings(try recordText(a, wt), try kept.content.readSmall(a, try std.fs.path.join(a, &.{ rec, "gitdir" })));
-        try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.fs.path.join(a, &.{ root, "pwned" })));
+        try testing.expectEqualStrings(try linkText(a, rec), try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ wt, ".git" })));
+        try testing.expectEqualStrings(try recordText(a, wt), try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ rec, "gitdir" })));
+        try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ root, "pwned" })));
     }
 }
 
@@ -11807,7 +11807,7 @@ test "worktree -r: a commit only the worktree's reflogs name is not weighed and 
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
     const record = std.mem.trim(u8, (try git.runInRepo(a, &.{ "rev-parse", "--absolute-git-dir" }, wt)).stdout, " \r\n");
     try shIn(&f, wt, "git switch -q --detach && git commit -q --allow-empty -m only-in-reflog && git switch -q feature");
-    const logged = try kept.content.readSmall(a, try std.fs.path.join(a, &.{ record, "logs", "HEAD" }));
+    const logged = try kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ record, "logs", "HEAD" }));
     try testing.expect(contains(logged, "only-in-reflog"));
 
     const got = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature", "-r" });
@@ -11831,15 +11831,15 @@ test "worktree -r: an extra record naming the worktree's path that holds a commi
         const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
         try testing.expectEqual(@as(u8, 0), made.code);
         const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
-        const records = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" }));
-        const own = try std.fs.path.join(a, &.{ records, "feature" });
-        const copy = try std.fs.path.join(a, &.{ records, "z-copy" });
+        const records = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" }));
+        const own = try std.Io.Dir.path.join(a, &.{ records, "feature" });
+        const copy = try std.Io.Dir.path.join(a, &.{ records, "z-copy" });
         const cp = try proc.runEnv(a, &.{ "cp", "-R", own, copy }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), cp.status);
         const made_commit = try git.runInRepo(a, &.{ "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "only-in-copy" }, f.clone);
         try testing.expectEqual(@as(u32, 0), made_commit.status);
         const only = std.mem.trim(u8, made_commit.stdout, " \r\n");
-        try f.write(copy, "HEAD", try std.fmt.allocPrint(a, "{s}\n", .{only}));
+        try f.write(copy, "HEAD", try a.print("{s}\n", .{only}));
         const roots: []const []const u8 = &.{ records, wt };
         const before = try treesState(a, roots);
 
@@ -11849,7 +11849,7 @@ test "worktree -r: an extra record naming the worktree's path that holds a commi
             std.debug.print("force={}: wanted the refusal alone, got {d}:\n{s}{s}\n", .{ force, refused.code, refused.out, refused.err });
             return error.TestUnexpectedResult;
         }
-        try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+        try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try a.print("git -C {s}", .{try q_test(a, f.clone)}));
         try testing.expectEqualStrings(before, try treesState(a, roots));
 
         try testutil.runGit(&sb, f.clone, &.{ "branch", "kept-copy", only });
@@ -11874,22 +11874,22 @@ test "repo remove --clone: an extra record of a submodule's linked working tree 
         defer state.restore();
         const f = try Fixture.init(a, &sb, true);
         const sub = try withSubmodule(&f, false);
-        const sub_wt = try std.fs.path.join(a, &.{ sb.root, "sub-wt" });
+        const sub_wt = try std.Io.Dir.path.join(a, &.{ sb.root, "sub-wt" });
         try testutil.runGit(&sb, sub, &.{ "worktree", "add", "-q", "--detach", sub_wt });
-        const module = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
-        const records = try std.fs.path.join(a, &.{ module, "worktrees" });
-        const own = try std.fs.path.join(a, &.{ records, "sub-wt" });
-        const copy = try std.fs.path.join(a, &.{ records, "z-copy" });
+        const module = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
+        const records = try std.Io.Dir.path.join(a, &.{ module, "worktrees" });
+        const own = try std.Io.Dir.path.join(a, &.{ records, "sub-wt" });
+        const copy = try std.Io.Dir.path.join(a, &.{ records, "z-copy" });
         const cp = try proc.runEnv(a, &.{ "cp", "-R", own, copy }, null, &sb.git_env.map);
         try testing.expectEqual(@as(u8, 0), cp.status);
         const made_commit = try git.runInRepo(a, &.{ "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "only-in-copy" }, sub);
         try testing.expectEqual(@as(u32, 0), made_commit.status);
         const only = std.mem.trim(u8, made_commit.stdout, " \r\n");
-        try f.write(copy, "HEAD", try std.fmt.allocPrint(a, "{s}\n", .{only}));
+        try f.write(copy, "HEAD", try a.print("{s}\n", .{only}));
         const roots: []const []const u8 = &.{ records, sub_wt };
         const before = try treesState(a, roots);
         const wt = try fsutil.realPathOrSelf(a, sub_wt);
-        const lead = try std.fmt.allocPrint(a, "the delete would leave a linked working tree of its submodules without their repository: {s}; ", .{try q_test(a, wt)});
+        const lead = try a.print("the delete would leave a linked working tree of its submodules without their repository: {s}; ", .{try q_test(a, wt)});
 
         const argv: []const []const u8 = if (force) &.{ Fixture.key, "--clone", "--force", "--yes" } else &.{ Fixture.key, "--clone", "--yes" };
         const refused = try f.run(repo_cmd.remove_command.run, argv);
@@ -11897,7 +11897,7 @@ test "repo remove --clone: an extra record of a submodule's linked working tree 
             std.debug.print("force={}: wanted {s} alone in:\n{s}\n", .{ force, lead, refused.err });
             return error.TestUnexpectedResult;
         }
-        try expectUnresolved(&f, refused.err, wt, shared_seen, try std.fmt.allocPrint(a, "git --git-dir {s}", .{try q_test(a, module)}));
+        try expectUnresolved(&f, refused.err, wt, shared_seen, try a.print("git --git-dir {s}", .{try q_test(a, module)}));
         try testing.expectEqualStrings(before, try treesState(a, roots));
         try testing.expect(fsutil.exists(f.clone));
     }
@@ -11914,22 +11914,22 @@ test "repo remove --clone: a submodule's linked working tree whose directory is 
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const sub = try withSubmodule(&f, false);
-    const sub_wt = try std.fs.path.join(a, &.{ sb.root, "sub-wt" });
+    const sub_wt = try std.Io.Dir.path.join(a, &.{ sb.root, "sub-wt" });
     try testutil.runGit(&sb, sub, &.{ "worktree", "add", "-q", "--detach", sub_wt });
     const wq = try q_test(a, try fsutil.realPathOrSelf(a, sub_wt));
     try std.Io.Dir.cwd().deleteTree(io(), sub_wt);
-    const module = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
-    const lead = try std.fmt.allocPrint(a, "without their repository: {s}; ", .{wq});
+    const module = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
+    const lead = try a.print("without their repository: {s}; ", .{wq});
 
     const refused = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    const want = try std.fmt.allocPrint(a, "{s}remove it first (run: git --git-dir {s} worktree remove {s})", .{ lead, try q_test(a, module), wq });
+    const want = try a.print("{s}remove it first (run: git --git-dir {s} worktree remove {s})", .{ lead, try q_test(a, module), wq });
     if (!contains(refused.err, want)) {
         std.debug.print("wanted {s} in:\n{s}\n", .{ want, refused.err });
         return error.TestUnexpectedResult;
     }
     try runHint(&f, refused.err, lead, "");
-    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.fs.path.join(a, &.{ module, "worktrees" })));
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ module, "worktrees" })));
     const after = try f.run(repo_cmd.remove_command.run, &.{ Fixture.key, "--clone", "--yes" });
     if (after.code != 0) std.debug.print("{s}\n", .{after.err});
     try testing.expectEqual(@as(u8, 0), after.code);
@@ -11947,24 +11947,24 @@ test "moduleTreeGit: a submodule's linked working tree that is gone is reached t
     defer state.restore();
     const f = try Fixture.init(a, &sb, true);
     const sub = try withSubmodule(&f, false);
-    const module = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
-    const sub_wt = try std.fs.path.join(a, &.{ sb.root, "sub-wt" });
+    const module = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "modules", "sub" }));
+    const sub_wt = try std.Io.Dir.path.join(a, &.{ sb.root, "sub-wt" });
     try testutil.runGit(&sb, sub, &.{ "worktree", "add", "-q", "--detach", sub_wt });
     const t: ModuleTree = .{ .path = try fsutil.realPathOrSelf(a, sub_wt), .module = module };
     var out: std.Io.Writer.Allocating = .init(a);
     var err_w: std.Io.Writer.Allocating = .init(a);
     var ctx: app.Ctx = .{ .alloc = a, .io = testing.io, .context = null, .out = &out.writer, .err = &err_w.writer, .argv = &.{} };
     const mq = try q(&ctx, module);
-    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "git -C {s}", .{try q(&ctx, t.path)}), try moduleTreeGit(&ctx, t));
+    try testing.expectEqualStrings(try a.print("git -C {s}", .{try q(&ctx, t.path)}), try moduleTreeGit(&ctx, t));
     try std.Io.Dir.cwd().deleteTree(io(), sub_wt);
-    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "git --git-dir {s}", .{mq}), try moduleTreeGit(&ctx, t));
-    try testutil.runGit(&sb, null, &.{ "--git-dir", module, "config", "core.worktree", try std.fs.path.join(a, &.{ sb.root, "no-such-dir" }) });
+    try testing.expectEqualStrings(try a.print("git --git-dir {s}", .{mq}), try moduleTreeGit(&ctx, t));
+    try testutil.runGit(&sb, null, &.{ "--git-dir", module, "config", "core.worktree", try std.Io.Dir.path.join(a, &.{ sb.root, "no-such-dir" }) });
     const cmd = try moduleTreeGit(&ctx, t);
-    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "git --git-dir {s} --work-tree {s}", .{ mq, mq }), cmd);
-    const res = try proc.runEnv(a, &.{ "sh", "-c", try std.fmt.allocPrint(a, "{s} worktree remove {s}", .{ cmd, try q(&ctx, t.path) }) }, null, &sb.git_env.map);
+    try testing.expectEqualStrings(try a.print("git --git-dir {s} --work-tree {s}", .{ mq, mq }), cmd);
+    const res = try proc.runEnv(a, &.{ "sh", "-c", try a.print("{s} worktree remove {s}", .{ cmd, try q(&ctx, t.path) }) }, null, &sb.git_env.map);
     if (res.status != 0) std.debug.print("{s}\n", .{res.stderr});
     try testing.expectEqual(@as(u32, 0), res.status);
-    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.fs.path.join(a, &.{ module, "worktrees" })));
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ module, "worktrees" })));
 }
 
 test "worktree -r: another repository's worktree reached through a symlinked worktrees dir, whose relative .git climbs above that link, is refused, even with --force, and its .git and files are left as they were" {
@@ -11981,16 +11981,16 @@ test "worktree -r: another repository's worktree reached through a symlinked wor
     const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
     try testing.expectEqual(@as(u8, 0), made.code);
     const wt = std.mem.trim(u8, made.out, "\r\n");
-    const wts = std.fs.path.dirname(wt).?;
-    const elsewhere = try std.fs.path.join(a, &.{ sb.root, "elsewhere" });
+    const wts = std.Io.Dir.path.dirname(wt).?;
+    const elsewhere = try std.Io.Dir.path.join(a, &.{ sb.root, "elsewhere" });
     try fsutil.ensureDir(elsewhere);
-    const moved = try std.fs.path.join(a, &.{ elsewhere, "wts" });
-    try shIn(&f, sb.root, try std.fmt.allocPrint(a, "mv '{s}' '{s}' && ln -s '{s}' '{s}' && rm -rf '{s}/feature'", .{ wts, moved, moved, wts, moved }));
-    const other = try std.fs.path.join(a, &.{ sb.root, "B" });
-    try shIn(&f, sb.root, try std.fmt.allocPrint(a, "git init -q '{s}' && cd '{s}' && git commit -q --allow-empty -m b && git -c worktree.useRelativePaths=true worktree add -q -b bfeat '{s}/feature'", .{ other, other, moved }));
-    const b_tree = try std.fs.path.join(a, &.{ moved, "feature" });
+    const moved = try std.Io.Dir.path.join(a, &.{ elsewhere, "wts" });
+    try shIn(&f, sb.root, try a.print("mv '{s}' '{s}' && ln -s '{s}' '{s}' && rm -rf '{s}/feature'", .{ wts, moved, moved, wts, moved }));
+    const other = try std.Io.Dir.path.join(a, &.{ sb.root, "B" });
+    try shIn(&f, sb.root, try a.print("git init -q '{s}' && cd '{s}' && git commit -q --allow-empty -m b && git -c worktree.useRelativePaths=true worktree add -q -b bfeat '{s}/feature'", .{ other, other, moved }));
+    const b_tree = try std.Io.Dir.path.join(a, &.{ moved, "feature" });
     try f.write(b_tree, "only-here.txt", "B's uncommitted work\n");
-    const roots: []const []const u8 = &.{ b_tree, try std.fs.path.join(a, &.{ other, ".git" }), try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" }) };
+    const roots: []const []const u8 = &.{ b_tree, try std.Io.Dir.path.join(a, &.{ other, ".git" }), try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" }) };
     const before = try treesState(a, roots);
 
     for ([_]bool{ false, true }) |force| {
@@ -12000,7 +12000,7 @@ test "worktree -r: another repository's worktree reached through a symlinked wor
             std.debug.print("force={}: wanted the refusal alone, got {d}:\n{s}{s}\n", .{ force, got.code, got.out, got.err });
             return error.TestUnexpectedResult;
         }
-        try expectUnresolved(&f, got.err, wt, "a linked working tree whose .git leads to another git directory than its record", try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+        try expectUnresolved(&f, got.err, wt, "a linked working tree whose .git leads to another git directory than its record", try a.print("git -C {s}", .{try q_test(a, f.clone)}));
         try testing.expectEqualStrings(before, try treesState(a, roots));
     }
 }
@@ -12019,13 +12019,13 @@ test "worktree -r: an extra record holding staged changes, at a path whose .git 
     const made = try f.run(worktree_cmd.command.run, &.{ "proj/widget", "feature" });
     try testing.expectEqual(@as(u8, 0), made.code);
     const wt = try fsutil.realPathOrSelf(a, std.mem.trim(u8, made.out, "\r\n"));
-    const records = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ f.clone, ".git", "worktrees" }));
-    const own = try std.fs.path.join(a, &.{ records, "feature" });
-    const copy = try std.fs.path.join(a, &.{ records, "z-copy" });
+    const records = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "worktrees" }));
+    const own = try std.Io.Dir.path.join(a, &.{ records, "feature" });
+    const copy = try std.Io.Dir.path.join(a, &.{ records, "z-copy" });
     const cp = try proc.runEnv(a, &.{ "cp", "-R", own, copy }, null, &sb.git_env.map);
     try testing.expectEqual(@as(u8, 0), cp.status);
-    try shIn(&f, f.clone, try std.fmt.allocPrint(a, "b=$(echo staged-only-in-copy | git hash-object -w --stdin) && GIT_INDEX_FILE='{s}/index' git update-index --add --cacheinfo 100644,$b,staged.txt", .{copy}));
-    try fsutil.removePath(try std.fs.path.join(a, &.{ wt, ".git" }));
+    try shIn(&f, f.clone, try a.print("b=$(echo staged-only-in-copy | git hash-object -w --stdin) && GIT_INDEX_FILE='{s}/index' git update-index --add --cacheinfo 100644,$b,staged.txt", .{copy}));
+    try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ wt, ".git" }));
     const roots: []const []const u8 = &.{ records, wt };
     const before = try treesState(a, roots);
 
@@ -12036,7 +12036,7 @@ test "worktree -r: an extra record holding staged changes, at a path whose .git 
             std.debug.print("force={}: wanted the refusal alone, got {d}:\n{s}{s}\n", .{ force, refused.code, refused.out, refused.err });
             return error.TestUnexpectedResult;
         }
-        try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+        try expectUnresolved(&f, refused.err, try resolvedPath(a, wt), shared_seen, try a.print("git -C {s}", .{try q_test(a, f.clone)}));
         try testing.expectEqualStrings(before, try treesState(a, roots));
     }
 }
@@ -12054,9 +12054,9 @@ test "worktree -r: a worktree path that is a symlink to nothing, or holds a file
         const m = try makeFeature(a, &sb, false);
         const f = &m.f;
         try std.Io.Dir.cwd().deleteTree(io(), m.wt);
-        if (file) try f.write(std.fs.path.dirname(m.wt).?, std.fs.path.basename(m.wt), "not a tree\n") else try kept.content.createLink(try std.fs.path.join(a, &.{ sb.root, "no-such-dir" }), m.wt, .dir);
+        if (file) try f.write(std.Io.Dir.path.dirname(m.wt).?, std.Io.Dir.path.basename(m.wt), "not a tree\n") else try kept.content.createLink(try std.Io.Dir.path.join(a, &.{ sb.root, "no-such-dir" }), m.wt, .dir);
         const seen = if (file) "a linked working tree whose path holds something that is not a directory" else "a linked working tree whose path is a symlink to nothing";
-        const roots: []const []const u8 = &.{ std.fs.path.dirname(m.record).?, m.wt };
+        const roots: []const []const u8 = &.{ std.Io.Dir.path.dirname(m.record).?, m.wt };
         const before = try std.mem.concat(a, u8, &.{ try treesState(a, roots), (try kept.content.readLink(a, m.wt)) orelse "" });
         for ([_]bool{ false, true }) |force| {
             const argv: []const []const u8 = if (force) &.{ "proj/widget", "feature", "-r", "--force" } else &.{ "proj/widget", "feature", "-r" };
@@ -12065,7 +12065,7 @@ test "worktree -r: a worktree path that is a symlink to nothing, or holds a file
                 std.debug.print("file={} force={}: wanted the refusal alone, got {d}:\n{s}{s}\n", .{ file, force, got.code, got.out, got.err });
                 return error.TestUnexpectedResult;
             }
-            try expectUnresolved(f, got.err, m.wt, seen, try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+            try expectUnresolved(f, got.err, m.wt, seen, try a.print("git -C {s}", .{try q_test(a, f.clone)}));
             try testing.expectEqualStrings(before, try std.mem.concat(a, u8, &.{ try treesState(a, roots), (try kept.content.readLink(a, m.wt)) orelse "" }));
         }
     }
@@ -12082,10 +12082,10 @@ test "worktree -r: a worktree path under a file is refused, even with --force, n
     defer state.restore();
     const m = try makeFeature(a, &sb, false);
     const f = &m.f;
-    const parent = std.fs.path.dirname(m.wt).?;
+    const parent = std.Io.Dir.path.dirname(m.wt).?;
     try std.Io.Dir.cwd().deleteTree(io(), parent);
-    try f.write(std.fs.path.dirname(parent).?, std.fs.path.basename(parent), "not a tree\n");
-    const roots: []const []const u8 = &.{ std.fs.path.dirname(m.record).?, parent };
+    try f.write(std.Io.Dir.path.dirname(parent).?, std.Io.Dir.path.basename(parent), "not a tree\n");
+    const roots: []const []const u8 = &.{ std.Io.Dir.path.dirname(m.record).?, parent };
     const before = try treesState(a, roots);
     for ([_]bool{ false, true }) |force| {
         const argv: []const []const u8 = if (force) &.{ "proj/widget", "feature", "-r", "--force" } else &.{ "proj/widget", "feature", "-r" };
@@ -12094,7 +12094,7 @@ test "worktree -r: a worktree path under a file is refused, even with --force, n
             std.debug.print("force={}: wanted the refusal alone, got {d}:\n{s}{s}\n", .{ force, got.code, got.out, got.err });
             return error.TestUnexpectedResult;
         }
-        try expectUnresolved(f, got.err, m.wt, "a linked working tree whose path lies under something that is not a directory", try std.fmt.allocPrint(a, "git -C {s}", .{try q_test(a, f.clone)}));
+        try expectUnresolved(f, got.err, m.wt, "a linked working tree whose path lies under something that is not a directory", try a.print("git -C {s}", .{try q_test(a, f.clone)}));
         try testing.expectEqualStrings(before, try treesState(a, roots));
     }
     try fsutil.removePath(parent);

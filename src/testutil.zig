@@ -75,12 +75,12 @@ pub const Sandbox = struct {
     }
 
     fn joinRoot(self: *Sandbox, name: []const u8) ![]u8 {
-        return std.fs.path.join(self.alloc, &.{ self.root, name });
+        return std.Io.Dir.path.join(self.alloc, &.{ self.root, name });
     }
 
     fn nextWorkName(self: *Sandbox, prefix: []const u8) ![]u8 {
         defer self.work_seq += 1;
-        return std.fmt.allocPrint(self.alloc, "{s}-{d}", .{ prefix, self.work_seq });
+        return self.alloc.print("{s}-{d}", .{ prefix, self.work_seq });
     }
 };
 
@@ -233,7 +233,7 @@ pub fn makeWorkClone(sb: *Sandbox, bare_path: []const u8) ![]u8 {
 /// projects/archive directory (e.g. the result of `ws.projectsRoot(alloc)`
 /// or `ws.archiveRoot(alloc)`) - this only joins `org`/`name` onto it. The
 /// written marker's own `org`/`name` fields match the directory.
-pub fn writeMarker(alloc: std.mem.Allocator, parent_dir: []const u8, org: []const u8, name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8), aliases: std.StringArrayHashMapUnmanaged([]const u8)) !void {
+pub fn writeMarker(alloc: std.mem.Allocator, parent_dir: []const u8, org: []const u8, name: []const u8, repos: std.array_hash_map.String([]const u8), aliases: std.array_hash_map.String([]const u8)) !void {
     return writeMarkerAs(alloc, parent_dir, org, name, org, name, repos, aliases);
 }
 
@@ -241,10 +241,10 @@ pub fn writeMarker(alloc: std.mem.Allocator, parent_dir: []const u8, org: []cons
 /// from the directory (`dir_org`/`dir_name`) it is written under - for
 /// fixtures asserting that the on-disk directory is authoritative over a
 /// marker's self-description.
-pub fn writeMarkerAs(alloc: std.mem.Allocator, parent_dir: []const u8, dir_org: []const u8, dir_name: []const u8, marker_org: []const u8, marker_name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8), aliases: std.StringArrayHashMapUnmanaged([]const u8)) !void {
-    const dir_path = try std.fs.path.join(alloc, &.{ parent_dir, dir_org, dir_name });
+pub fn writeMarkerAs(alloc: std.mem.Allocator, parent_dir: []const u8, dir_org: []const u8, dir_name: []const u8, marker_org: []const u8, marker_name: []const u8, repos: std.array_hash_map.String([]const u8), aliases: std.array_hash_map.String([]const u8)) !void {
+    const dir_path = try std.Io.Dir.path.join(alloc, &.{ parent_dir, dir_org, dir_name });
     try fsutil.ensureDir(dir_path);
-    const marker_path = try std.fs.path.join(alloc, &.{ dir_path, marker.marker_basename });
+    const marker_path = try std.Io.Dir.path.join(alloc, &.{ dir_path, marker.marker_basename });
     var m: marker.Marker = .init(marker_org, marker_name);
     var rit = repos.iterator();
     while (rit.next()) |kv| try m.upsert(alloc, kv.key_ptr.*, kv.value_ptr.*);
@@ -259,9 +259,9 @@ pub fn writeMarkerAs(alloc: std.mem.Allocator, parent_dir: []const u8, dir_org: 
 /// exactly the content a marker synced from another machine could carry -
 /// including content no in-memory `Marker` would hold.
 pub fn writeRawMarker(alloc: std.mem.Allocator, parent_dir: []const u8, org: []const u8, name: []const u8, json_text: []const u8) !void {
-    const dir_path = try std.fs.path.join(alloc, &.{ parent_dir, org, name });
+    const dir_path = try std.Io.Dir.path.join(alloc, &.{ parent_dir, org, name });
     try fsutil.ensureDir(dir_path);
-    const marker_path = try std.fs.path.join(alloc, &.{ dir_path, marker.marker_basename });
+    const marker_path = try std.Io.Dir.path.join(alloc, &.{ dir_path, marker.marker_basename });
     try fsutil.writeFileAtomic(alloc, marker_path, json_text);
 }
 
@@ -273,13 +273,13 @@ pub fn testProjectFromRaw(alloc: std.mem.Allocator, ws: *const workspace.Workspa
     const projects_root = try ws.projectsRoot(alloc);
     try writeRawMarker(alloc, projects_root, org, name, json_text);
 
-    const content_path = try std.fs.path.join(alloc, &.{ projects_root, org, name });
-    const marker_path = try std.fs.path.join(alloc, &.{ content_path, marker.marker_basename });
+    const content_path = try std.Io.Dir.path.join(alloc, &.{ projects_root, org, name });
+    const marker_path = try std.Io.Dir.path.join(alloc, &.{ content_path, marker.marker_basename });
     return .{
         .org = org,
         .name = name,
         .content_path = content_path,
-        .hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, org, name }),
+        .hub_path = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.hub_root, org, name }),
         .marker = try marker.load(alloc, marker_path, null),
     };
 }
@@ -290,9 +290,9 @@ pub fn testWorkspace(alloc: std.mem.Allocator, root: []const u8) !workspace.Work
     return .{ .cfg = .{
         .backend = null,
         .presets = &.{},
-        .synced_root = try std.fs.path.join(alloc, &.{ root, "synced" }),
-        .code_root = try std.fs.path.join(alloc, &.{ root, "code" }),
-        .hub_root = try std.fs.path.join(alloc, &.{ root, "hub" }),
+        .synced_root = try std.Io.Dir.path.join(alloc, &.{ root, "synced" }),
+        .code_root = try std.Io.Dir.path.join(alloc, &.{ root, "code" }),
+        .hub_root = try std.Io.Dir.path.join(alloc, &.{ root, "hub" }),
     }, .env = app.envOf_current() };
 }
 
@@ -341,15 +341,15 @@ pub fn seedSyntheticWorkspace(alloc: std.mem.Allocator, root: []const u8, opts: 
 
     var o: usize = 0;
     while (o < opts.orgs) : (o += 1) {
-        const org = try std.fmt.allocPrint(alloc, "org{d:0>4}", .{o});
+        const org = try alloc.print("org{d:0>4}", .{o});
         var p: usize = 0;
         while (p < opts.projects_per_org) : (p += 1) {
-            const name = try std.fmt.allocPrint(alloc, "proj{d:0>4}", .{p});
-            var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            const name = try alloc.print("proj{d:0>4}", .{p});
+            var repos: std.array_hash_map.String([]const u8) = .empty;
             var r: usize = 0;
             while (r < opts.repos_per_project) : (r += 1) {
-                const rname = try std.fmt.allocPrint(alloc, "repo{d}", .{r});
-                const url = try std.fmt.allocPrint(alloc, "https://example.com/{s}/{s}.git", .{ org, rname });
+                const rname = try alloc.print("repo{d}", .{r});
+                const url = try alloc.print("https://example.com/{s}/{s}.git", .{ org, rname });
                 try repos.put(alloc, rname, url);
             }
             try writeMarker(alloc, projects_root, org, name, repos, .empty);
@@ -436,7 +436,7 @@ pub const EnvScope = struct {
 /// for its arrival, to that day, so `--prune-aside` without names judges
 /// it old enough (`kept.ops.young_days`); the rest of each name stays.
 pub fn ageAsideEntries(alloc: std.mem.Allocator, synced_root: []const u8) !void {
-    const dir = try std.fs.path.join(alloc, &.{ synced_root, "kept", ".holt-aside" });
+    const dir = try std.Io.Dir.path.join(alloc, &.{ synced_root, "kept", ".holt-aside" });
     var names: std.ArrayList([]const u8) = .empty;
     {
         var d = try std.Io.Dir.cwd().openDir(fsutil.io(), dir, .{ .iterate = true });
@@ -446,8 +446,8 @@ pub fn ageAsideEntries(alloc: std.mem.Allocator, synced_root: []const u8) !void 
     }
     for (names.items) |n| {
         const old = try std.mem.concat(alloc, u8, &.{ "20000101", n[8..] });
-        const to = try std.fs.path.join(alloc, &.{ dir, old });
-        try std.Io.Dir.cwd().rename(try std.fs.path.join(alloc, &.{ dir, n }), std.Io.Dir.cwd(), to, fsutil.io());
+        const to = try std.Io.Dir.path.join(alloc, &.{ dir, old });
+        try std.Io.Dir.cwd().rename(try std.Io.Dir.path.join(alloc, &.{ dir, n }), std.Io.Dir.cwd(), to, fsutil.io());
         try setModified(alloc, to, 946684800 * std.time.ns_per_s);
     }
 }
@@ -494,7 +494,7 @@ extern "kernel32" fn CreateHardLinkW(new: [*:0]const u16, existing: [*:0]const u
 /// so a command that records this machine's id or locks a kept-files key
 /// writes inside the sandbox rather than the developer's own state.
 pub fn stateScope(alloc: std.mem.Allocator, root: []const u8) !EnvScope {
-    return EnvScope.install(alloc, &.{.{ "XDG_STATE_HOME", try std.fs.path.join(alloc, &.{ root, "state" }) }});
+    return EnvScope.install(alloc, &.{.{ "XDG_STATE_HOME", try std.Io.Dir.path.join(alloc, &.{ root, "state" }) }});
 }
 
 /// Edits the environment of the process running the test.
@@ -574,7 +574,7 @@ pub fn gitInsteadOf(alloc: std.mem.Allocator, gitconfig_path: []const u8, pairs:
         // escapes (`\a`, `\U`, ...) and comes out mangled; git accepts
         // forward slashes in paths/URLs on Windows, so use those instead.
         const bare_slashed = try fsutil.forwardSlashed(alloc, pair.bare);
-        try content.appendSlice(alloc, try std.fmt.allocPrint(alloc, "[url \"{s}\"]\n\tinsteadOf = {s}\n", .{ bare_slashed, pair.url }));
+        try content.appendSlice(alloc, try alloc.print("[url \"{s}\"]\n\tinsteadOf = {s}\n", .{ bare_slashed, pair.url }));
     }
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gitconfig_path, .data = content.items });
 
@@ -586,8 +586,8 @@ pub fn gitInsteadOf(alloc: std.mem.Allocator, gitconfig_path: []const u8, pairs:
 /// path under `dir` that does not exist.
 pub fn gitUnreachable(alloc: std.mem.Allocator, dir: []const u8, urls: []const []const u8) !EnvOverride {
     var pairs: std.ArrayList(GitInsteadOfPair) = .empty;
-    for (urls) |u| try pairs.append(alloc, .{ .url = u, .bare = try std.fs.path.join(alloc, &.{ dir, "absent.git" }) });
-    return gitInsteadOf(alloc, try std.fs.path.join(alloc, &.{ dir, "unreachable.gitconfig" }), pairs.items);
+    for (urls) |u| try pairs.append(alloc, .{ .url = u, .bare = try std.Io.Dir.path.join(alloc, &.{ dir, "absent.git" }) });
+    return gitInsteadOf(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, "unreachable.gitconfig" }), pairs.items);
 }
 
 /// Points this process's stderr at a new file at `path` until `end`, so a
@@ -633,32 +633,32 @@ pub const FakeEditorOpts = struct {
 /// POSIX, where none is ever written).
 pub fn writeFakeEditor(alloc: std.mem.Allocator, dir: []const u8, marker_path: []const u8, opts: FakeEditorOpts) ![]const u8 {
     if (builtin.os.tag == .windows) {
-        const script_path = try std.fs.path.join(alloc, &.{ dir, "fake-editor.cmd" });
+        const script_path = try std.Io.Dir.path.join(alloc, &.{ dir, "fake-editor.cmd" });
         var body: std.ArrayList(u8) = .empty;
         try body.appendSlice(alloc, "@echo off\r\n");
         var i: u8 = 1;
         while (i <= opts.args) : (i += 1) {
             const op: []const u8 = if (i == 1) ">" else ">>";
-            try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "echo %~{d}{s}\"{s}\"\r\n", .{ i, op, marker_path }));
+            try body.appendSlice(alloc, try alloc.print("echo %~{d}{s}\"{s}\"\r\n", .{ i, op, marker_path }));
         }
         if (opts.cwd) {
             const op: []const u8 = if (opts.args == 0) ">" else ">>";
-            try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "cd{s}\"{s}\"\r\n", .{ op, marker_path }));
+            try body.appendSlice(alloc, try alloc.print("cd{s}\"{s}\"\r\n", .{ op, marker_path }));
         }
         try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = script_path, .data = body.items });
         return script_path;
     }
 
-    const script_path = try std.fs.path.join(alloc, &.{ dir, "fake-editor.sh" });
+    const script_path = try std.Io.Dir.path.join(alloc, &.{ dir, "fake-editor.sh" });
     var body: std.ArrayList(u8) = .empty;
     try body.appendSlice(alloc, "#!/bin/sh\n");
     if (opts.args == 1) {
-        try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "printf '%s\\n' \"$1\" > \"{s}\"\n", .{marker_path}));
+        try body.appendSlice(alloc, try alloc.print("printf '%s\\n' \"$1\" > \"{s}\"\n", .{marker_path}));
     } else {
-        try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "printf '%s\\n' \"$@\" > \"{s}\"\n", .{marker_path}));
+        try body.appendSlice(alloc, try alloc.print("printf '%s\\n' \"$@\" > \"{s}\"\n", .{marker_path}));
     }
     if (opts.cwd) {
-        try body.appendSlice(alloc, try std.fmt.allocPrint(alloc, "pwd >> \"{s}\"\n", .{marker_path}));
+        try body.appendSlice(alloc, try alloc.print("pwd >> \"{s}\"\n", .{marker_path}));
     }
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
         .sub_path = script_path,
@@ -771,10 +771,10 @@ test "makeBareRepo: every bare repository it makes runs no maintenance after a p
     for ([_][]const u8{ "first.git", "second.git" }) |name| {
         const bare = try makeBareRepo(&sb, name);
         defer testing.allocator.free(bare);
-        const cfg = try std.fs.path.join(testing.allocator, &.{ bare, "config" });
+        const cfg = try std.Io.Dir.path.join(testing.allocator, &.{ bare, "config" });
         defer testing.allocator.free(cfg);
         const text = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), cfg, testing.allocator, .limited(1 << 16));
         defer testing.allocator.free(text);
-        try testing.expect(std.mem.indexOf(u8, text, "[receive]\n\tautogc = false\n") != null);
+        try testing.expect(std.mem.find(u8, text, "[receive]\n\tautogc = false\n") != null);
     }
 }

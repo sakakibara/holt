@@ -39,10 +39,10 @@ fn dispatch(arena: std.mem.Allocator, argv: []const []const u8) !Result {
 }
 
 fn writeConfig(alloc: std.mem.Allocator, xdg_config_home: []const u8, synced_root: []const u8, code_root: []const u8, hub_root: []const u8) !void {
-    const holt_dir = try std.fs.path.join(alloc, &.{ xdg_config_home, "holt" });
+    const holt_dir = try std.Io.Dir.path.join(alloc, &.{ xdg_config_home, "holt" });
     try fsutil.ensureDir(holt_dir);
-    const config_path = try std.fs.path.join(alloc, &.{ holt_dir, "config.toml" });
-    const content = try std.fmt.allocPrint(alloc,
+    const config_path = try std.Io.Dir.path.join(alloc, &.{ holt_dir, "config.toml" });
+    const content = try alloc.print(
         \\[workspace]
         \\synced_root = "{s}"
         \\code_root = "{s}"
@@ -75,15 +75,15 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     const bare_b = try testutil.makeBareRepo(&sb, "b.git");
     defer testing.allocator.free(bare_b);
 
-    const synced_root = try std.fs.path.join(arena, &.{ sb.root, "synced" });
-    const code_root = try std.fs.path.join(arena, &.{ sb.root, "code" });
-    const hub_root = try std.fs.path.join(arena, &.{ sb.root, "hub" });
-    const xdg_config_home = try std.fs.path.join(arena, &.{ sb.root, "xdg-config" });
+    const synced_root = try std.Io.Dir.path.join(arena, &.{ sb.root, "synced" });
+    const code_root = try std.Io.Dir.path.join(arena, &.{ sb.root, "code" });
+    const hub_root = try std.Io.Dir.path.join(arena, &.{ sb.root, "hub" });
+    const xdg_config_home = try std.Io.Dir.path.join(arena, &.{ sb.root, "xdg-config" });
     try writeConfig(arena, xdg_config_home, synced_root, code_root, hub_root);
 
     const url_a = "https://holt-test.invalid/acme/alpha";
     const url_b = "https://holt-test.invalid/acme/beta";
-    const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
+    const gitconfig_path = try std.Io.Dir.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const git_override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{
         .{ .url = url_a, .bare = bare_a },
         .{ .url = url_b, .bare = bare_b },
@@ -92,17 +92,17 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", xdg_config_home }});
     defer xdg_override.restore();
 
-    const clone_alpha = try std.fs.path.join(arena, &.{ code_root, "holt-test.invalid", "acme", "alpha" });
-    const clone_beta = try std.fs.path.join(arena, &.{ code_root, "holt-test.invalid", "acme", "beta" });
-    const marker_path_proj = try std.fs.path.join(arena, &.{ synced_root, "projects", "acme", "proj", marker.marker_basename });
-    const marker_path_other = try std.fs.path.join(arena, &.{ synced_root, "projects", "acme", "other", marker.marker_basename });
-    const hub_proj_path = try std.fs.path.join(arena, &.{ hub_root, "acme", "proj" });
-    const hub_proj_docs = try std.fs.path.join(arena, &.{ hub_proj_path, "docs" });
-    const hub_proj_code_alpha = try std.fs.path.join(arena, &.{ hub_proj_path, "code", "alpha" });
-    const hub_proj_code_beta = try std.fs.path.join(arena, &.{ hub_proj_path, "code", "beta" });
-    const hub_other_code_alpha = try std.fs.path.join(arena, &.{ hub_root, "acme", "other", "code", "alpha" });
-    const proj_content = try std.fs.path.join(arena, &.{ synced_root, "projects", "acme", "proj" });
-    const proj_archived = try std.fs.path.join(arena, &.{ synced_root, "archive", "acme", "proj" });
+    const clone_alpha = try std.Io.Dir.path.join(arena, &.{ code_root, "holt-test.invalid", "acme", "alpha" });
+    const clone_beta = try std.Io.Dir.path.join(arena, &.{ code_root, "holt-test.invalid", "acme", "beta" });
+    const marker_path_proj = try std.Io.Dir.path.join(arena, &.{ synced_root, "projects", "acme", "proj", marker.marker_basename });
+    const marker_path_other = try std.Io.Dir.path.join(arena, &.{ synced_root, "projects", "acme", "other", marker.marker_basename });
+    const hub_proj_path = try std.Io.Dir.path.join(arena, &.{ hub_root, "acme", "proj" });
+    const hub_proj_docs = try std.Io.Dir.path.join(arena, &.{ hub_proj_path, "docs" });
+    const hub_proj_code_alpha = try std.Io.Dir.path.join(arena, &.{ hub_proj_path, "code", "alpha" });
+    const hub_proj_code_beta = try std.Io.Dir.path.join(arena, &.{ hub_proj_path, "code", "beta" });
+    const hub_other_code_alpha = try std.Io.Dir.path.join(arena, &.{ hub_root, "acme", "other", "code", "alpha" });
+    const proj_content = try std.Io.Dir.path.join(arena, &.{ synced_root, "projects", "acme", "proj" });
+    const proj_archived = try std.Io.Dir.path.join(arena, &.{ synced_root, "archive", "acme", "proj" });
 
     // project new acme/proj: creates the project and builds the hub.
     {
@@ -150,7 +150,7 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     {
         const got = try dispatch(arena, &.{ "repo", "get", url_a, "-p", "acme/other" });
         try testing.expectEqual(@as(u8, 0), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.err, "already present") != null);
+        try testing.expect(std.mem.find(u8, got.err, "already present") != null);
     }
     const stat_after = try std.Io.Dir.cwd().statFile(fsutil.io(), clone_alpha, .{});
     try testing.expectEqual(stat_before.inode, stat_after.inode);
@@ -167,14 +167,14 @@ test "integration: project new -> repo get -> repo remove -> project archive -> 
     {
         const got = try dispatch(arena, &.{"status"});
         try testing.expectEqual(@as(u8, 0), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
-        try testing.expect(std.mem.indexOf(u8, got.out, "acme/other") != null);
+        try testing.expect(std.mem.find(u8, got.out, "acme/proj") != null);
+        try testing.expect(std.mem.find(u8, got.out, "acme/other") != null);
     }
     {
         const got = try dispatch(arena, &.{ "info", "acme/proj" });
         try testing.expectEqual(@as(u8, 0), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.out, "alpha:") != null);
-        try testing.expect(std.mem.indexOf(u8, got.out, "beta:") != null);
+        try testing.expect(std.mem.find(u8, got.out, "alpha:") != null);
+        try testing.expect(std.mem.find(u8, got.out, "beta:") != null);
     }
 
     // repo remove beta -p acme/proj: back to 1 repo, hub link swept, clone kept on disk.
@@ -227,8 +227,8 @@ test "integration: keep --help names the review's answers as its prompt offers t
     const arena = arena_state.allocator();
     const got = try dispatch(arena, &.{ "keep", "--help" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "For a file in a clone: keep,\nkeep everywhere, skip, skip everywhere, or quit, or only skip or quit\nwhen its name holds a control character. With --all, first, for a\npattern files in several repos share: keep everywhere, skip everywhere,\nreview each, or quit. The first prompt, when it is one of these, also\noffers never ask again") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "so its records so far no longer block keep, --take-local, or unkeep\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "For a file in a clone: keep,\nkeep everywhere, skip, skip everywhere, or quit, or only skip or quit\nwhen its name holds a control character. With --all, first, for a\npattern files in several repos share: keep everywhere, skip everywhere,\nreview each, or quit. The first prompt, when it is one of these, also\noffers never ask again") != null);
+    try testing.expect(std.mem.find(u8, got.out, "so its records so far no longer block keep, --take-local, or unkeep\n") != null);
 }
 
 test "integration: doctor --help names each ending --retire can have" {
@@ -237,7 +237,7 @@ test "integration: doctor --help names each ending --retire can have" {
     const arena = arena_state.allocator();
     const got = try dispatch(arena, &.{ "doctor", "--help" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "ends by naming holt\nkeep --retire-machine") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "there is nothing to retire") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "\"This machine was retired on\n<date>\"") != null);
+    try testing.expect(std.mem.find(u8, got.out, "ends by naming holt\nkeep --retire-machine") != null);
+    try testing.expect(std.mem.find(u8, got.out, "there is nothing to retire") != null);
+    try testing.expect(std.mem.find(u8, got.out, "\"This machine was retired on\n<date>\"") != null);
 }

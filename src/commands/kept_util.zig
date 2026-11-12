@@ -63,7 +63,7 @@ pub const control_hint_words = "the name holds a control character, which no pas
 /// What a line says for the file not kept at `path`, whose name holds a
 /// control character.
 pub fn controlWords(path: []const u8) []const u8 {
-    return if (std.mem.indexOfAny(u8, path, "\n\r") != null) line_break_words else control_words;
+    return if (std.mem.findAny(u8, path, "\n\r") != null) line_break_words else control_words;
 }
 
 /// Whether `s` holds a control character.
@@ -85,7 +85,7 @@ pub const Where = union(enum) {
 
 fn toSlash(alloc: std.mem.Allocator, native: []const u8) ![]const u8 {
     const out = try alloc.dupe(u8, native);
-    if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, out, std.fs.path.sep, '/');
+    if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, out, std.Io.Dir.path.sep, '/');
     return out;
 }
 
@@ -95,11 +95,11 @@ fn hubAt(ctx: *app.Ctx, dir: []const u8) !?project_mod.Project {
     const ws = ctx.context.?.ws;
     const hub_real = try fsutil.realPathOrSelf(a, ws.cfg.hub_root);
     if (!fsutil.pathIsInside(dir, hub_real) or dir.len == hub_real.len) return null;
-    var parts = std.mem.splitScalar(u8, dir[hub_real.len + 1 ..], std.fs.path.sep);
+    var parts = std.mem.splitScalar(u8, dir[hub_real.len + 1 ..], std.Io.Dir.path.sep);
     const org = parts.next() orelse return null;
     const name = parts.next() orelse return null;
     if (parts.next() != null or org.len == 0 or name.len == 0) return null;
-    return switch (try ws.find(a, try std.fmt.allocPrint(a, "{s}/{s}", .{ org, name }))) {
+    return switch (try ws.find(a, try a.print("{s}/{s}", .{ org, name }))) {
         .one => |p| if (std.mem.eql(u8, try fsutil.realPathOrSelf(a, p.hub_path), dir)) p else null,
         else => null,
     };
@@ -123,7 +123,7 @@ pub fn locate(ctx: *app.Ctx, raw: []const u8, verb: []const u8) !Where {
     const a = ctx.alloc;
     const ws = ctx.context.?.ws;
     const abs = try fsutil.toAbsolute(a, raw);
-    const parent = std.fs.path.dirname(abs) orelse {
+    const parent = std.Io.Dir.path.dirname(abs) orelse {
         try ctx.err.print("holt: cannot {s} {s}: not a file or directory inside a clone or a hub root\n", .{ verb, abs });
         return .refused;
     };
@@ -131,7 +131,7 @@ pub fn locate(ctx: *app.Ctx, raw: []const u8, verb: []const u8) !Where {
     if (try hubAt(ctx, parent_real)) |p| return .{ .hub = .{ .project = p, .abs = abs } };
 
     const top = try kept.clone.enclosing(a, parent);
-    const kept_real = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ ws.cfg.synced_root, "kept" }));
+    const kept_real = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ ws.cfg.synced_root, "kept" }));
     const into_kept = top != null and fsutil.pathIsInside(parent_real, kept_real);
     if (!into_kept and (fsutil.pathIsInside(parent_real, try fsutil.realPathOrSelf(a, ws.cfg.synced_root)) or fsutil.pathIsInside(parent_real, try fsutil.realPathOrSelf(a, ws.cfg.hub_root)))) {
         try refuseOutside(ctx, abs, parent_real, verb);
@@ -151,9 +151,9 @@ pub fn locate(ctx: *app.Ctx, raw: []const u8, verb: []const u8) !Where {
             try refuseOutside(ctx, abs, parent_real, verb);
             return .refused;
         }
-        const base = std.fs.path.basename(abs);
+        const base = std.Io.Dir.path.basename(abs);
         if (parent_real.len == c.worktree.len) break :blk try toSlash(a, base);
-        break :blk try toSlash(a, try std.fs.path.join(a, &.{ parent_real[c.worktree.len + 1 ..], base }));
+        break :blk try toSlash(a, try std.Io.Dir.path.join(a, &.{ parent_real[c.worktree.len + 1 ..], base }));
     };
 
     const sup = try git.runInRepoScoped(a, &.{ "rev-parse", "--show-superproject-working-tree" }, c.worktree);
@@ -162,10 +162,10 @@ pub fn locate(ctx: *app.Ctx, raw: []const u8, verb: []const u8) !Where {
         return .refused;
     }
     const code_real = try fsutil.realPathOrSelf(a, ws.cfg.code_root);
-    var up: ?[]const u8 = std.fs.path.dirname(c.main);
-    while (up) |d| : (up = std.fs.path.dirname(d)) {
+    var up: ?[]const u8 = std.Io.Dir.path.dirname(c.main);
+    while (up) |d| : (up = std.Io.Dir.path.dirname(d)) {
         if (!fsutil.pathIsInside(d, code_real) or d.len == code_real.len) break;
-        if (try kept.content.entryAt(try std.fs.path.join(a, &.{ d, ".git" })) != .absent) {
+        if (try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ d, ".git" })) != .absent) {
             try ctx.err.print("holt: cannot {s} {s}: it is inside the nested repository {s} of {s}\n", .{ verb, try show(ctx, abs), try show(ctx, c.main), try show(ctx, d) });
             return .refused;
         }
@@ -204,7 +204,7 @@ fn refuseOutside(ctx: *app.Ctx, abs: []const u8, parent_real: []const u8, verb: 
 pub fn keptElsewhere(ctx: *app.Ctx) !?[]const u8 {
     const ws = ctx.context.?.ws;
     const a = ctx.alloc;
-    if (try kept.content.entryAt(try std.fs.path.join(a, &.{ ws.cfg.synced_root, "kept" })) != .absent) return null;
+    if (try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ ws.cfg.synced_root, "kept" })) != .absent) return null;
     return switch (try kept_hooks.storeState(ctx, try ws.listClones(a))) {
         .elsewhere => |root| root,
         else => null,
@@ -245,7 +245,7 @@ pub fn ensureStore(ctx: *app.Ctx, k: kept.Ctx, yes: bool, retry: []const u8) !bo
             try ctx.err.print("holt: no kept/ found in {s}: if another machine keeps files, wait for {s} to finish downloading; then, to create a new kept store, run: {s}\n", .{ try show(ctx, ws.cfg.synced_root), backend, retry });
             return false;
         }
-        const msg = try std.fmt.allocPrint(a, "No kept/ found; if another machine keeps files, wait for {s} to finish downloading. Create a new kept store?", .{backend});
+        const msg = try a.print("No kept/ found; if another machine keeps files, wait for {s} to finish downloading. Create a new kept store?", .{backend});
         if (!try ui.confirm(ctx.out, msg)) {
             try ctx.out.writeAll("no kept store created\n");
             return false;
@@ -292,7 +292,7 @@ pub fn refuseNotArrived(ctx: *app.Ctx, k: kept.Ctx, c: kept.clone.Clone, rel: []
 pub fn machineLabel(ctx: *app.Ctx, k: kept.Ctx, id: []const u8) ![]const u8 {
     const host = (kept.store.readHost(ctx.alloc, k.layout, id) catch null) orelse "host unknown";
     const here = if (std.mem.eql(u8, id, k.machine_id)) ", this machine" else "";
-    return std.fmt.allocPrint(ctx.alloc, "{s} ({s}{s})", .{ id, try ui.printable(ctx.alloc, host), here });
+    return ctx.alloc.print("{s} ({s}{s})", .{ id, try ui.printable(ctx.alloc, host), here });
 }
 
 /// Words for a place `place.Hidden` reports as never copied.
@@ -324,12 +324,12 @@ pub fn printHidden(ctx: *app.Ctx, hidden: []const kept.place.Hidden) !void {
 /// Human size: bytes, KiB, MiB, or GiB.
 pub fn size(alloc: std.mem.Allocator, n: u64) ![]const u8 {
     const units = [_][]const u8{ "KiB", "MiB", "GiB" };
-    if (n < 1024) return std.fmt.allocPrint(alloc, "{d} B", .{n});
+    if (n < 1024) return alloc.print("{d} B", .{n});
     var v: f64 = @floatFromInt(n);
     var i: usize = 0;
     v /= 1024;
     while (v >= 1024 and i + 1 < units.len) : (i += 1) v /= 1024;
-    return std.fmt.allocPrint(alloc, "{d:.1} {s}", .{ v, units[i] });
+    return alloc.print("{d:.1} {s}", .{ v, units[i] });
 }
 
 /// The bytes of regular files at `path`, a file or a directory tree, never

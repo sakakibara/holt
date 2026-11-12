@@ -59,7 +59,7 @@ jobs:
         run: zig build test --summary all
 
       - name: zig build (release)
-        run: zig build -Doptimize=ReleaseSafe --summary all
+        run: zig build -Doptimize=safe --summary all
 
   # Cross-compile every release target from one runner, so a break in any
   # shipped binary is caught before a tag is ever cut.
@@ -93,7 +93,7 @@ jobs:
           restore-keys: |
             zig-cache-cross-${{ matrix.target }}-${{ env.ZIG_VERSION }}-
       - name: build for ${{ matrix.target }}
-        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=safe
 
   # Runs the full suite on real Windows; a required gate like the other platforms.
   test-windows:

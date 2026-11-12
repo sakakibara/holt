@@ -206,7 +206,7 @@ const Pool = struct {
                 }
                 pending = index;
                 var line: [24]u8 = undefined;
-                child.stdin.?.writeStreamingAll(io, try std.fmt.bufPrint(&line, "{d}\n", .{index})) catch break;
+                child.stdin.?.writeStreamingAll(io, try std.mem.print(&line, "{d}\n", .{index})) catch break;
                 const r = try readResult(&reader.interface, &out) orelse break;
                 if (r.index != index) return error.WorkerOutOfStep;
                 pool.results[index] = r.result;
@@ -236,7 +236,7 @@ const Pool = struct {
                 error.EndOfStream => return null,
                 error.ReadFailed => return err,
             };
-            const at = std.mem.indexOf(u8, line, result_mark) orelse {
+            const at = std.mem.find(u8, line, result_mark) orelse {
                 try out.appendSlice(gpa, line);
                 continue;
             };

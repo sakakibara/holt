@@ -68,9 +68,9 @@ fn testWorkspace(alloc: std.mem.Allocator, root: []const u8, backend: ?[]const u
     return .{ .cfg = .{
         .backend = backend,
         .presets = @constCast(presets),
-        .synced_root = try std.fs.path.join(alloc, &.{ root, "synced" }),
-        .code_root = try std.fs.path.join(alloc, &.{ root, "code" }),
-        .hub_root = try std.fs.path.join(alloc, &.{ root, "hub" }),
+        .synced_root = try std.Io.Dir.path.join(alloc, &.{ root, "synced" }),
+        .code_root = try std.Io.Dir.path.join(alloc, &.{ root, "code" }),
+        .hub_root = try std.Io.Dir.path.join(alloc, &.{ root, "hub" }),
     }, .env = app.envOf_current() };
 }
 
@@ -84,9 +84,9 @@ test "run: two presets, one active, lists both with expanded synced_root, marks 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const present_dir = try std.fs.path.join(arena, &.{ root, "present-backend" });
+    const present_dir = try std.Io.Dir.path.join(arena, &.{ root, "present-backend" });
     try fsutil.ensureDir(present_dir);
-    const missing_dir = try std.fs.path.join(arena, &.{ root, "missing-backend" });
+    const missing_dir = try std.Io.Dir.path.join(arena, &.{ root, "missing-backend" });
 
     const presets = [_]@import("../config.zig").Preset{
         .{ .name = "dropbox", .synced_root = present_dir },
@@ -97,17 +97,17 @@ test "run: two presets, one active, lists both with expanded synced_root, marks 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    try testing.expect(std.mem.indexOf(u8, got.out, "dropbox") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, present_dir) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "[exists]") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "(active)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "dropbox") != null);
+    try testing.expect(std.mem.find(u8, got.out, present_dir) != null);
+    try testing.expect(std.mem.find(u8, got.out, "[exists]") != null);
+    try testing.expect(std.mem.find(u8, got.out, "(active)") != null);
 
-    try testing.expect(std.mem.indexOf(u8, got.out, "icloud") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, missing_dir) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "[missing]") != null);
+    try testing.expect(std.mem.find(u8, got.out, "icloud") != null);
+    try testing.expect(std.mem.find(u8, got.out, missing_dir) != null);
+    try testing.expect(std.mem.find(u8, got.out, "[missing]") != null);
 
-    const dropbox_line_end = std.mem.indexOf(u8, got.out, "\n").?;
-    try testing.expect(std.mem.indexOf(u8, got.out[0..dropbox_line_end], "(active)") != null);
+    const dropbox_line_end = std.mem.find(u8, got.out, "\n").?;
+    try testing.expect(std.mem.find(u8, got.out[0..dropbox_line_end], "(active)") != null);
 }
 
 test "run: direct-mode config (backend == null) prints the active synced_root line ahead of its presets" {
@@ -120,7 +120,7 @@ test "run: direct-mode config (backend == null) prints the active synced_root li
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const preset_dir = try std.fs.path.join(arena, &.{ root, "some-backend" });
+    const preset_dir = try std.Io.Dir.path.join(arena, &.{ root, "some-backend" });
     const presets = [_]@import("../config.zig").Preset{
         .{ .name = "spare", .synced_root = preset_dir },
     };
@@ -129,10 +129,10 @@ test "run: direct-mode config (backend == null) prints the active synced_root li
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const want_active_line = try std.fmt.allocPrint(arena, "active: synced_root = {s}  (no backend)\n", .{ws.cfg.synced_root});
-    try testing.expect(std.mem.indexOf(u8, got.out, want_active_line) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "spare") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "(active)") == null);
+    const want_active_line = try arena.print("active: synced_root = {s}  (no backend)\n", .{ws.cfg.synced_root});
+    try testing.expect(std.mem.find(u8, got.out, want_active_line) != null);
+    try testing.expect(std.mem.find(u8, got.out, "spare") != null);
+    try testing.expect(std.mem.find(u8, got.out, "(active)") == null);
 }
 
 test "run: empty presets prints a stderr note and exits 0" {
@@ -148,6 +148,6 @@ test "run: empty presets prints a stderr note and exits 0" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no backends defined") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt setup") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no backends defined") != null);
+    try testing.expect(std.mem.find(u8, got.err, "holt setup") != null);
 }

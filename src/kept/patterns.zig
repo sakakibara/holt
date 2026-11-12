@@ -111,10 +111,10 @@ pub fn createStore(alloc: std.mem.Allocator, layout: Layout) !Created {
     } else |_| return error.SyncedRootMissing;
     if (try content.entryAt(kept) != .absent) return .exists;
     const suffix = content.randomSuffix();
-    const tmp = try std.fs.path.join(alloc, &.{ layout.synced_root, try std.fmt.allocPrint(alloc, "kept.holt-tmp-{s}", .{&suffix}) });
+    const tmp = try std.Io.Dir.path.join(alloc, &.{ layout.synced_root, try alloc.print("kept.holt-tmp-{s}", .{&suffix}) });
     try std.Io.Dir.cwd().createDir(io(), tmp, .default_dir);
     for ([_]List{ .skip, .auto }) |l| {
-        std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(alloc, &.{ tmp, l.basename() }), .data = l.seed(), .flags = .{ .exclusive = true } }) catch |err| {
+        std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(alloc, &.{ tmp, l.basename() }), .data = l.seed(), .flags = .{ .exclusive = true } }) catch |err| {
             std.Io.Dir.cwd().deleteTree(io(), tmp) catch {};
             return err;
         };
@@ -149,8 +149,8 @@ pub fn repoSkipText(alloc: std.mem.Allocator, layout: Layout, key: []const u8, t
 
 fn listIn(alloc: std.mem.Allocator, dir: []const u8, l: List, too_large: ?*[]const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    try appendFile(alloc, &out, try std.fs.path.join(alloc, &.{ dir, l.basename() }), too_large);
-    const added = try std.fs.path.join(alloc, &.{ dir, l.addedDir() });
+    try appendFile(alloc, &out, try std.Io.Dir.path.join(alloc, &.{ dir, l.basename() }), too_large);
+    const added = try std.Io.Dir.path.join(alloc, &.{ dir, l.addedDir() });
     var names: std.ArrayList([]const u8) = .empty;
     if (std.Io.Dir.cwd().openDir(io(), added, .{ .iterate = true }) catch null) |opened| {
         var d = opened;
@@ -161,7 +161,7 @@ fn listIn(alloc: std.mem.Allocator, dir: []const u8, l: List, too_large: ?*[]con
         }
     }
     std.mem.sort([]const u8, names.items, {}, paths.lessThan);
-    for (names.items) |n| try appendFile(alloc, &out, try std.fs.path.join(alloc, &.{ added, n }), too_large);
+    for (names.items) |n| try appendFile(alloc, &out, try std.Io.Dir.path.join(alloc, &.{ added, n }), too_large);
     return out.items;
 }
 
@@ -190,7 +190,7 @@ pub fn anchoredLine(alloc: std.mem.Allocator, rel: []const u8) ![]const u8 {
 /// or `**/<rel>` for a nested path, each escaped for gitignore and ending
 /// in `/` for a directory.
 pub fn everywhereLine(alloc: std.mem.Allocator, rel: []const u8, dir: bool) ![]const u8 {
-    const nested = std.mem.indexOfScalar(u8, rel, '/') != null;
+    const nested = std.mem.findScalar(u8, rel, '/') != null;
     const body = try paths.escapePattern(alloc, rel, !nested);
     return std.mem.concat(alloc, u8, &.{ if (nested) "**/" else "", body, if (dir) "/" else "" });
 }
@@ -206,7 +206,7 @@ pub fn everywhereLine(alloc: std.mem.Allocator, rel: []const u8, dir: bool) ![]c
 /// holding a line feed or carriage return would add lines no one asked
 /// for, and is refused (`InvalidLine`).
 pub fn addLine(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8, key: ?[]const u8, l: List, line: []const u8) !?[]const u8 {
-    if (std.mem.indexOfAny(u8, line, "\n\r") != null) return error.InvalidLine;
+    if (std.mem.findAny(u8, line, "\n\r") != null) return error.InvalidLine;
     const base = if (key) |k| try layout.keyDir(alloc, k) else try layout.keptDir(alloc);
     if (key) |k| if (try store.readRecord(alloc, layout, k) == null) return error.NoKey;
     const existing = try listIn(alloc, base, l, null);
@@ -215,7 +215,7 @@ pub fn addLine(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8,
         if (std.mem.eql(u8, std.mem.trimEnd(u8, raw, "\r"), line)) return null;
     }
     const stamp = try @import("aside.zig").newStamp(alloc, machine_id);
-    const path = try std.fs.path.join(alloc, &.{ base, l.addedDir(), stamp });
+    const path = try std.Io.Dir.path.join(alloc, &.{ base, l.addedDir(), stamp });
     try store.createExclusive(alloc, path, try std.mem.concat(alloc, u8, &.{ line, "\n" }));
     return path;
 }
@@ -257,7 +257,7 @@ pub fn match(ctx: Ctx, patterns: []const u8, queries: []const Query) ![]const ?[
     var asked: std.ArrayList(usize) = .empty;
     var input: std.ArrayList(u8) = .empty;
     for (queries, 0..) |q, i| {
-        if (q.path.len == 0 or paths.hasDotGit(q.path) or std.mem.indexOfScalar(u8, q.path, 0) != null) continue;
+        if (q.path.len == 0 or paths.hasDotGit(q.path) or std.mem.findScalar(u8, q.path, 0) != null) continue;
         try asked.append(a, i);
         try input.appendSlice(a, "./");
         try input.appendSlice(a, q.path);
@@ -276,7 +276,7 @@ pub fn match(ctx: Ctx, patterns: []const u8, queries: []const Query) ![]const ?[
 
     const res = git.runInRepoScopedWith(a, &.{
         "-c",
-        try std.fmt.allocPrint(a, "core.excludesFile={s}", .{pattern_file}),
+        try a.print("core.excludesFile={s}", .{pattern_file}),
         "-c",
         "core.ignorecase=false",
         "check-ignore",
@@ -308,7 +308,7 @@ pub fn match(ctx: Ctx, patterns: []const u8, queries: []const Query) ![]const ?[
 
 /// `MatcherFailed`, with why in `ctx.matcher_why` when set.
 fn fail(ctx: Ctx, comptime fmt: []const u8, args: anytype) error{MatcherFailed} {
-    if (ctx.matcher_why) |w| w.* = std.fmt.allocPrint(ctx.alloc, fmt, args) catch "out of memory while saying why";
+    if (ctx.matcher_why) |w| w.* = ctx.alloc.print(fmt, args) catch "out of memory while saying why";
     return error.MatcherFailed;
 }
 
@@ -344,15 +344,15 @@ pub fn hasPattern(text: []const u8) bool {
 fn scratchRepo(ctx: Ctx) ![]const u8 {
     const a = ctx.alloc;
     const state = try machine.stateDir(a, ctx.env);
-    const repo = try std.fs.path.join(a, &.{ state, "matcher" });
-    const exclude = try std.fs.path.join(a, &.{ repo, ".git", "info", "exclude" });
+    const repo = try std.Io.Dir.path.join(a, &.{ state, "matcher" });
+    const exclude = try std.Io.Dir.path.join(a, &.{ repo, ".git", "info", "exclude" });
     if (!try scratchReady(a, repo)) {
         if (ctx.scratch) |s| return runScratchRepo(a, s) catch |err| switch (err) {
             error.MatcherFailed => fail(ctx, "cannot make the matcher's scratch repository in {s}", .{s.dir}),
             else => err,
         };
         fsutil.ensureDir(state) catch |err| return fail(ctx, "cannot make holt's state folder {s}: {t}", .{ state, err });
-        const lock_path = try std.fs.path.join(a, &.{ state, "matcher.lock" });
+        const lock_path = try std.Io.Dir.path.join(a, &.{ state, "matcher.lock" });
         const lock = projectlock.acquireAt(lock_path) catch |err| return fail(ctx, "cannot lock {s}: {t}", .{ lock_path, err });
         defer lock.release();
         if (!try scratchReady(a, repo)) makeScratch(a, state, repo) catch |err| switch (err) {
@@ -365,7 +365,7 @@ fn scratchRepo(ctx: Ctx) ![]const u8 {
         else => null,
     };
     if (current == null or current.?.len > 0) {
-        fsutil.ensureDir(std.fs.path.dirname(exclude).?) catch |err| return fail(ctx, "cannot empty {s}: {t}", .{ exclude, err });
+        fsutil.ensureDir(std.Io.Dir.path.dirname(exclude).?) catch |err| return fail(ctx, "cannot empty {s}: {t}", .{ exclude, err });
         fsutil.writeFileAtomic(a, exclude, "") catch |err| return fail(ctx, "cannot empty {s}: {t}", .{ exclude, err });
     }
     return repo;
@@ -374,7 +374,7 @@ fn scratchRepo(ctx: Ctx) ![]const u8 {
 /// The matcher's scratch repository in the run's own directory, made
 /// there on first use.
 fn runScratchRepo(a: std.mem.Allocator, s: *ctx_mod.RunScratch) ![]const u8 {
-    const repo = try std.fs.path.join(a, &.{ s.dir, "matcher" });
+    const repo = try std.Io.Dir.path.join(a, &.{ s.dir, "matcher" });
     while (!s.lock.tryLock()) std.atomic.spinLoopHint();
     defer s.lock.unlock();
     if (!s.ready) {
@@ -387,7 +387,7 @@ fn runScratchRepo(a: std.mem.Allocator, s: *ctx_mod.RunScratch) ![]const u8 {
 const scratch_tmp_prefix = "matcher.holt-tmp-";
 
 fn scratchReady(a: std.mem.Allocator, repo: []const u8) !bool {
-    return try content.entryAt(try std.fs.path.join(a, &.{ repo, ".git", "HEAD" })) == .file;
+    return try content.entryAt(try std.Io.Dir.path.join(a, &.{ repo, ".git", "HEAD" })) == .file;
 }
 
 /// Makes the scratch repository `repo` in `state`, under `matcher.lock`.
@@ -403,15 +403,15 @@ fn makeScratch(a: std.mem.Allocator, state: []const u8, repo: []const u8) !void 
     } else |_| return error.MatcherFailed;
     if (try content.entryAt(repo) != .absent) cwd.deleteTree(io(), repo) catch return error.MatcherFailed;
     const suffix = content.randomSuffix();
-    const tmp = try std.fs.path.join(a, &.{ state, try std.fmt.allocPrint(a, scratch_tmp_prefix ++ "{s}", .{&suffix}) });
+    const tmp = try std.Io.Dir.path.join(a, &.{ state, try a.print(scratch_tmp_prefix ++ "{s}", .{&suffix}) });
     fsutil.ensureDir(tmp) catch return error.MatcherFailed;
     const res = git.runInRepoScopedWith(a, &.{ "init", "-q" }, tmp, .{ .set = &null_config }) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return error.MatcherFailed,
     };
     if (res.status != 0) return error.MatcherFailed;
-    const exclude = try std.fs.path.join(a, &.{ tmp, ".git", "info", "exclude" });
-    fsutil.ensureDir(std.fs.path.dirname(exclude).?) catch return error.MatcherFailed;
+    const exclude = try std.Io.Dir.path.join(a, &.{ tmp, ".git", "info", "exclude" });
+    fsutil.ensureDir(std.Io.Dir.path.dirname(exclude).?) catch return error.MatcherFailed;
     fsutil.writeFileAtomic(a, exclude, "") catch return error.MatcherFailed;
     try interrupt.check(.matcher_made);
     content.renameNoReplace(a, tmp, repo) catch return error.MatcherFailed;
@@ -443,10 +443,10 @@ fn testCtx(f: *Fixture) !Ctx {
 
 test "seed texts: headed by holt's comment, one pattern per line, exactly the seed" {
     try testing.expect(std.mem.startsWith(u8, skip_seed_text, "# Seeded by holt;"));
-    try testing.expect(std.mem.indexOf(u8, skip_seed_text, "\nnode_modules/\n.pnpm-store/\n") != null);
+    try testing.expect(std.mem.find(u8, skip_seed_text, "\nnode_modules/\n.pnpm-store/\n") != null);
     try testing.expect(std.mem.endsWith(u8, skip_seed_text, "\ntest-results/\ndist-*/\nzig-pkg/\n"));
     try testing.expectEqual(@as(usize, 69), skip_seed.len);
-    try testing.expect(std.mem.indexOf(u8, skip_seed_text, "\n*.o\n*.class\n*.log\n") != null);
+    try testing.expect(std.mem.find(u8, skip_seed_text, "\n*.o\n*.class\n*.log\n") != null);
     try testing.expect(std.mem.endsWith(u8, auto_seed_text, "\n.clasp.json\n"));
 }
 
@@ -543,7 +543,7 @@ test "addLine: one exclusive file per line under the list's directory, never a d
     try testing.expectEqual(content.Entry.absent, try content.entryAt(try ctx.layout.keyDir(a, key)));
 
     const first = (try addLine(a, ctx.layout, ctx.machine_id, null, .auto, ".env")).?;
-    try testing.expect(std.mem.startsWith(u8, first, try std.fs.path.join(a, &.{ try ctx.layout.keptDir(a), ".holt-auto.d" })));
+    try testing.expect(std.mem.startsWith(u8, first, try std.Io.Dir.path.join(a, &.{ try ctx.layout.keptDir(a), ".holt-auto.d" })));
     try testing.expectEqualStrings(".env\n", try content.readSmall(a, first));
     try testing.expect(try addLine(a, ctx.layout, ctx.machine_id, null, .auto, ".env") == null);
     try testing.expect(try addLine(a, ctx.layout, ctx.machine_id, null, .auto, ".clasp.json") == null);
@@ -749,7 +749,7 @@ test "match: the scratch repository appears only whole; an interrupted one is ne
     const ctx = try testCtx(&f);
     const a = ctx.alloc;
     const state = try machine.stateDir(a, ctx.env);
-    const repo = try std.fs.path.join(a, &.{ state, "matcher" });
+    const repo = try std.Io.Dir.path.join(a, &.{ state, "matcher" });
     const qs = [_]Query{.{ .path = "x.log" }};
 
     interrupt.at = .matcher_made;
@@ -758,7 +758,7 @@ test "match: the scratch repository appears only whole; an interrupted one is ne
     try testing.expectEqual(content.Entry.absent, try content.entryAt(repo));
     try testing.expectEqual(@as(usize, 1), try tmpSiblings(a, state, "matcher.holt-tmp-"));
 
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ repo, ".git", "objects" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ repo, ".git", "objects" }));
     try testing.expectEqualStrings("*.log", (try match(ctx, "*.log\n", &qs))[0].?);
     try testing.expectEqual(@as(usize, 0), try tmpSiblings(a, state, "matcher.holt-tmp-"));
     try testing.expectEqualStrings("*.log", (try match(ctx, "*.log\n", &qs))[0].?);
@@ -773,8 +773,8 @@ test "match: a failure says which step failed: holt's state folder cannot be mad
     var told = ctx;
     told.matcher_why = &why;
     try testing.expectError(error.MatcherFailed, match(told, "*.log\n", &.{.{ .path = "x.log" }}));
-    try testing.expect(std.mem.indexOf(u8, why, "cannot make holt's state folder") != null);
-    try testing.expect(std.mem.indexOf(u8, why, try machine.stateDir(ctx.alloc, ctx.env)) != null);
+    try testing.expect(std.mem.find(u8, why, "cannot make holt's state folder") != null);
+    try testing.expect(std.mem.find(u8, why, try machine.stateDir(ctx.alloc, ctx.env)) != null);
 }
 
 test "match: a failure says which step failed: git's own words when check-ignore fails" {
@@ -787,7 +787,7 @@ test "match: a failure says which step failed: git's own words when check-ignore
     told.matcher_why = &why;
     try testing.expectError(error.MatcherFailed, match(told, "*.log\n", &.{.{ .path = "x.log" }}));
     try testing.expect(std.mem.startsWith(u8, why, "git check-ignore exited "));
-    try testing.expect(std.mem.indexOf(u8, why, "fatal:") != null);
+    try testing.expect(std.mem.find(u8, why, "fatal:") != null);
 }
 
 test "globalText: a list file over the limit fails the matcher and names the file" {

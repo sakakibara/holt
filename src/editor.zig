@@ -75,14 +75,14 @@ test "open: a multi-word $EDITOR is split into a command plus the path" {
 
     // A two-word editor: the wrapper script records each argv it received, so
     // splitting "<script> --flag" into two words plus the path is observable.
-    const record = try std.fs.path.join(arena, &.{ root, "argv.txt" });
+    const record = try std.Io.Dir.path.join(arena, &.{ root, "argv.txt" });
     const script = try testutil.writeFakeEditor(arena, root, record, .{ .args = 2 });
 
-    const editor_val = try std.fmt.allocPrint(arena, "{s} --flag", .{script});
+    const editor_val = try arena.print("{s} --flag", .{script});
     app.environ_override = try envWithEditor(arena, editor_val);
     defer app.environ_override = null;
 
-    const target = try std.fs.path.join(arena, &.{ root, "file.txt" });
+    const target = try std.Io.Dir.path.join(arena, &.{ root, "file.txt" });
 
     var out: std.Io.Writer.Allocating = .init(arena);
     var err_w: std.Io.Writer.Allocating = .init(arena);
@@ -109,7 +109,7 @@ test "open: a blank $EDITOR is treated as unset, never spawned" {
     var ctx = testCtx(arena, &out, &err_w);
 
     try testing.expectEqual(@as(u8, 1), try open(&ctx, "/tmp/whatever", null));
-    try testing.expect(std.mem.indexOf(u8, err_w.written(), "EDITOR") != null);
+    try testing.expect(std.mem.find(u8, err_w.written(), "EDITOR") != null);
 }
 
 test "open: an editor binary that is not on PATH is reported by name, not a bare error" {
@@ -125,6 +125,6 @@ test "open: an editor binary that is not on PATH is reported by name, not a bare
     var ctx = testCtx(arena, &out, &err_w);
 
     try testing.expectEqual(@as(u8, 1), try open(&ctx, "/tmp/whatever", null));
-    try testing.expect(std.mem.indexOf(u8, err_w.written(), "holt-no-such-editor-xyz") != null);
-    try testing.expect(std.mem.indexOf(u8, err_w.written(), "not") != null);
+    try testing.expect(std.mem.find(u8, err_w.written(), "holt-no-such-editor-xyz") != null);
+    try testing.expect(std.mem.find(u8, err_w.written(), "not") != null);
 }

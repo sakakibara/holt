@@ -91,7 +91,7 @@ const LineIter = struct {
     fn next(self: *LineIter) ?Line {
         if (self.pos >= self.src.len) return null;
         const start = self.pos;
-        const nl = std.mem.indexOfScalarPos(u8, self.src, start, '\n');
+        const nl = std.mem.findScalarPos(u8, self.src, start, '\n');
         const end = nl orelse self.src.len;
         self.pos = if (nl) |n| n + 1 else self.src.len;
         return .{ .text = self.src[start..end], .start = start, .end = end };
@@ -102,7 +102,7 @@ const LineIter = struct {
 /// assigns exactly `key` - i.e. the text before '=' trims to `key`, not some
 /// other identifier that merely starts with it (e.g. "backend_url").
 fn assignsKey(trimmed: []const u8, key: []const u8) bool {
-    const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
+    const eq = std.mem.findScalar(u8, trimmed, '=') orelse return false;
     return std.mem.eql(u8, std.mem.trimEnd(u8, trimmed[0..eq], " \t"), key);
 }
 
@@ -111,7 +111,7 @@ fn assignsKey(trimmed: []const u8, key: []const u8) bool {
 /// so a trailing comment or whitespace after the ']' (e.g. `[workspace]  #
 /// note`) doesn't stop it from matching.
 fn isTableHeader(trimmed: []const u8, name: []const u8) bool {
-    const close = std.mem.indexOfScalar(u8, trimmed, ']') orelse trimmed.len;
+    const close = std.mem.findScalar(u8, trimmed, ']') orelse trimmed.len;
     return std.mem.eql(u8, trimmed[1..close], name);
 }
 
@@ -120,13 +120,13 @@ fn isTableHeader(trimmed: []const u8, name: []const u8) bool {
 /// after it. A '#' inside the quoted value is part of the value, not a
 /// comment, so only text after the closing quote is searched.
 fn valueTrailingComment(line_text: []const u8, indent_len: usize) []const u8 {
-    const eq = std.mem.indexOfScalarPos(u8, line_text, indent_len, '=') orelse return "";
+    const eq = std.mem.findScalarPos(u8, line_text, indent_len, '=') orelse return "";
     var i = eq + 1;
     while (i < line_text.len and (line_text[i] == ' ' or line_text[i] == '\t')) : (i += 1) {}
     if (i >= line_text.len or line_text[i] != '"') return "";
-    const close = std.mem.indexOfScalarPos(u8, line_text, i + 1, '"') orelse return "";
+    const close = std.mem.findScalarPos(u8, line_text, i + 1, '"') orelse return "";
     const remainder = line_text[close + 1 ..];
-    if (std.mem.indexOfScalar(u8, remainder, '#') == null) return "";
+    if (std.mem.findScalar(u8, remainder, '#') == null) return "";
     return remainder;
 }
 
@@ -174,18 +174,18 @@ fn testWorkspace(alloc: std.mem.Allocator, root: []const u8, backend: ?[]const u
     return .{ .cfg = .{
         .backend = backend,
         .presets = @constCast(presets),
-        .synced_root = try std.fs.path.join(alloc, &.{ root, "synced" }),
-        .code_root = try std.fs.path.join(alloc, &.{ root, "code" }),
-        .hub_root = try std.fs.path.join(alloc, &.{ root, "hub" }),
+        .synced_root = try std.Io.Dir.path.join(alloc, &.{ root, "synced" }),
+        .code_root = try std.Io.Dir.path.join(alloc, &.{ root, "code" }),
+        .hub_root = try std.Io.Dir.path.join(alloc, &.{ root, "hub" }),
     }, .env = app.envOf_current() };
 }
 
 fn writeConfigFixture(alloc: std.mem.Allocator, tmp: *testing.TmpDir, content: []const u8) ![]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const dir_path = try std.fs.path.join(alloc, &.{ root, "holt" });
+    const dir_path = try std.Io.Dir.path.join(alloc, &.{ root, "holt" });
     try fsutil.ensureDir(dir_path);
-    const path = try std.fs.path.join(alloc, &.{ dir_path, "config.toml" });
+    const path = try std.Io.Dir.path.join(alloc, &.{ dir_path, "config.toml" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = path, .data = content });
     return path;
 }
@@ -205,8 +205,8 @@ test "run: no argument prints the active backend name and resolved synced_root" 
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "dropbox: synced_root = ") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, ws.cfg.synced_root) != null);
+    try testing.expect(std.mem.find(u8, got.out, "dropbox: synced_root = ") != null);
+    try testing.expect(std.mem.find(u8, got.out, ws.cfg.synced_root) != null);
 }
 
 test "run: no argument in direct mode prints the (no backend) form" {
@@ -223,7 +223,7 @@ test "run: no argument in direct mode prints the (no backend) form" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    const want = try std.fmt.allocPrint(arena, "synced_root = {s} (no backend)\n", .{ws.cfg.synced_root});
+    const want = try arena.print("synced_root = {s} (no backend)\n", .{ws.cfg.synced_root});
     try testing.expectEqualStrings(want, got.out);
 }
 
@@ -271,9 +271,9 @@ test "run: switching to a defined preset rewrites only the workspace.backend lin
     const want = try std.mem.replaceOwned(u8, arena, fixture, "backend = \"dropbox\"", "backend = \"icloud\"");
     const after = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, arena, .limited(1 << 20));
     try testing.expectEqualStrings(want, after);
-    try testing.expect(std.mem.indexOf(u8, after, "# my note") != null);
-    try testing.expect(std.mem.indexOf(u8, after, "[backends.dropbox]") != null);
-    try testing.expect(std.mem.indexOf(u8, after, "[backends.icloud]") != null);
+    try testing.expect(std.mem.find(u8, after, "# my note") != null);
+    try testing.expect(std.mem.find(u8, after, "[backends.dropbox]") != null);
+    try testing.expect(std.mem.find(u8, after, "[backends.icloud]") != null);
 
     const reloaded = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("icloud", reloaded.backend.?);
@@ -320,7 +320,7 @@ test "run: switching preserves a trailing inline comment on the backend line" {
     const want = try std.mem.replaceOwned(u8, arena, fixture, "backend = \"icloud\"", "backend = \"dropbox\"");
     const after = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, arena, .limited(1 << 20));
     try testing.expectEqualStrings(want, after);
-    try testing.expect(std.mem.indexOf(u8, after, "backend = \"dropbox\"  # pick one") != null);
+    try testing.expect(std.mem.find(u8, after, "backend = \"dropbox\"  # pick one") != null);
 
     const reloaded = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("dropbox", reloaded.backend.?);
@@ -398,8 +398,8 @@ test "run: an undefined preset name exits 1 and leaves the file byte-unchanged" 
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "\"nope\" is not defined") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt backends") != null);
+    try testing.expect(std.mem.find(u8, got.err, "\"nope\" is not defined") != null);
+    try testing.expect(std.mem.find(u8, got.err, "holt backends") != null);
 
     const after = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, arena, .limited(1 << 20));
     try testing.expectEqualStrings(fixture, after);
@@ -430,8 +430,8 @@ test "run: a direct-synced_root config errors and leaves the file byte-unchanged
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"dropbox"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "direct synced_root") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt setup") != null);
+    try testing.expect(std.mem.find(u8, got.err, "direct synced_root") != null);
+    try testing.expect(std.mem.find(u8, got.err, "holt setup") != null);
 
     const after = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), path, arena, .limited(1 << 20));
     try testing.expectEqualStrings(fixture, after);
@@ -454,7 +454,7 @@ test "switchBackendLine: a [backends.*] block's own synced_root line is never mi
         \\
     ;
     const got = try switchBackendLine(arena, src, "b");
-    try testing.expect(std.mem.indexOf(u8, got, "backend = \"b\"") != null);
-    try testing.expect(std.mem.indexOf(u8, got, "synced_root = \"~/a\"") != null);
-    try testing.expect(std.mem.indexOf(u8, got, "synced_root = \"~/b\"") != null);
+    try testing.expect(std.mem.find(u8, got, "backend = \"b\"") != null);
+    try testing.expect(std.mem.find(u8, got, "synced_root = \"~/a\"") != null);
+    try testing.expect(std.mem.find(u8, got, "synced_root = \"~/b\"") != null);
 }

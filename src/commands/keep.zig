@@ -145,7 +145,7 @@ fn keepOne(ctx: *app.Ctx, raw: []const u8, yes: bool) !bool {
 /// project's synced content and leaves a symlink at the hub root.
 fn keepHub(ctx: *app.Ctx, p: project_mod.Project, abs: []const u8) !bool {
     const alloc = ctx.alloc;
-    const base = std.fs.path.basename(abs);
+    const base = std.Io.Dir.path.basename(abs);
     if (std.mem.eql(u8, base, "code") or std.mem.eql(u8, base, marker.marker_basename)) {
         try ctx.err.print("holt: {s} is reserved and cannot be kept\n", .{base});
         return false;
@@ -162,7 +162,7 @@ fn keepHub(ctx: *app.Ctx, p: project_mod.Project, abs: []const u8) !bool {
         .other => {},
     }
 
-    const dest = try std.fs.path.join(alloc, &.{ p.content_path, base });
+    const dest = try std.Io.Dir.path.join(alloc, &.{ p.content_path, base });
     if (fsutil.exists(dest)) {
         try ctx.err.print("holt: content already has {s}; refusing to overwrite\n", .{base});
         return false;
@@ -224,7 +224,7 @@ fn sizeAllowed(ctx: *app.Ctx, abs: []const u8, bytes: u64, yes: bool) !bool {
         try ctx.err.print("holt: {s} holds {s}, more than 10 MiB; to keep it, run: holt keep --yes {s}\n", .{ try util.show(ctx, abs), shown, try util.q(ctx, abs) });
         return false;
     }
-    const msg = try std.fmt.allocPrint(ctx.alloc, "{s} holds {s}, more than 10 MiB. Keep it?", .{ try util.show(ctx, abs), shown });
+    const msg = try ctx.alloc.print("{s} holds {s}, more than 10 MiB. Keep it?", .{ try util.show(ctx, abs), shown });
     if (try ui.confirm(ctx.out, msg)) return true;
     try ctx.out.print("not kept: {s}\n", .{try util.show(ctx, abs)});
     return false;
@@ -254,7 +254,7 @@ fn keepRepo(ctx: *app.Ctx, c: kept.clone.Clone, rel: []const u8, abs: []const u8
         return false;
     }
     if (!try sizeAllowed(ctx, abs, try util.bytesAt(alloc, abs), yes)) return false;
-    if (!try util.ensureStore(ctx, k, yes, try std.fmt.allocPrint(alloc, "holt keep --yes {s}", .{try util.q(ctx, abs)}))) return false;
+    if (!try util.ensureStore(ctx, k, yes, try alloc.print("holt keep --yes {s}", .{try util.q(ctx, abs)}))) return false;
     index = try kept.store.loadIndex(alloc, k.layout);
 
     var found: Found = .{};
@@ -320,7 +320,7 @@ fn reportKeepError(ctx: *app.Ctx, k: kept.Ctx, index: *const kept.store.KeyIndex
         error.Tracked => {
             if (try kept.content.entryAt(abs) == .dir) {
                 try ctx.err.print("holt: cannot keep {s}: git tracks files inside it; name the untracked files instead:\n", .{shown});
-                const res = try git.runInRepoScoped(alloc, &.{ "ls-files", "-z", "--others", "--", try std.fmt.allocPrint(alloc, ":(literal){s}/", .{rel}) }, c.worktree);
+                const res = try git.runInRepoScoped(alloc, &.{ "ls-files", "-z", "--others", "--", try alloc.print(":(literal){s}/", .{rel}) }, c.worktree);
                 var queries: std.ArrayList(kept.patterns.Query) = .empty;
                 var it = std.mem.splitScalar(u8, res.stdout, 0);
                 while (it.next()) |f| if (f.len > 0) try queries.append(alloc, .{ .path = f });
@@ -347,8 +347,8 @@ fn reportKeepError(ctx: *app.Ctx, k: kept.Ctx, index: *const kept.store.KeyIndex
             const nk = try kept.store.nestedKeyAt(alloc, index, c.key.?, rel);
             try ctx.err.print("holt: cannot keep {s}: it would {s} the kept files of the nested repo {s}\n", .{ shown, if (nk != null and nk.?.contains) "contain" else "enter", if (nk) |n| n.key else "?" });
         },
-        error.AwaitingPromote => try ctx.err.print("holt: cannot keep {s}: the clone is awaiting promote (run: holt repo promote {s})\n", .{ shown, try ui.shellQuote(alloc, std.fs.path.basename(c.key.?)) }),
-        error.KeptElsewhere => try util.refuseNotArrived(ctx, k, c, rel, "keep", abs, try std.fmt.allocPrint(alloc, "holt keep {s}", .{try util.q(ctx, abs)})),
+        error.AwaitingPromote => try ctx.err.print("holt: cannot keep {s}: the clone is awaiting promote (run: holt repo promote {s})\n", .{ shown, try ui.shellQuote(alloc, std.Io.Dir.path.basename(c.key.?)) }),
+        error.KeptElsewhere => try util.refuseNotArrived(ctx, k, c, rel, "keep", abs, try alloc.print("holt keep {s}", .{try util.q(ctx, abs)})),
         error.GitReadsUnlinked => if (try kept.content.entryAt(abs) == .symlink) {
             try ctx.err.print("holt: cannot keep {s}: {s} (if an older holt kept it, run: holt unkeep {s})\n", .{ shown, (try util.reason(ctx, err)).?, try util.q(ctx, abs) });
         } else try util.refuse(ctx, "keep", abs, err),
@@ -384,7 +384,7 @@ fn take(ctx: *app.Ctx, raw: []const u8, which: Which, held: ?kept.Held) !u8 {
                 }
             },
             error.FileNotFound => try ctx.err.print("holt: cannot {s} {s}: there is no local content there (run: holt sync to link it)\n", .{ verb, try util.show(ctx, r.abs) }),
-            error.KeptElsewhere => try util.refuseNotArrived(ctx, k, r.c, r.rel, verb, r.abs, try std.fmt.allocPrint(alloc, "holt keep {s} {s}", .{ flag, try util.q(ctx, r.abs) })),
+            error.KeptElsewhere => try util.refuseNotArrived(ctx, k, r.c, r.rel, verb, r.abs, try alloc.print("holt keep {s} {s}", .{ flag, try util.q(ctx, r.abs) })),
             else => try reportKeepError(ctx, k, &index, r.c, r.rel, r.abs, err, found),
         }
         return 1;
@@ -517,16 +517,16 @@ fn pruneAside(ctx: *app.Ctx, older_than: ?u32, yes: bool, named: []const []const
             const t = e.time_ms orelse continue;
             if (now_ms - t <= @as(i64, days) * std.time.ms_per_day) continue;
         }
-        const anyway = try std.fmt.allocPrint(alloc, "holt keep --prune-aside {s}{s}", .{ try ui.shellQuote(alloc, e.stamp), if (yes or e.purge) " --yes" else "" });
+        const anyway = try alloc.print("holt keep --prune-aside {s}{s}", .{ try ui.shellQuote(alloc, e.stamp), if (yes or e.purge) " --yes" else "" });
         if (e.held) |why| if (!(is_named and why.yields())) {
             const q_stamp = try ui.shellQuote(alloc, e.stamp);
             try ctx.out.print("kept aside entry {s}: {s}\n", .{ e.stamp, switch (why) {
-                .two_machines => try std.fmt.allocPrint(alloc, "it holds one side of a path two machines kept with different content (to keep this side, run: holt keep --take-aside {s})", .{q_stamp}),
+                .two_machines => try alloc.print("it holds one side of a path two machines kept with different content (to keep this side, run: holt keep --take-aside {s})", .{q_stamp}),
                 .recent => "it has no readable manifest and may still be being written",
-                .unsettled => try std.fmt.allocPrint(alloc, "a kept path not yet settled names it (to remove it anyway, run: {s})", .{anyway}),
-                .taken => try std.fmt.allocPrint(alloc, "holt keep --take-kept set content aside into it within the last {d} days (to remove it anyway, run: {s})", .{ kept.ops.taken_days, anyway }),
+                .unsettled => try alloc.print("a kept path not yet settled names it (to remove it anyway, run: {s})", .{anyway}),
+                .taken => try alloc.print("holt keep --take-kept set content aside into it within the last {d} days (to remove it anyway, run: {s})", .{ kept.ops.taken_days, anyway }),
                 .young => try kept_hints.youngAside(alloc, anyway),
-                .partial => try std.fmt.allocPrint(alloc, "it is not here whole (its manifest is missing or unreadable, or its content does not match it or cannot be read), so it may still be arriving (to remove it anyway, run: {s})", .{anyway}),
+                .partial => try alloc.print("it is not here whole (its manifest is missing or unreadable, or its content does not match it or cannot be read), so it may still be arriving (to remove it anyway, run: {s})", .{anyway}),
             } });
             continue;
         };
@@ -546,7 +546,7 @@ fn pruneAside(ctx: *app.Ctx, older_than: ?u32, yes: bool, named: []const []const
             try ctx.out.print("  {s}  {s} {s}  {s}\n", .{ e.stamp, m.key, m.rel, try util.size(alloc, e.bytes) });
         } else try ctx.out.print("  {s}  (no manifest)  {s}\n", .{ e.stamp, try util.size(alloc, e.bytes) });
     }
-    const summary = try std.fmt.allocPrint(alloc, "{d} aside entr{s} ({s})", .{ chosen.items.len, if (chosen.items.len == 1) "y" else "ies", try util.size(alloc, total) });
+    const summary = try alloc.print("{d} aside entr{s} ({s})", .{ chosen.items.len, if (chosen.items.len == 1) "y" else "ies", try util.size(alloc, total) });
     if (!yes) {
         if (!ui.stdinIsTerminal()) {
             var again: std.ArrayList(u8) = .empty;
@@ -557,7 +557,7 @@ fn pruneAside(ctx: *app.Ctx, older_than: ?u32, yes: bool, named: []const []const
             try ctx.err.print("holt: not removing {s} without a terminal; to remove {s}, run: {s}\n", .{ summary, if (chosen.items.len == 1) "it" else "them", again.items });
             return 1;
         }
-        if (!try ui.confirm(ctx.out, try std.fmt.allocPrint(alloc, "Remove {s}?", .{summary}))) {
+        if (!try ui.confirm(ctx.out, try alloc.print("Remove {s}?", .{summary}))) {
             try ctx.out.writeAll("nothing removed\n");
             return 0;
         }
@@ -581,7 +581,7 @@ fn from(ctx: *app.Ctx, old_key: []const u8, raw: ?[]const u8) !u8 {
     var conflicts: []const []const u8 = &.{};
     var missing: []const []const u8 = &.{};
     const got = kept.ops.takeFrom(k, &index, path, old_key, .{ .conflicts = &conflicts, .missing = &missing }) catch |err| {
-        const lead = try std.fmt.allocPrint(alloc, "holt: cannot copy the kept files of {s} into {s}", .{ old_key, try util.show(ctx, path) });
+        const lead = try alloc.print("holt: cannot copy the kept files of {s} into {s}", .{ old_key, try util.show(ctx, path) });
         switch (err) {
             error.NoSuchKey => try ctx.err.print("{s}: no kept files are filed under {s}\n", .{ lead, old_key }),
             error.SameKey => try ctx.err.print("{s}: it is the clone's own key\n", .{lead}),
@@ -714,7 +714,7 @@ const Item = struct {
 /// The line an answer for every repo adds for `rel`, or empty when no
 /// pattern line can name it.
 fn everywhereFor(alloc: std.mem.Allocator, rel: []const u8, dir: bool) ![]const u8 {
-    if (std.mem.indexOfAny(u8, rel, "\n\r") != null) return "";
+    if (std.mem.findAny(u8, rel, "\n\r") != null) return "";
     return kept.patterns.everywhereLine(alloc, rel, dir);
 }
 
@@ -734,7 +734,7 @@ const Review = struct {
     listed: std.ArrayList(Listed) = .empty,
     /// The candidates of clones the review did not list, by the main
     /// working tree, once listed to count matches.
-    others: std.StringArrayHashMapUnmanaged([]const kept.patterns.Query) = .empty,
+    others: std.array_hash_map.String([]const kept.patterns.Query) = .empty,
     failed: bool = false,
     /// The clone's and its key's locks, when a deleter holds them for the
     /// review it offers (`reviewHeld`): every write goes on under them.
@@ -771,7 +771,7 @@ fn askAnswer(r: *Review, question: []const u8, allowed: []const Answer) !Answer 
             .never => "[n]ever ask again",
         });
     }
-    const msg = try std.fmt.allocPrint(a, "{s}: {s}?", .{ question, menu.items });
+    const msg = try a.print("{s}: {s}?", .{ question, menu.items });
     while (true) {
         const line = (try ui.ask(a, r.ctx.out, msg)) orelse return .quit;
         const got: ?Answer = if (eqlAny(line, &.{ "k", "keep" }))
@@ -830,7 +830,7 @@ fn review(ctx: *app.Ctx, raw_paths: []const []const u8, all: bool, yes: bool) !u
         try hubs.appendSlice(alloc, try ws.list(alloc));
     } else {
         const target = try fsutil.realPathOrSelf(alloc, try fsutil.toAbsolute(alloc, if (raw_paths.len > 0) raw_paths[0] else try util.cwdPath(alloc)));
-        r.retry = try std.fmt.allocPrint(alloc, "holt keep --review --yes {s}", .{try util.q(ctx, target)});
+        r.retry = try alloc.print("holt keep --review --yes {s}", .{try util.q(ctx, target)});
         if (try hubOf(ctx, target)) |p| {
             try hubs.append(alloc, p);
             for (p.marker.entries) |*e| {
@@ -852,7 +852,7 @@ fn review(ctx: *app.Ctx, raw_paths: []const []const u8, all: bool, yes: bool) !u
         }
     }
 
-    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+    var seen: std.array_hash_map.String(void) = .empty;
     for (clones.items) |cp| {
         const real = try fsutil.realPathOrSelf(alloc, cp);
         if (seen.contains(real)) continue;
@@ -905,7 +905,7 @@ fn review(ctx: *app.Ctx, raw_paths: []const []const u8, all: bool, yes: bool) !u
 /// answered or the user quits.
 pub fn reviewHeld(ctx: *app.Ctx, k: kept.Ctx, index: *const kept.store.KeyIndex, path: []const u8, held: ?kept.Held) anyerror!void {
     _ = index;
-    var r: Review = .{ .ctx = ctx, .k = k, .yes = false, .retry = try std.fmt.allocPrint(ctx.alloc, "holt keep --review --yes {s}", .{try util.q(ctx, path)}), .held = held };
+    var r: Review = .{ .ctx = ctx, .k = k, .yes = false, .retry = try ctx.alloc.print("holt keep --review --yes {s}", .{try util.q(ctx, path)}), .held = held };
     r.store_ok = try kept.content.entryAt(try k.layout.keptDir(ctx.alloc)) != .absent;
     try listClone(&r, path);
     for (r.items.items) |*it| {
@@ -939,7 +939,7 @@ fn untakeable(it: Item) bool {
 /// Where a `hidden` item's content is besides the working tree.
 fn heldWords(alloc: std.mem.Allocator, it: Item) ![]const u8 {
     const e = it.held_by orelse return "is hidden from git by holt's block and held nowhere else";
-    return std.fmt.allocPrint(alloc, "is hidden from git by holt's block; aside entry {s} also holds it", .{e});
+    return alloc.print("is hidden from git by holt's block; aside entry {s} also holds it", .{e});
 }
 
 /// An `unsettled` item: the path and the hint every command gives for it.
@@ -977,7 +977,7 @@ fn listClone(r: *Review, path: []const u8) !void {
         try ctx.err.print("holt: cannot list the working tree {s}: {s}\n", .{ try util.show(ctx, u.worktree), if (u.problem) |p| @tagName(p) else u.detail orelse "unknown" });
         r.failed = true;
     }
-    var plans: std.StringArrayHashMapUnmanaged(kept.reconcile.Report) = .empty;
+    var plans: std.array_hash_map.String(kept.reconcile.Report) = .empty;
     for (got.listings) |l| {
         const lc = if (std.mem.eql(u8, l.worktree, c.worktree)) c else kept.clone.inspect(alloc, l.worktree, r.k.code_root) catch |err| {
             try ctx.err.print("holt: cannot list {s}: {s}\n", .{ try util.show(ctx, l.worktree), (try util.reason(ctx, err)) orelse @errorName(err) });
@@ -1076,7 +1076,7 @@ fn listHub(r: *Review, p: project_mod.Project) !void {
         }
     }
     std.mem.sort([]const u8, names.items, {}, kept.paths.lessThan);
-    for (names.items, 0..) |n, i| queries.items[i] = .{ .path = n, .dir = try kept.content.entryAt(try std.fs.path.join(alloc, &.{ p.hub_path, n })) == .dir };
+    for (names.items, 0..) |n, i| queries.items[i] = .{ .path = n, .dir = try kept.content.entryAt(try std.Io.Dir.path.join(alloc, &.{ p.hub_path, n })) == .dir };
     const skipped = kept.patterns.hubSkipped(r.k, queries.items, null) catch |err| {
         try ctx.err.print("holt: cannot list {s}: {s}\n", .{ try util.show(ctx, p.hub_path), (try util.reason(ctx, err)) orelse @errorName(err) });
         r.failed = true;
@@ -1084,7 +1084,7 @@ fn listHub(r: *Review, p: project_mod.Project) !void {
     };
     for (names.items, queries.items, skipped) |n, qq, s| {
         if (s) continue;
-        const abs = try std.fs.path.join(alloc, &.{ p.hub_path, n });
+        const abs = try std.Io.Dir.path.join(alloc, &.{ p.hub_path, n });
         try r.items.append(alloc, .{ .kind = .hub, .root = p.hub_path, .project = p, .rel = n, .abs = abs, .dir = qq.dir, .bytes = try util.bytesAt(alloc, abs), .everywhere = try everywhereFor(alloc, n, qq.dir) });
     }
 }
@@ -1093,16 +1093,16 @@ fn listHub(r: *Review, p: project_mod.Project) !void {
 /// more than one repo share. Returns an exit code when the review ends.
 fn askGroups(r: *Review) !?u8 {
     const alloc = r.ctx.alloc;
-    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+    var seen: std.array_hash_map.String(void) = .empty;
     const items = r.items.items;
     for (items) |it| {
         if (it.kind != .repo or it.done or !it.patternable() or util.hasControl(it.abs) or seen.contains(it.everywhere)) continue;
         try seen.put(alloc, it.everywhere, {});
-        var repos: std.StringArrayHashMapUnmanaged(void) = .empty;
+        var repos: std.array_hash_map.String(void) = .empty;
         for (items) |o| if (o.kind == .repo and std.mem.eql(u8, o.everywhere, it.everywhere)) try repos.put(alloc, o.c.?.main, {});
         if (repos.count() < 2) continue;
         const others = try otherMatches(r, it.everywhere, repos.keys());
-        const question = try std.fmt.allocPrint(alloc, "{s} in {d} repos (keep everywhere also matches {d} other repo{s})", .{ it.everywhere, repos.count(), others, if (others == 1) "" else "s" });
+        const question = try alloc.print("{s} in {d} repos (keep everywhere also matches {d} other repo{s})", .{ it.everywhere, repos.count(), others, if (others == 1) "" else "s" });
         const ans = try askAnswer(r, question, try withNever(r, alloc, &.{ .keep_everywhere, .skip_everywhere, .review_each, .quit }));
         const was_first = r.first;
         r.first = false;
@@ -1138,7 +1138,7 @@ fn markSame(r: *Review, line: []const u8) void {
 
 fn never(r: *Review) !u8 {
     const ctx = r.ctx;
-    const off = try std.fs.path.join(ctx.alloc, &.{ r.k.layout.synced_root, ".holt-kept-off" });
+    const off = try std.Io.Dir.path.join(ctx.alloc, &.{ r.k.layout.synced_root, ".holt-kept-off" });
     kept.store.createExclusive(ctx.alloc, off, "Present because kept files were turned off; remove this file to be offered them again.\n") catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
@@ -1182,14 +1182,14 @@ fn askItem(r: *Review, it: *Item) !?u8 {
         return null;
     }
     var others: usize = 0;
-    const question = if (control) try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; the name holds a control character, so it can only be skipped)", .{ shown, kind, size }) else switch (it.kind) {
-        .hidden => try std.fmt.allocPrint(alloc, "{s} ({s}, {s}) {s}", .{ shown, kind, size, try heldWords(alloc, it.*) }),
+    const question = if (control) try alloc.print("{s} ({s}, {s}; the name holds a control character, so it can only be skipped)", .{ shown, kind, size }) else switch (it.kind) {
+        .hidden => try alloc.print("{s} ({s}, {s}) {s}", .{ shown, kind, size, try heldWords(alloc, it.*) }),
         .repo => if (it.patternable()) blk: {
             others = try otherMatches(r, it.everywhere, mains);
-            break :blk try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; keep everywhere also matches {d} other repo{s})", .{ shown, kind, size, others, if (others == 1) "" else "s" });
-        } else try std.fmt.allocPrint(alloc, "{s} ({s}, {s})", .{ shown, kind, size }),
-        .unlinked => try std.fmt.allocPrint(alloc, "{s} ({s}, {s}; {s}, so it cannot be kept)", .{ shown, kind, size, kept.paths.Invalid.git_reads_unlinked.describe() }),
-        else => try std.fmt.allocPrint(alloc, "{s} ({s}, {s})", .{ shown, kind, size }),
+            break :blk try alloc.print("{s} ({s}, {s}; keep everywhere also matches {d} other repo{s})", .{ shown, kind, size, others, if (others == 1) "" else "s" });
+        } else try alloc.print("{s} ({s}, {s})", .{ shown, kind, size }),
+        .unlinked => try alloc.print("{s} ({s}, {s}; {s}, so it cannot be kept)", .{ shown, kind, size, kept.paths.Invalid.git_reads_unlinked.describe() }),
+        else => try alloc.print("{s} ({s}, {s})", .{ shown, kind, size }),
     };
     const choices: []const Answer = if (control) &.{ .skip, .quit } else switch (it.kind) {
         .repo => if (it.patternable()) &.{ .keep, .keep_everywhere, .skip, .skip_everywhere, .quit } else &.{ .keep, .quit },
@@ -1274,7 +1274,7 @@ fn addEverywhere(r: *Review, l: kept.patterns.List, line: []const u8, others: us
 fn otherMatches(r: *Review, line: []const u8, except: []const []const u8) !usize {
     const alloc = r.ctx.alloc;
     const ws = r.ctx.context.?.ws;
-    var listed: std.StringArrayHashMapUnmanaged(std.ArrayList(kept.patterns.Query)) = .empty;
+    var listed: std.array_hash_map.String(std.ArrayList(kept.patterns.Query)) = .empty;
     for (r.listed.items) |l| {
         const gop = try listed.getOrPut(alloc, l.main);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
@@ -1331,12 +1331,12 @@ const Fx = struct {
 
     fn write(f: *Fx, rel: []const u8, data: []const u8) !void {
         const p = try f.path(rel);
-        try fsutil.ensureDir(std.fs.path.dirname(p).?);
+        try fsutil.ensureDir(std.Io.Dir.path.dirname(p).?);
         try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = p, .data = data });
     }
 
     fn keptPath(f: *Fx, rel: []const u8) ![]const u8 {
-        return fsutil.joinSlashy(f.a(), try std.fs.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", "github.com", "acme", "widget" }), rel);
+        return fsutil.joinSlashy(f.a(), try std.Io.Dir.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", "github.com", "acme", "widget" }), rel);
     }
 
     fn linked(f: *Fx, rel: []const u8) !bool {
@@ -1371,7 +1371,7 @@ fn fixture(f: *Fx) !void {
     f.ws = try testutil.testWorkspace(a, root);
     try fsutil.ensureDir(f.ws.cfg.synced_root);
     f.env = try testutil.EnvScope.install(a, &.{
-        .{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ root, "state" }) },
+        .{ "XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ root, "state" }) },
         .{ "HOME", root },
         .{ "USERPROFILE", root },
     });
@@ -1390,7 +1390,7 @@ fn fixture(f: *Fx) !void {
 }
 
 fn contains(hay: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, hay, needle) != null;
+    return std.mem.find(u8, hay, needle) != null;
 }
 
 fn expectContains(hay: []const u8, needle: []const u8) !void {
@@ -1410,7 +1410,7 @@ test "keep: a repo file is kept and linked, creating the kept store; again it is
     try expectContains(got.out, "created the kept store");
     try expectContains(got.out, "kept ");
     try testing.expect(try f.linked(".env"));
-    try testing.expect(fsutil.exists(try std.fs.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", ".holt-skip" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", ".holt-skip" })));
 
     const again = try f.run(&.{".env"});
     try testing.expectEqual(@as(u8, 0), again.code);
@@ -1449,7 +1449,7 @@ test "keep: refuses a tracked file, and a directory with a tracked file names th
     const dir = try f.run(&.{"cfg"});
     try testing.expectEqual(@as(u8, 1), dir.code);
     try expectContains(dir.err, "name the untracked files instead");
-    try expectContains(dir.err, try std.fmt.allocPrint(f.a(), "holt keep {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path("cfg/local.txt"))}));
+    try expectContains(dir.err, try f.a().print("holt keep {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path("cfg/local.txt"))}));
     try testing.expectEqual(kept.content.Entry.dir, try kept.content.entryAt(try f.path("cfg")));
 }
 
@@ -1461,15 +1461,15 @@ test "keep: refuses a path a .gitignore negation un-ignores, naming the line; on
     try f.write("sub/.gitignore", "!secret.local\n");
     try f.write("sub/secret.local", "s");
     try f.write("mine.local", "m");
-    const exclude = try std.fs.path.join(a, &.{ f.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "info", "exclude" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = "!mine.local\n" });
 
     const abs = try f.path("sub/secret.local");
     const qp = try ui.quotePath(a, app.envOf_current(), abs);
     const refused = try f.run(&.{"sub/secret.local"});
     try testing.expectEqual(@as(u8, 1), refused.code);
-    const line = try std.fmt.allocPrint(a, "{s}:1:!secret.local", .{try fsutil.contractTilde(a, app.envOf_current(), try f.path("sub/.gitignore"))});
-    try expectContains(refused.err, try std.fmt.allocPrint(a, "holt: cannot keep {s}: {s} un-ignores it, and holt's block cannot hide it from git past that line; remove or narrow the line, then keep it (run: holt keep {s})\n", .{ try fsutil.contractTilde(a, app.envOf_current(), abs), line, qp }));
+    const line = try a.print("{s}:1:!secret.local", .{try fsutil.contractTilde(a, app.envOf_current(), try f.path("sub/.gitignore"))});
+    try expectContains(refused.err, try a.print("holt: cannot keep {s}: {s} un-ignores it, and holt's block cannot hide it from git past that line; remove or narrow the line, then keep it (run: holt keep {s})\n", .{ try fsutil.contractTilde(a, app.envOf_current(), abs), line, qp }));
     try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(abs));
 
     try testing.expectEqual(@as(u8, 0), (try f.run(&.{"mine.local"})).code);
@@ -1527,17 +1527,17 @@ test "keep: refuses a file git reads only as a regular file, writing no block li
     const a = f.a();
     try f.write(".env", "x");
     try testing.expectEqual(@as(u8, 0), (try f.run(&.{".env"})).code);
-    const exclude = try std.fs.path.join(a, &.{ f.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(a, &.{ f.clone, ".git", "info", "exclude" });
     const before = try kept.content.readSmall(a, exclude);
     try f.write("sub/.gitignore", "*.tmp\n");
 
     const abs = try f.path("sub/.gitignore");
     const got = try f.run(&.{"sub/.gitignore"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try expectContains(got.err, try std.fmt.allocPrint(a, "holt: cannot keep {s}: git reads it only as a regular file, never through a link\n", .{try fsutil.contractTilde(a, app.envOf_current(), abs)}));
+    try expectContains(got.err, try a.print("holt: cannot keep {s}: git reads it only as a regular file, never through a link\n", .{try fsutil.contractTilde(a, app.envOf_current(), abs)}));
     try testing.expect(!contains(got.err, "unkeep"));
     try testing.expectEqualStrings(before, try kept.content.readSmall(a, exclude));
-    try testing.expectEqual(@as(usize, 0), (try kept.clone.readPending(a, try std.fs.path.join(a, &.{ f.clone, ".git" }))).len);
+    try testing.expectEqual(@as(usize, 0), (try kept.clone.readPending(a, try std.Io.Dir.path.join(a, &.{ f.clone, ".git" }))).len);
     const ks = try kept.store.loadKeyState(a, .{ .synced_root = f.ws.cfg.synced_root }, "github.com/acme/widget");
     try testing.expectEqual(@as(usize, 0), ks.factsFor("sub/.gitignore").len);
     try testing.expectEqual(kept.content.Entry.file, try kept.content.entryAt(abs));
@@ -1547,7 +1547,7 @@ test "keep: refuses a file git reads only as a regular file, writing no block li
     try kept.content.createLink(try f.path("real/.mailmap"), link_abs, .file);
     const linked = try f.run(&.{".mailmap"});
     try testing.expectEqual(@as(u8, 1), linked.code);
-    try expectContains(linked.err, try std.fmt.allocPrint(a, "holt: cannot keep {s}: git reads it only as a regular file, never through a link (if an older holt kept it, run: holt unkeep {s})\n", .{ try fsutil.contractTilde(a, app.envOf_current(), link_abs), try ui.quotePath(a, app.envOf_current(), link_abs) }));
+    try expectContains(linked.err, try a.print("holt: cannot keep {s}: git reads it only as a regular file, never through a link (if an older holt kept it, run: holt unkeep {s})\n", .{ try fsutil.contractTilde(a, app.envOf_current(), link_abs), try ui.quotePath(a, app.envOf_current(), link_abs) }));
     try testing.expectEqualStrings(before, try kept.content.readSmall(a, exclude));
 }
 
@@ -1560,7 +1560,7 @@ test "keep --take-kept and --take-local: refuse a file git reads only as a regul
     try testing.expectEqual(@as(u8, 0), (try f.run(&.{".env"})).code);
     const k = try keptCtxOf(&f);
     const kp = try f.keptPath("a/.gitignore");
-    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(kp).?);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = kp, .data = "*.tmp\n" });
     const h = try kept.content.hashPath(a, kp);
     try kept.store.writeFact(a, k.layout, "github.com/acme/widget", k.machine_id, "a/.gitignore", .file, &h.hex);
@@ -1588,7 +1588,7 @@ test "keep: more than 10 MiB asks on a terminal, refuses without one, and --yes 
     ui.stdin_terminal_for_test = false;
     const no_tty = try f.run(&.{"big.bin"});
     try testing.expectEqual(@as(u8, 1), no_tty.code);
-    try expectContains(no_tty.err, try std.fmt.allocPrint(a, "more than 10 MiB; to keep it, run: holt keep --yes {s}", .{try ui.quotePath(a, app.envOf_current(), try f.path("big.bin"))}));
+    try expectContains(no_tty.err, try a.print("more than 10 MiB; to keep it, run: holt keep --yes {s}", .{try ui.quotePath(a, app.envOf_current(), try f.path("big.bin"))}));
     try testing.expect(!try f.linked("big.bin"));
 
     ui.stdin_terminal_for_test = true;
@@ -1622,8 +1622,8 @@ test "keep: the first store asks when the synced root holds projects, refuses wi
     const refused = try f.run(&.{".env"});
     try testing.expectEqual(@as(u8, 1), refused.code);
     try expectContains(refused.err, "no kept/ found");
-    try expectContains(refused.err, try std.fmt.allocPrint(f.a(), "to create a new kept store, run: holt keep --yes {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path(".env"))}));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept" })));
+    try expectContains(refused.err, try f.a().print("to create a new kept store, run: holt keep --yes {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path(".env"))}));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept" })));
 
     ui.stdin_terminal_for_test = true;
     ui.stdin_for_test = "n\n";
@@ -1648,7 +1648,7 @@ test "keep: a kept copy with different content names the take commands with the 
     const got = try f.run(&.{".env"});
     try testing.expectEqual(@as(u8, 1), got.code);
     const qp = try ui.quotePath(f.a(), app.envOf_current(), try f.path(".env"));
-    try expectContains(got.err, try std.fmt.allocPrint(f.a(), "holt keep --take-local {s}, or holt keep --take-kept {s}", .{ qp, qp }));
+    try expectContains(got.err, try f.a().print("holt keep --take-local {s}, or holt keep --take-kept {s}", .{ qp, qp }));
     if (ui.native_shell == .posix) try testing.expect(std.mem.startsWith(u8, qp, "~/"));
 }
 
@@ -1656,7 +1656,7 @@ test "keep: outside any clone or hub root is refused with the reason" {
     var f: Fx = undefined;
     try fixture(&f);
     defer f.deinit();
-    const elsewhere = try std.fs.path.join(f.a(), &.{ f.sb.root, "synced", "loose.txt" });
+    const elsewhere = try std.Io.Dir.path.join(f.a(), &.{ f.sb.root, "synced", "loose.txt" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = elsewhere, .data = "x" });
     const got = try f.run(&.{elsewhere});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -1669,15 +1669,15 @@ test "keep: a clone outside code_root is refused with the adopt hint" {
     try fixture(&f);
     defer f.deinit();
     const a = f.a();
-    const outside = try std.fs.path.join(a, &.{ f.sb.root, "loose-clone" });
+    const outside = try std.Io.Dir.path.join(a, &.{ f.sb.root, "loose-clone" });
     try fsutil.ensureDir(outside);
     try testutil.runGit(&f.sb, outside, &.{ "init", "-q" });
-    const file = try std.fs.path.join(a, &.{ outside, "x.env" });
+    const file = try std.Io.Dir.path.join(a, &.{ outside, "x.env" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = file, .data = "x" });
     const got = try f.run(&.{file});
     try testing.expectEqual(@as(u8, 1), got.code);
     try expectContains(got.err, "is not under code_root");
-    try expectContains(got.err, try std.fmt.allocPrint(a, "holt repo adopt {s}", .{try ui.quotePath(a, app.envOf_current(), try fsutil.realPathOrSelf(a, outside))}));
+    try expectContains(got.err, try a.print("holt repo adopt {s}", .{try ui.quotePath(a, app.envOf_current(), try fsutil.realPathOrSelf(a, outside))}));
 }
 
 test "keep: a path in a linked worktree keeps under the clone's key" {
@@ -1685,9 +1685,9 @@ test "keep: a path in a linked worktree keeps under the clone's key" {
     try fixture(&f);
     defer f.deinit();
     const a = f.a();
-    const wt = try std.fs.path.join(a, &.{ f.ws.cfg.code_root, "github.com", "acme", "widget@worktrees", "side" });
+    const wt = try std.Io.Dir.path.join(a, &.{ f.ws.cfg.code_root, "github.com", "acme", "widget@worktrees", "side" });
     try testutil.runGit(&f.sb, f.clone, &.{ "worktree", "add", "-q", wt, "-b", "side" });
-    const file = try std.fs.path.join(a, &.{ wt, ".env" });
+    const file = try std.Io.Dir.path.join(a, &.{ wt, ".env" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = file, .data = "wt" });
     const got = try f.run(&.{file});
     try testing.expectEqual(@as(u8, 0), got.code);
@@ -1723,7 +1723,7 @@ test "keep --take-local and --take-kept: settle a path whose local copy differs;
     try f.write("new.local", "n");
     const not = try f.run(&.{ "--take-local", "new.local" });
     try testing.expectEqual(@as(u8, 1), not.code);
-    try expectContains(not.err, try std.fmt.allocPrint(f.a(), "it is not kept (run: holt keep {s})", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path("new.local"))}));
+    try expectContains(not.err, try f.a().print("it is not kept (run: holt keep {s})", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path("new.local"))}));
     const bad = try f.run(&.{ "--take-local", ".env", "other" });
     try testing.expectEqual(@as(u8, 2), bad.code);
 }
@@ -1756,7 +1756,7 @@ fn keptCtxOf(f: *Fx) !kept.Ctx {
 }
 
 fn writeTmp(f: *Fx, data: []const u8) ![]const u8 {
-    const p = try std.fs.path.join(f.a(), &.{ f.sb.root, "probe" });
+    const p = try std.Io.Dir.path.join(f.a(), &.{ f.sb.root, "probe" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = p, .data = data });
     return p;
 }
@@ -1778,7 +1778,7 @@ test "keep --prune-aside: spares an entry an unsettled kept path names, and one 
 
     const spared = try f.run(&.{ "--prune-aside", "--yes" });
     try testing.expectEqual(@as(u8, 0), spared.code);
-    try expectContains(spared.out, try std.fmt.allocPrint(a, "kept aside entry {s}: a kept path not yet settled names it (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ held, held }));
+    try expectContains(spared.out, try a.print("kept aside entry {s}: a kept path not yet settled names it (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ held, held }));
     try testing.expect(try kept.aside.readManifest(a, k.layout, held) != null);
 
     try testing.expectEqual(@as(u8, 0), (try f.run(&.{ "--take-kept", ".env" })).code);
@@ -1789,7 +1789,7 @@ test "keep --prune-aside: spares an entry an unsettled kept path names, and one 
         taken = e.stamp;
     };
     const again = try f.run(&.{ "--prune-aside", "--yes" });
-    try expectContains(again.out, try std.fmt.allocPrint(a, "kept aside entry {s}: holt keep --take-kept set content aside into it within the last 30 days", .{taken.?}));
+    try expectContains(again.out, try a.print("kept aside entry {s}: holt keep --take-kept set content aside into it within the last 30 days", .{taken.?}));
     try testing.expect(try kept.aside.readManifest(a, k.layout, taken.?) != null);
 
     const named = try f.run(&.{ "--prune-aside", taken.?, "--yes" });
@@ -1804,7 +1804,7 @@ test "keep --prune-aside: spares entries less than 30 days old unless named; lis
     defer f.deinit();
     try f.write(".env", "x");
     _ = try f.run(&.{".env"});
-    const aside_dir = try std.fs.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", ".holt-aside" });
+    const aside_dir = try std.Io.Dir.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", ".holt-aside" });
 
     const old = try f.run(&.{ "--prune-aside", "--older-than", "1" });
     try testing.expectEqual(@as(u8, 0), old.code);
@@ -1839,7 +1839,7 @@ test "keep --prune-aside: spares entries less than 30 days old unless named; lis
 
 /// The name of the one aside entry of `f`'s store.
 fn onlyEntry(f: *Fx) ![]const u8 {
-    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), try std.fs.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", ".holt-aside" }), .{ .iterate = true });
+    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), try std.Io.Dir.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept", ".holt-aside" }), .{ .iterate = true });
     defer d.close(fsutil.io());
     var it = d.iterate();
     const e = (try it.next(fsutil.io())) orelse return error.TestUnexpectedResult;
@@ -1856,13 +1856,13 @@ test "keep --prune-aside: without names, an old entry not here whole is spared, 
     try f.write(".env", "x");
     _ = try f.run(&.{".env"});
     const k = try keptCtxOf(&f);
-    try std.Io.Dir.cwd().deleteTree(fsutil.io(), try std.fs.path.join(a, &.{ try k.layout.asideDir(a), try onlyEntry(&f), "data" }));
+    try std.Io.Dir.cwd().deleteTree(fsutil.io(), try std.Io.Dir.path.join(a, &.{ try k.layout.asideDir(a), try onlyEntry(&f), "data" }));
     try testutil.ageAsideEntries(a, f.ws.cfg.synced_root);
     const stamp = try onlyEntry(&f);
 
     const spared = try f.run(&.{ "--prune-aside", "--yes" });
     try testing.expectEqual(@as(u8, 0), spared.code);
-    try expectContains(spared.out, try std.fmt.allocPrint(a, "kept aside entry {s}: it is not here whole (its manifest is missing or unreadable, or its content does not match it or cannot be read), so it may still be arriving (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ stamp, stamp }));
+    try expectContains(spared.out, try a.print("kept aside entry {s}: it is not here whole (its manifest is missing or unreadable, or its content does not match it or cannot be read), so it may still be arriving (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ stamp, stamp }));
     try expectContains(spared.out, "no aside entries to remove");
     try testing.expect(try kept.aside.readManifest(a, k.layout, stamp) != null);
 
@@ -1886,7 +1886,7 @@ test "keep --prune-aside: a named entry a purge names needs --yes, even on a ter
     ui.stdin_terminal_for_test = true;
     ui.stdin_for_test = "y\n";
     const refused = try f.run(&.{ "--prune-aside", stamp });
-    try expectContains(refused.out, try std.fmt.allocPrint(a, "kept aside entry {s}: a purge set it aside, and another machine may still restore from it (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ stamp, stamp }));
+    try expectContains(refused.out, try a.print("kept aside entry {s}: a purge set it aside, and another machine may still restore from it (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ stamp, stamp }));
     try testing.expect(try kept.aside.readManifest(a, k.layout, stamp) != null);
 
     const named = try f.run(&.{ "--prune-aside", stamp, "--yes" });
@@ -1910,10 +1910,10 @@ test "keep --prune-aside: the remove-anyway hint for an entry a purge names carr
     const spared = try f.run(&.{"--prune-aside"});
     try testing.expectEqual(@as(u8, 0), spared.code);
     const lead = "(to remove it anyway, run: ";
-    const at = std.mem.indexOf(u8, spared.out, lead) orelse return error.TestUnexpectedResult;
+    const at = std.mem.find(u8, spared.out, lead) orelse return error.TestUnexpectedResult;
     const rest = spared.out[at + lead.len ..];
-    const hint = rest[0..std.mem.indexOf(u8, rest, ")\n").?];
-    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "holt keep --prune-aside {s} --yes", .{stamp}), hint);
+    const hint = rest[0..std.mem.find(u8, rest, ")\n").?];
+    try testing.expectEqualStrings(try a.print("holt keep --prune-aside {s} --yes", .{stamp}), hint);
     var args = std.mem.tokenizeScalar(u8, hint["holt keep ".len..], ' ');
     var argv: std.ArrayList([]const u8) = .empty;
     while (args.next()) |x| try argv.append(a, x);
@@ -1931,16 +1931,16 @@ test "keep --prune-aside: a named entry whose own manifest says a purge set it a
     _ = try f.run(&.{".env"});
     const stamp = try onlyEntry(&f);
     const k = try keptCtxOf(&f);
-    const manifest = try std.fs.path.join(a, &.{ try k.layout.asideDir(a), stamp, "manifest" });
+    const manifest = try std.Io.Dir.path.join(a, &.{ try k.layout.asideDir(a), stamp, "manifest" });
     const text = try kept.content.readSmall(a, manifest);
     const reason = (try kept.aside.readManifest(a, k.layout, stamp)).?.reason;
-    const was = try std.fmt.allocPrint(a, "\"reason\": \"{s}\"", .{reason});
-    try testing.expect(std.mem.indexOf(u8, text, was) != null);
+    const was = try a.print("\"reason\": \"{s}\"", .{reason});
+    try testing.expect(std.mem.find(u8, text, was) != null);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = manifest, .data = try std.mem.replaceOwned(u8, a, text, was, "\"reason\": \"purged\"") });
     try testing.expectEqualStrings("purged", (try kept.aside.readManifest(a, k.layout, stamp)).?.reason);
 
     const refused = try f.run(&.{ "--prune-aside", stamp });
-    try expectContains(refused.out, try std.fmt.allocPrint(a, "kept aside entry {s}: a purge set it aside, and another machine may still restore from it (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ stamp, stamp }));
+    try expectContains(refused.out, try a.print("kept aside entry {s}: a purge set it aside, and another machine may still restore from it (to remove it anyway, run: holt keep --prune-aside {s} --yes)\n", .{ stamp, stamp }));
     try testing.expect(try kept.aside.readManifest(a, k.layout, stamp) != null);
 
     const named = try f.run(&.{ "--prune-aside", stamp, "--yes" });
@@ -1959,7 +1959,7 @@ test "keep --prune-aside and doctor: an old aside entry whose data cannot be rea
     const k = try keptCtxOf(&f);
     try testutil.ageAsideEntries(a, f.ws.cfg.synced_root);
     const stamp = try onlyEntry(&f);
-    const data = try std.fs.path.join(a, &.{ try k.layout.asideDir(a), stamp, "data" });
+    const data = try std.Io.Dir.path.join(a, &.{ try k.layout.asideDir(a), stamp, "data" });
     const proc = @import("../proc.zig");
     const rc = try proc.runEnv(a, &.{ "/bin/sh", "-c", "/usr/bin/find \"$0\" -type f -exec /bin/chmod 000 {} +", data }, null, null);
     try testing.expectEqual(@as(u8, 0), rc.status);
@@ -1969,7 +1969,7 @@ test "keep --prune-aside and doctor: an old aside entry whose data cannot be rea
 
     const pruned = try f.run(&.{ "--prune-aside", "--yes" });
     try testing.expectEqual(@as(u8, 0), pruned.code);
-    try expectContains(pruned.out, try std.fmt.allocPrint(a, "kept aside entry {s}: it is not here whole", .{stamp}));
+    try expectContains(pruned.out, try a.print("kept aside entry {s}: it is not here whole", .{stamp}));
     _ = try testutil.runCmd(a, @import("doctor.zig").command.run, f.ws, &.{});
     try testing.expect(try kept.aside.readManifest(a, k.layout, stamp) != null);
 }
@@ -1983,7 +1983,7 @@ test "keep --from: copies a left-behind key's kept files and names unkeep --repo
     try fsutil.ensureDir(try k.layout.keptDir(a));
     const old = "github.com/old/widget";
     const root = (try kept.clone.defaultRoot(a, f.clone)).?;
-    try kept.store.createExclusive(a, try k.layout.reserved(a, old, kept.store.record_basename), try std.fmt.allocPrint(a, "{{\"version\": 1, \"root\": \"{s}\"}}", .{root}));
+    try kept.store.createExclusive(a, try k.layout.reserved(a, old, kept.store.record_basename), try a.print("{{\"version\": 1, \"root\": \"{s}\"}}", .{root}));
     const copy = try k.layout.copyPath(a, old, ".env");
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = copy, .data = "old" });
     const h = try kept.content.hashPath(a, copy);
@@ -2010,9 +2010,9 @@ test "keep --review without a terminal lists each candidate with its command and
     ui.stdin_terminal_for_test = false;
     const got = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try expectContains(got.out, try std.fmt.allocPrint(f.a(), "run: holt keep {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path(".env"))}));
+    try expectContains(got.out, try f.a().print("run: holt keep {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path(".env"))}));
     try expectContains(got.out, "2 files not kept");
-    try testing.expect(!fsutil.exists(try std.fs.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept" })));
 }
 
 test "keep --review without a terminal names keep --yes while kept/ is absent in a synced folder holding projects, and that keep settles it" {
@@ -2026,7 +2026,7 @@ test "keep --review without a terminal names keep --yes while kept/ is absent in
     const got = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 1), got.code);
     const p = try ui.quotePath(a, app.envOf_current(), try f.path(".env"));
-    try expectContains(got.out, try std.fmt.allocPrint(a, " - run: holt keep --yes {s}\n", .{p}));
+    try expectContains(got.out, try a.print(" - run: holt keep --yes {s}\n", .{p}));
     const kept_ = try f.run(&.{ "--yes", try f.path(".env") });
     try testing.expectEqual(@as(u8, 0), kept_.code);
     try testing.expect(try f.linked(".env"));
@@ -2042,7 +2042,7 @@ test "keep --review without a terminal shows a name holding a control character 
     ui.stdin_terminal_for_test = false;
     const got = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOfScalar(u8, got.out, 0x1b) == null);
+    try testing.expect(std.mem.findScalar(u8, got.out, 0x1b) == null);
     try expectContains(got.out, "a\\x1b[2Jb.local (1 B): the name holds a control character: rename it, or skip it (holt keep --review)\n");
     try testing.expect(!contains(got.out, "run: holt keep"));
 }
@@ -2063,7 +2063,7 @@ test "keep --review on a terminal offers only skip for a name holding a control 
     try testing.expect(!contains(got.out, "keep [e]verywhere"));
     try testing.expect(!contains(got.err, "cannot keep"));
     try expectContains(got.out, "added '/a\\x01b.local' to ");
-    try testing.expect(std.mem.indexOfScalar(u8, got.out, 0x01) == null);
+    try testing.expect(std.mem.findScalar(u8, got.out, 0x01) == null);
     try testing.expectEqualStrings("/a\x01b.local\n/c\x01d.local\n", try kept.patterns.repoSkipText(f.a(), .{ .synced_root = f.ws.cfg.synced_root }, "github.com/acme/widget", null));
     try expectContains((try f.run(&.{"--review"})).out, "nothing to review");
 }
@@ -2114,7 +2114,7 @@ test "keep --review: keep everywhere adds an auto pattern, skip everywhere a ski
     ui.stdin_for_test = "n\n";
     const off = try f.run(&.{"--review"});
     try expectContains(off.out, "kept files turned off");
-    try testing.expect(fsutil.exists(try std.fs.path.join(a, &.{ f.ws.cfg.synced_root, ".holt-kept-off" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(a, &.{ f.ws.cfg.synced_root, ".holt-kept-off" })));
 }
 
 test "keep --review: never ask again is accepted as the prompt spells it" {
@@ -2128,7 +2128,7 @@ test "keep --review: never ask again is accepted as the prompt spells it" {
     const got = try f.run(&.{"--review"});
     try expectContains(got.out, "[n]ever ask again?");
     try expectContains(got.out, "kept files turned off");
-    try testing.expect(fsutil.exists(try std.fs.path.join(a, &.{ f.ws.cfg.synced_root, ".holt-kept-off" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(a, &.{ f.ws.cfg.synced_root, ".holt-kept-off" })));
 }
 
 test "keep --review --all groups a pattern shared by repos; a hub root's entries are offered" {
@@ -2144,10 +2144,10 @@ test "keep --review --all groups a pattern shared by repos; a hub root's entries
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(a, other, ".env"), .data = "g" });
     try f.write(".env", "w");
     try testutil.writeMarker(a, try f.ws.projectsRoot(a), "acme", "proj", .empty, .empty);
-    const hub = try std.fs.path.join(a, &.{ f.ws.cfg.hub_root, "acme", "proj" });
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ f.ws.cfg.synced_root, "projects", "acme", "proj" }));
+    const hub = try std.Io.Dir.path.join(a, &.{ f.ws.cfg.hub_root, "acme", "proj" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ f.ws.cfg.synced_root, "projects", "acme", "proj" }));
     try fsutil.ensureDir(hub);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ hub, "notes.md" }), .data = "n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ hub, "notes.md" }), .data = "n" });
 
     ui.stdin_terminal_for_test = true;
     ui.stdin_for_test = "e\ny\nk\n";
@@ -2156,7 +2156,7 @@ test "keep --review --all groups a pattern shared by repos; a hub root's entries
     try expectContains(got.out, ".env in 2 repos (keep everywhere also matches 0 other repos): keep [e]verywhere, skip e[v]erywhere, [r]eview each, [q]uit, [n]ever ask again?");
     try testing.expect(try f.linked(".env"));
     try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try fsutil.joinSlashy(a, other, ".env")));
-    try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try std.fs.path.join(a, &.{ hub, "notes.md" })));
+    try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ hub, "notes.md" })));
 }
 
 test "keep --review: a file git reads only as a regular file is offered skip, skip everywhere, and quit, saying why, and --all groups it nowhere" {
@@ -2176,14 +2176,14 @@ test "keep --review: a file git reads only as a regular file is offered skip, sk
     ui.stdin_terminal_for_test = false;
     const listed = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 1), listed.code);
-    try expectContains(listed.out, try std.fmt.allocPrint(a, "not kept: {s} (1 B), which git reads only as a regular file, can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), try f.path(".gitattributes")), try ui.quotePath(a, app.envOf_current(), f.clone) }));
+    try expectContains(listed.out, try a.print("not kept: {s} (1 B), which git reads only as a regular file, can only be skipped - in a terminal, run: holt keep --review {s}\n", .{ try fsutil.contractTilde(a, app.envOf_current(), try f.path(".gitattributes")), try ui.quotePath(a, app.envOf_current(), f.clone) }));
 
     ui.stdin_terminal_for_test = true;
     ui.stdin_for_test = "v\n";
     const got = try f.run(&.{ "--review", "--all" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(!contains(got.out, "in 2 repos"));
-    try expectContains(got.out, std.fs.path.sep_str ++ ".gitattributes (file, 1 B; git reads it only as a regular file, never through a link, so it cannot be kept): [s]kip, skip e[v]erywhere, [q]uit?");
+    try expectContains(got.out, std.Io.Dir.path.sep_str ++ ".gitattributes (file, 1 B; git reads it only as a regular file, never through a link, so it cannot be kept): [s]kip, skip e[v]erywhere, [q]uit?");
     try testing.expect(!contains(got.out, "[k]eep"));
     try testing.expect(!contains(got.out, "[n]ever"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "[s]kip"));
@@ -2197,15 +2197,15 @@ test "keep --review: a candidate in a linked worktree is kept from that working 
     try fixture(&f);
     defer f.deinit();
     const a = f.a();
-    const wt = try std.fs.path.join(a, &.{ f.ws.cfg.code_root, "github.com", "acme", "widget@worktrees", "side" });
+    const wt = try std.Io.Dir.path.join(a, &.{ f.ws.cfg.code_root, "github.com", "acme", "widget@worktrees", "side" });
     try testutil.runGit(&f.sb, f.clone, &.{ "worktree", "add", "-q", wt, "-b", "side" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ wt, ".env" }), .data = "from the linked tree" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ wt, ".env" }), .data = "from the linked tree" });
     ui.stdin_terminal_for_test = true;
     ui.stdin_for_test = "k\n";
     const got = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings("from the linked tree", try kept.content.readSmall(a, try f.keptPath(".env")));
-    try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try std.fs.path.join(a, &.{ wt, ".env" })));
+    try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ wt, ".env" })));
     try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try f.path(".env")));
 }
 
@@ -2215,17 +2215,17 @@ test "keep: hub mode moves a loose hub file into content and leaves a symlink; a
     defer f.deinit();
     const a = f.a();
     try testutil.writeMarker(a, try f.ws.projectsRoot(a), "acme", "proj", .empty, .empty);
-    const content = try std.fs.path.join(a, &.{ f.ws.cfg.synced_root, "projects", "acme", "proj" });
-    const hub = try std.fs.path.join(a, &.{ f.ws.cfg.hub_root, "acme", "proj" });
+    const content = try std.Io.Dir.path.join(a, &.{ f.ws.cfg.synced_root, "projects", "acme", "proj" });
+    const hub = try std.Io.Dir.path.join(a, &.{ f.ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub);
-    const loose = try std.fs.path.join(a, &.{ hub, "notes.md" });
+    const loose = try std.Io.Dir.path.join(a, &.{ hub, "notes.md" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = loose, .data = "hello\n" });
     try std.process.setCurrentPath(fsutil.io(), hub);
 
     const got = try f.run(&.{"notes.md"});
     try testing.expectEqual(@as(u8, 0), got.code);
     switch (try fsutil.linkState(a, loose)) {
-        .symlink => |t| try testing.expectEqualStrings(try std.fs.path.join(a, &.{ content, "notes.md" }), t),
+        .symlink => |t| try testing.expectEqualStrings(try std.Io.Dir.path.join(a, &.{ content, "notes.md" }), t),
         else => return error.TestUnexpectedResult,
     }
     const again = try f.run(&.{"notes.md"});
@@ -2239,22 +2239,22 @@ test "keep: hub mode moves a loose hub file into content and leaves a symlink; a
     try testing.expectEqual(@as(u8, 1), missing.code);
     try expectContains(missing.err, "no such entry");
 
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ content, "dup.md" }), .data = "existing\n" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ hub, "dup.md" }), .data = "loose\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ content, "dup.md" }), .data = "existing\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ hub, "dup.md" }), .data = "loose\n" });
     const dup = try f.run(&.{"dup.md"});
     try testing.expectEqual(@as(u8, 1), dup.code);
     try expectContains(dup.err, "already has");
 
-    const assets = try std.fs.path.join(a, &.{ hub, "assets" });
+    const assets = try std.Io.Dir.path.join(a, &.{ hub, "assets" });
     try fsutil.ensureDir(assets);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ assets, "logo.png" }), .data = "b" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ assets, "logo.png" }), .data = "b" });
     const dir = try f.run(&.{"assets"});
     try testing.expectEqual(@as(u8, 0), dir.code);
-    try testing.expect(fsutil.exists(try std.fs.path.join(a, &.{ content, "assets", "logo.png" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(a, &.{ content, "assets", "logo.png" })));
 
-    const deeper = try std.fs.path.join(a, &.{ hub, "sub" });
+    const deeper = try std.Io.Dir.path.join(a, &.{ hub, "sub" });
     try fsutil.ensureDir(deeper);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ deeper, "x" }), .data = "x" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ deeper, "x" }), .data = "x" });
     const deep = try f.run(&.{"sub/x"});
     try testing.expectEqual(@as(u8, 1), deep.code);
     try expectContains(deep.err, "directly at the project's hub root");
@@ -2284,8 +2284,8 @@ test "keep: a file inside a kept directory whose link is gone here is not alread
     try testing.expectEqual(@as(u8, 1), got.code);
     const qd = try ui.quotePath(f.a(), app.envOf_current(), try f.path("notes"));
     try expectContains(got.err, "which is not linked here");
-    try expectContains(got.err, try std.fmt.allocPrint(f.a(), "holt keep --take-local {s}", .{qd}));
-    try expectContains(got.err, try std.fmt.allocPrint(f.a(), "holt keep --take-kept {s}", .{qd}));
+    try expectContains(got.err, try f.a().print("holt keep --take-local {s}", .{qd}));
+    try expectContains(got.err, try f.a().print("holt keep --take-kept {s}", .{qd}));
     try testing.expect(!contains(got.out, "already kept"));
     try testing.expectEqualStrings("only here", try kept.content.readSmall(f.a(), try f.path("notes/new.md")));
 }
@@ -2303,8 +2303,8 @@ test "keep --review: content the block hides at a kept path is offered only the 
     ui.stdin_terminal_for_test = false;
     const listed = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 1), listed.code);
-    try expectContains(listed.out, try std.fmt.allocPrint(f.a(), "run: holt keep --take-local {s}, or holt keep --take-kept {s}", .{ qp, qp }));
-    try testing.expect(!contains(listed.out, try std.fmt.allocPrint(f.a(), "run: holt keep {s}\n", .{qp})));
+    try expectContains(listed.out, try f.a().print("run: holt keep --take-local {s}, or holt keep --take-kept {s}", .{ qp, qp }));
+    try testing.expect(!contains(listed.out, try f.a().print("run: holt keep {s}\n", .{qp})));
 
     ui.stdin_terminal_for_test = true;
     ui.stdin_for_test = "s\ne\nk\n";
@@ -2338,7 +2338,7 @@ test "keep --review: a name holding a line break is offered nothing, since neith
     try testing.expectEqual(@as(u8, 0), got.code);
     try expectContains(got.out, "!.env.local: the name holds a line break, which neither a keep nor a skip pattern can name: rename it; it is left as it is\n");
     try testing.expect(!contains(got.out, "[k]eep"));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(f.a(), &.{ f.ws.cfg.synced_root, "kept" })));
 }
 
 test "keep --review --all: keep everywhere adds no auto pattern when every keep fails" {
@@ -2375,7 +2375,7 @@ test "keep: the hint for a directory with a tracked file leaves out what the ski
     try testutil.runGit(&f.sb, f.clone, &.{ "commit", "-q", "-m", "cfg" });
     const got = try f.run(&.{"cfg"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try expectContains(got.err, try std.fmt.allocPrint(f.a(), "holt keep {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path("cfg/local.txt"))}));
+    try expectContains(got.err, try f.a().print("holt keep {s}", .{try ui.quotePath(f.a(), app.envOf_current(), try f.path("cfg/local.txt"))}));
     try testing.expect(!contains(got.err, "node_modules"));
 }
 
@@ -2396,7 +2396,7 @@ test "sync: a path another machine kept whose copy has not arrived names the asi
     const entries = try kept.aside.findEntries(a, k.layout, "github.com/acme/widget", "a.local", null);
     try testing.expectEqual(@as(usize, 1), entries.len);
     const qp = try ui.quotePath(a, app.envOf_current(), try f.path("a.local"));
-    try expectContains(synced.out, try std.fmt.allocPrint(a, "not linked: {s}: kept on laptop (machine 000000000000000f), not here yet, and its local content is set aside in aside entry {s}: waiting is the normal fix, until your cloud client downloads it; if it will never arrive, run holt unkeep {s} on laptop, or, if that machine is gone, retire it here - run: holt sync, or holt keep --retire-machine 000000000000000f\n", .{ qp, entries[0], qp }));
+    try expectContains(synced.out, try a.print("not linked: {s}: kept on laptop (machine 000000000000000f), not here yet, and its local content is set aside in aside entry {s}: waiting is the normal fix, until your cloud client downloads it; if it will never arrive, run holt unkeep {s} on laptop, or, if that machine is gone, retire it here - run: holt sync, or holt keep --retire-machine 000000000000000f\n", .{ qp, entries[0], qp }));
 }
 
 test "keep: a path only a retired machine kept, whose content an aside entry holds, hints taking that entry before giving the path up, and the take settles it" {
@@ -2417,7 +2417,7 @@ test "keep: a path only a retired machine kept, whose content an aside entry hol
     const qp = try ui.quotePath(a, app.envOf_current(), try f.path("a.local"));
     const synced = try testutil.runCmd(a, @import("sync.zig").command.run, f.ws, &.{});
     try testing.expectEqual(@as(u8, 1), synced.code);
-    try expectContains(synced.out, try std.fmt.allocPrint(a, "not linked: {s}: kept copy gone, and only a retired machine kept it; aside entry {s} holds its content: take it back, or give the path up - run: holt keep --take-aside {s}, or holt unkeep {s}\n", .{ qp, e.stamp, e.stamp, qp }));
+    try expectContains(synced.out, try a.print("not linked: {s}: kept copy gone, and only a retired machine kept it; aside entry {s} holds its content: take it back, or give the path up - run: holt keep --take-aside {s}, or holt unkeep {s}\n", .{ qp, e.stamp, e.stamp, qp }));
 
     try testing.expectEqual(@as(u8, 0), (try f.run(&.{ "--take-aside", e.stamp })).code);
     try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(a, @import("sync.zig").command.run, f.ws, &.{})).code);
@@ -2439,33 +2439,33 @@ test "keep: another machine's path whose kept copy has not arrived is refused, -
     const got = try f.run(&.{ "--yes", "a.local" });
     try testing.expectEqual(@as(u8, 1), got.code);
     const qp = try ui.quotePath(a, app.envOf_current(), try f.path("a.local"));
-    const why = try std.fmt.allocPrint(a, "kept on laptop (machine 000000000000000f), not here yet: waiting is the normal fix, until your cloud client downloads it; if it will never arrive, run holt unkeep {s} on laptop, or, if that machine is gone, retire it here", .{qp});
-    try expectContains(got.err, try std.fmt.allocPrint(a, "{s} - run: holt keep {s}, or holt keep --retire-machine 000000000000000f\n", .{ why, qp }));
+    const why = try a.print("kept on laptop (machine 000000000000000f), not here yet: waiting is the normal fix, until your cloud client downloads it; if it will never arrive, run holt unkeep {s} on laptop, or, if that machine is gone, retire it here", .{qp});
+    try expectContains(got.err, try a.print("{s} - run: holt keep {s}, or holt keep --retire-machine 000000000000000f\n", .{ why, qp }));
     try testing.expect(!contains(got.err, "--yes"));
     try testing.expect(!try f.linked("a.local"));
 
     const take_ = try f.run(&.{ "--take-local", "a.local" });
     try testing.expectEqual(@as(u8, 1), take_.code);
-    try expectContains(take_.err, try std.fmt.allocPrint(a, "{s} - run: holt keep --take-local {s}, or holt keep --retire-machine 000000000000000f\n", .{ why, qp }));
+    try expectContains(take_.err, try a.print("{s} - run: holt keep --take-local {s}, or holt keep --retire-machine 000000000000000f\n", .{ why, qp }));
     try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try f.keptPath("a.local")));
     try testing.expectEqualStrings("mine", try kept.content.readSmall(a, try f.path("a.local")));
 
     const synced = try testutil.runCmd(a, @import("sync.zig").command.run, f.ws, &.{});
     try testing.expectEqual(@as(u8, 1), synced.code);
-    try expectContains(synced.out, try std.fmt.allocPrint(a, "not linked: {s}: kept on laptop (machine 000000000000000f), not here yet, and its local content is set aside in aside entry ", .{qp}));
+    try expectContains(synced.out, try a.print("not linked: {s}: kept on laptop (machine 000000000000000f), not here yet, and its local content is set aside in aside entry ", .{qp}));
     try expectContains(synced.out, "- run: holt sync, or holt keep --retire-machine 000000000000000f\n");
     try testing.expect(!contains(synced.out, "not kept"));
 
     ui.stdin_terminal_for_test = false;
     const reviewed = try f.run(&.{"--review"});
     try testing.expectEqual(@as(u8, 1), reviewed.code);
-    try expectContains(reviewed.out, try std.fmt.allocPrint(a, "not linked: {s}: {s} - run: holt sync, or holt keep --retire-machine 000000000000000f\n", .{ try fsutil.contractTilde(a, app.envOf_current(), try f.path("a.local")), why }));
+    try expectContains(reviewed.out, try a.print("not linked: {s}: {s} - run: holt sync, or holt keep --retire-machine 000000000000000f\n", .{ try fsutil.contractTilde(a, app.envOf_current(), try f.path("a.local")), why }));
     try testing.expect(!contains(reviewed.out, "not kept"));
     try testing.expect(!contains(reviewed.out, "--take-kept"));
 
     try testing.expectEqual(@as(u8, 0), (try f.run(&.{ "--retire-machine", "000000000000000f" })).code);
     const after = try testutil.runCmd(a, @import("sync.zig").command.run, f.ws, &.{});
-    try expectContains(after.out, try std.fmt.allocPrint(a, "run: holt keep --take-local {s}\n", .{qp}));
+    try expectContains(after.out, try a.print("run: holt keep --take-local {s}\n", .{qp}));
     try testing.expectEqual(@as(u8, 0), (try f.run(&.{ "--take-local", "a.local" })).code);
     try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(a, @import("sync.zig").command.run, f.ws, &.{})).code);
     try testing.expect(try f.linked("a.local"));
@@ -2476,7 +2476,7 @@ test "keep: a path inside a repository that is no clone, such as one at the home
     try fixture(&f);
     defer f.deinit();
     try testutil.runGit(&f.sb, f.sb.root, &.{ "init", "-q" });
-    const loose = try std.fs.path.join(f.a(), &.{ f.sb.root, "notes.txt" });
+    const loose = try std.Io.Dir.path.join(f.a(), &.{ f.sb.root, "notes.txt" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = loose, .data = "n" });
     const got = try f.run(&.{loose});
     try testing.expectEqual(@as(u8, 1), got.code);
@@ -2510,7 +2510,7 @@ test "keep --retire-machine records this machine, or a machine named by id, as r
     const mine = try f.run(&.{"--retire-machine"});
     try testing.expectEqual(@as(u8, 0), mine.code);
     var host_buf: [kept.machine.host_name_max]u8 = undefined;
-    try expectContains(mine.out, try std.fmt.allocPrint(a, "retired machine {s} ({s}, this machine) on {s} UTC: its records so far no longer block keep, --take-local, or unkeep\n", .{ k.machine_id, kept.machine.hostName(&host_buf), try kept.store.today(a) }));
+    try expectContains(mine.out, try a.print("retired machine {s} ({s}, this machine) on {s} UTC: its records so far no longer block keep, --take-local, or unkeep\n", .{ k.machine_id, kept.machine.hostName(&host_buf), try kept.store.today(a) }));
     try testing.expectEqualStrings(try kept.store.today(a), (try kept.store.readRetired(a, k.layout, k.machine_id)).?.date);
 
     try kept.store.writeHost(a, k.layout, "00000000000000ff", "old-laptop");
@@ -2535,7 +2535,7 @@ test "keep --retire-machine refuses an id no machine wrote kept files from, nami
     try testing.expectEqual(@as(u8, 1), got.code);
     try expectContains(got.err, "cannot retire 00000000000000fe: no machine with this id has written kept files");
     var host_buf: [kept.machine.host_name_max]u8 = undefined;
-    try expectContains(got.err, try std.fmt.allocPrint(a, "  {s} ({s}, this machine)\n", .{ k.machine_id, kept.machine.hostName(&host_buf) }));
+    try expectContains(got.err, try a.print("  {s} ({s}, this machine)\n", .{ k.machine_id, kept.machine.hostName(&host_buf) }));
     try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try kept.store.machineDir(a, k.layout, "00000000000000fe")));
 }
 
@@ -2552,7 +2552,7 @@ test "keep --unretire-machine removes a retirement, and refuses a machine that i
     const got = try f.run(&.{"--unretire-machine"});
     try testing.expectEqual(@as(u8, 0), got.code);
     var host_buf: [kept.machine.host_name_max]u8 = undefined;
-    try expectContains(got.out, try std.fmt.allocPrint(a, "machine {s} ({s}, this machine) is no longer retired", .{ k.machine_id, kept.machine.hostName(&host_buf) }));
+    try expectContains(got.out, try a.print("machine {s} ({s}, this machine) is no longer retired", .{ k.machine_id, kept.machine.hostName(&host_buf) }));
     try testing.expect(try kept.store.readRetired(a, k.layout, k.machine_id) == null);
     const again = try f.run(&.{ "--unretire-machine", k.machine_id });
     try testing.expectEqual(@as(u8, 1), again.code);
@@ -2590,10 +2590,10 @@ test "keep, unkeep, review, the takes, doctor --retire, and restore: after a bac
     const env = try w.write(a, ".env", "E=1\n");
 
     var moved = w.ws;
-    moved.cfg.synced_root = try std.fs.path.join(a, &.{ sb.root, "new-synced" });
-    try fsutil.copyTree(a, try std.fs.path.join(a, &.{ w.ws.cfg.synced_root, "projects" }), try std.fs.path.join(a, &.{ moved.cfg.synced_root, "projects" }));
+    moved.cfg.synced_root = try std.Io.Dir.path.join(a, &.{ sb.root, "new-synced" });
+    try fsutil.copyTree(a, try std.Io.Dir.path.join(a, &.{ w.ws.cfg.synced_root, "projects" }), try std.Io.Dir.path.join(a, &.{ moved.cfg.synced_root, "projects" }));
     for (try moved.list(a)) |p| _ = try @import("../hub.zig").reconcile(a, &moved, &p, false);
-    const line = try std.fmt.allocPrint(a, "holt: kept/ is at {s}: copy it to {s}\n", .{ try ui.quotePath(a, app.envOf_current(), w.ws.cfg.synced_root), try ui.quotePath(a, app.envOf_current(), moved.cfg.synced_root) });
+    const line = try a.print("holt: kept/ is at {s}: copy it to {s}\n", .{ try ui.quotePath(a, app.envOf_current(), w.ws.cfg.synced_root), try ui.quotePath(a, app.envOf_current(), moved.cfg.synced_root) });
     const clasp = try fsutil.joinSlashy(a, w.clone, ".clasp.json");
     const unkeep_cmd = @import("unkeep.zig").command;
 
@@ -2612,16 +2612,16 @@ test "keep, unkeep, review, the takes, doctor --retire, and restore: after a bac
         try testing.expectEqual(@as(u8, 1), got.code);
         try testing.expectEqualStrings(line, got.err);
     }
-    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.fs.path.join(a, &.{ moved.cfg.synced_root, "kept" })));
+    try testing.expectEqual(kept.content.Entry.absent, try kept.content.entryAt(try std.Io.Dir.path.join(a, &.{ moved.cfg.synced_root, "kept" })));
 
     const retire = try testutil.runCmd(a, @import("doctor.zig").command.run, moved, &.{"--retire"});
     try testing.expectEqual(@as(u8, 1), retire.code);
-    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "retire: nothing exists only on this machine: FAIL\n  {s}\n", .{line["holt: ".len .. line.len - 1]}), retire.out);
+    try testing.expectEqualStrings(try a.print("retire: nothing exists only on this machine: FAIL\n  {s}\n", .{line["holt: ".len .. line.len - 1]}), retire.out);
     const restored = try testutil.runCmd(a, @import("restore.zig").command.run, moved, &.{});
     try testing.expect(contains(restored.out, line["holt: ".len..]));
     try testing.expect(!contains(restored.out, "linked 0 kept files"));
 
-    try fsutil.copyTree(a, try std.fs.path.join(a, &.{ w.ws.cfg.synced_root, "kept" }), try std.fs.path.join(a, &.{ moved.cfg.synced_root, "kept" }));
+    try fsutil.copyTree(a, try std.Io.Dir.path.join(a, &.{ w.ws.cfg.synced_root, "kept" }), try std.Io.Dir.path.join(a, &.{ moved.cfg.synced_root, "kept" }));
     try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(a, @import("sync.zig").command.run, moved, &.{})).code);
     try testing.expectEqual(@as(u8, 0), (try testutil.runCmd(a, command.run, moved, &.{ env, "--yes" })).code);
 }

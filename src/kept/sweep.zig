@@ -157,7 +157,7 @@ pub const Scope = struct {
         const top = try fsutil.realPathOrSelf(a, tree);
         var out: std.ArrayList([]const u8) = .empty;
         for (s.worktrees) |w| {
-            if (w.len <= top.len + 1 or !std.mem.startsWith(u8, w, top) or !std.fs.path.isSep(w[top.len])) continue;
+            if (w.len <= top.len + 1 or !std.mem.startsWith(u8, w, top) or !std.Io.Dir.path.isSep(w[top.len])) continue;
             try out.append(a, try fsutil.forwardSlashed(a, w[top.len + 1 ..]));
         }
         return out.items;
@@ -537,11 +537,11 @@ fn holdsOutside(alloc: std.mem.Allocator, tree: []const u8, at: []const u8, skip
 fn dotGitComponent(alloc: std.mem.Allocator, tree: []const u8, rel: []const u8, ignore_case: bool) !bool {
     var start: usize = 0;
     while (start <= rel.len) {
-        const end = std.mem.indexOfScalarPos(u8, rel, start, '/') orelse rel.len;
+        const end = std.mem.findScalarPos(u8, rel, start, '/') orelse rel.len;
         const comp = rel[start..end];
         if (paths.isWalkDotGit(comp, ignore_case)) return true;
         const parent = if (start == 0) tree else try fsutil.joinSlashy(alloc, tree, rel[0 .. start - 1]);
-        const same = content.knownSameFile(alloc, try std.fs.path.join(alloc, &.{ parent, comp }), try std.fs.path.join(alloc, &.{ parent, ".git" })) catch |err| switch (err) {
+        const same = content.knownSameFile(alloc, try std.Io.Dir.path.join(alloc, &.{ parent, comp }), try std.Io.Dir.path.join(alloc, &.{ parent, ".git" })) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => false,
         };
@@ -573,7 +573,7 @@ fn covered(alloc: std.mem.Allocator, tree: []const u8, units: []const Unit, l: L
 /// own directory for a command that only reports (`Ctx.scratch`).
 pub fn scratchDir(alloc: std.mem.Allocator, ctx: Ctx) ![]const u8 {
     if (ctx.scratch) |s| return s.dir;
-    return std.fs.path.join(alloc, &.{ try machine.stateDir(alloc, ctx.env), "scratch" });
+    return std.Io.Dir.path.join(alloc, &.{ try machine.stateDir(alloc, ctx.env), "scratch" });
 }
 
 /// The real path of every working tree of `c`; none when they cannot be

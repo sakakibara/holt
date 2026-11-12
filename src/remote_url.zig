@@ -61,7 +61,7 @@ pub fn parse(url: []const u8) Url {
         out.transport = if (std.mem.eql(u8, scheme, "ssh") or std.mem.eql(u8, scheme, "git+ssh") or std.mem.eql(u8, scheme, "ssh+git")) .ssh else if (std.mem.eql(u8, scheme, "git")) .git else if (std.mem.eql(u8, scheme, "http")) .http else if (std.mem.eql(u8, scheme, "https")) .https else if (std.mem.eql(u8, scheme, "file")) .local else .unsupported;
         if (out.transport == .unsupported) return out;
         out.info_start = start;
-        authority_end = start + (std.mem.indexOfAny(u8, url[start..], if (out.transport == .http or out.transport == .https) "/?#" else "/") orelse url.len - start);
+        authority_end = start + (std.mem.findAny(u8, url[start..], if (out.transport == .http or out.transport == .https) "/?#" else "/") orelse url.len - start);
     } else {
         if (localPath(url) != null) return out;
         out.transport = .ssh;
@@ -71,21 +71,21 @@ pub fn parse(url: []const u8) Url {
         };
     }
     out.info_end = out.info_start;
-    out.tail = std.mem.indexOfAny(u8, url, "?#") orelse url.len;
-    if (std.mem.lastIndexOfScalar(u8, url[out.info_start..out.tail], '@')) |at| out.info_end = out.info_start + at + 1;
-    if (std.mem.lastIndexOfScalar(u8, url, '@')) |at| {
+    out.tail = std.mem.findAny(u8, url, "?#") orelse url.len;
+    if (std.mem.findScalarLast(u8, url[out.info_start..out.tail], '@')) |at| out.info_end = out.info_start + at + 1;
+    if (std.mem.findScalarLast(u8, url, '@')) |at| {
         if (at >= authority_end or at >= out.tail) out.ambiguous = true;
     }
     const authority = url[out.info_start..authority_end];
-    if (authority_start != null and std.mem.indexOfScalar(u8, authority, '%') != null) out.ambiguous = true;
-    const host_start = out.info_start + if (std.mem.lastIndexOfScalar(u8, authority, '@')) |at| at + 1 else @as(usize, 0);
+    if (authority_start != null and std.mem.findScalar(u8, authority, '%') != null) out.ambiguous = true;
+    const host_start = out.info_start + if (std.mem.findScalarLast(u8, authority, '@')) |at| at + 1 else @as(usize, 0);
     if (host_start > out.info_start) out.user = url[out.info_start .. host_start - 1];
-    if (std.mem.indexOfScalar(u8, authority, '[')) |b| if (out.info_start + b != host_start) {
+    if (std.mem.findScalar(u8, authority, '[')) |b| if (out.info_start + b != host_start) {
         out.ambiguous = true;
     };
     const host_port = url[host_start..authority_end];
     if (std.mem.startsWith(u8, host_port, "[")) {
-        if (std.mem.indexOfScalar(u8, host_port, ']')) |end| {
+        if (std.mem.findScalar(u8, host_port, ']')) |end| {
             out.host = host_port[1..end];
             const rest = host_port[end + 1 ..];
             if (rest.len > 0) {
@@ -95,10 +95,10 @@ pub fn parse(url: []const u8) Url {
             }
         } else out.ambiguous = true;
     } else if (authority_start != null) {
-        if (std.mem.indexOfScalar(u8, host_port, ':')) |colon| {
+        if (std.mem.findScalar(u8, host_port, ':')) |colon| {
             out.host = host_port[0..colon];
             out.port = host_port[colon + 1 ..];
-            if (std.mem.indexOfScalar(u8, host_port[colon + 1 ..], ':') != null) out.ambiguous = true;
+            if (std.mem.findScalar(u8, host_port[colon + 1 ..], ':') != null) out.ambiguous = true;
         } else out.host = host_port;
     } else out.host = host_port;
     if (out.host) |host| {
@@ -116,8 +116,8 @@ pub fn localPath(url: []const u8) ?[]const u8 {
     if (prefixEnd(url, "::") != null) return null;
     if (std.mem.startsWith(u8, url, "file://")) return url[7..];
     if (prefixEnd(url, "://") != null) return null;
-    const colon = std.mem.indexOfScalar(u8, url, ':') orelse return url;
-    const slash = std.mem.indexOfAny(u8, url, if (builtin.os.tag == .windows) "/\\" else "/") orelse url.len;
+    const colon = std.mem.findScalar(u8, url, ':') orelse return url;
+    const slash = std.mem.findAny(u8, url, if (builtin.os.tag == .windows) "/\\" else "/") orelse url.len;
     if (colon > slash) return url;
     if (builtin.os.tag == .windows) if (drivePrefixEnd(url)) |end| if (validWindowsPath(url[end..])) return url;
     return null;
@@ -144,10 +144,10 @@ fn drivePrefixEnd(path: []const u8) ?usize {
 fn validWindowsPath(path: []const u8) bool {
     var it = std.mem.splitAny(u8, path, "/\\");
     while (it.next()) |comp| {
-        for (comp) |c| if (c < 0x20 or std.mem.indexOfScalar(u8, ":<>\"|?*", c) != null) return false;
+        for (comp) |c| if (c < 0x20 or std.mem.findScalar(u8, ":<>\"|?*", c) != null) return false;
         if (comp.len > 0 and (comp[comp.len - 1] == ' ' or comp[comp.len - 1] == '.') and
             !std.mem.eql(u8, comp, ".") and !std.mem.eql(u8, comp, "..")) return false;
-        const stem = std.mem.trimEnd(u8, comp[0 .. std.mem.indexOfScalar(u8, comp, '.') orelse comp.len], " ");
+        const stem = std.mem.trimEnd(u8, comp[0 .. std.mem.findScalar(u8, comp, '.') orelse comp.len], " ");
         for ([_][]const u8{ "AUX", "CON", "CONIN$", "CONOUT$", "NUL", "PRN" }) |d| {
             if (std.ascii.eqlIgnoreCase(stem, d)) return false;
         }
@@ -202,11 +202,11 @@ pub fn shown(a: std.mem.Allocator, raw: []const u8) ![]u8 {
 pub fn hostIsLocal(raw_host: []const u8, machine_hostname: []const u8) bool {
     var host = trimDot(raw_host);
     if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') host = host[1 .. host.len - 1];
-    if (host.len == 0 or std.mem.indexOfScalar(u8, host, '%') != null) return true;
+    if (host.len == 0 or std.mem.findScalar(u8, host, '%') != null) return true;
     if (std.ascii.eqlIgnoreCase(host, "localhost") or (host.len > ".localhost".len and std.ascii.endsWithIgnoreCase(host, ".localhost"))) return true;
     const machine = trimDot(machine_hostname);
     if (machine.len > 0) {
-        const first = machine[0 .. std.mem.indexOfScalar(u8, machine, '.') orelse machine.len];
+        const first = machine[0 .. std.mem.findScalar(u8, machine, '.') orelse machine.len];
         if (std.ascii.eqlIgnoreCase(host, machine) or std.ascii.eqlIgnoreCase(host, first)) return true;
         if (host.len == first.len + ".local".len and std.ascii.eqlIgnoreCase(host[0..first.len], first) and std.ascii.eqlIgnoreCase(host[first.len..], ".local")) return true;
     }
@@ -264,10 +264,10 @@ fn ipv6(host: []const u8) ?[8]u16 {
         pos = 2;
     }
     while (pos < host.len) {
-        const end = std.mem.indexOfScalarPos(u8, host, pos, ':') orelse host.len;
+        const end = std.mem.findScalarPos(u8, host, pos, ':') orelse host.len;
         const part = host[pos..end];
         if (part.len == 0 or count == words.len) return null;
-        if (std.mem.indexOfScalar(u8, part, '.') != null) {
+        if (std.mem.findScalar(u8, part, '.') != null) {
             if (end != host.len or count > 6) return null;
             var it = std.mem.splitScalar(u8, part, '.');
             var bytes: [4]u8 = undefined;
@@ -304,7 +304,7 @@ fn ipv6(host: []const u8) ?[8]u16 {
     }
     if (compressed) |start| {
         if (count == words.len) return null;
-        std.mem.copyBackwards(u16, words[words.len - (count - start) ..], words[start..count]);
+        @memmove(words[words.len - (count - start) ..], words[start..count]);
         @memset(words[start..][0 .. words.len - count], 0);
     } else if (count != words.len) return null;
     return words;

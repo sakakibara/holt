@@ -39,7 +39,7 @@ pub fn parse(alloc: std.mem.Allocator, text: []const u8) !Parsed {
 
     var pos: usize = 0;
     while (pos < text.len) {
-        const nl = std.mem.indexOfScalarPos(u8, text, pos, '\n');
+        const nl = std.mem.findScalarPos(u8, text, pos, '\n');
         const line_end = nl orelse text.len;
         const next = if (nl) |n| n + 1 else text.len;
         const line = std.mem.trimEnd(u8, text[pos..line_end], "\r");
@@ -95,7 +95,7 @@ fn lineRel(alloc: std.mem.Allocator, line: []const u8) ?[]const u8 {
 /// The block line for `rel`: anchored at the repository root, escaped, and
 /// never ending in `/`, since git sees a directory link as a file.
 fn lineFor(alloc: std.mem.Allocator, rel: []const u8) ![]u8 {
-    return std.fmt.allocPrint(alloc, "/{s}", .{try paths.escapePattern(alloc, rel, false)});
+    return alloc.print("/{s}", .{try paths.escapePattern(alloc, rel, false)});
 }
 
 /// `parsed`'s surrounding text with a block naming `rels` (paths and
@@ -140,7 +140,7 @@ pub fn patternText(alloc: std.mem.Allocator, rels: []const []const u8, foreign: 
 }
 
 pub fn excludePath(alloc: std.mem.Allocator, common_dir: []const u8) ![]u8 {
-    return std.fs.path.join(alloc, &.{ common_dir, "info", "exclude" });
+    return std.Io.Dir.path.join(alloc, &.{ common_dir, "info", "exclude" });
 }
 
 /// The block of the clone whose common git directory is `common_dir`. A
@@ -164,7 +164,7 @@ pub fn write(alloc: std.mem.Allocator, common_dir: []const u8, rels: []const []c
     };
     const new = try render(alloc, try parse(alloc, old), rels);
     if (std.mem.eql(u8, old, new)) return false;
-    try fsutil.ensureDir(std.fs.path.dirname(path).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path).?);
     try fsutil.writeFileAtomic(alloc, path, new);
     return true;
 }
@@ -240,7 +240,7 @@ test "salvage: an unbalanced block's lines are read up to an end line or the end
     defer arena_state.deinit();
     const a = arena_state.allocator();
     const temp = try paths.tempRel(a, "b");
-    const got = try salvage(a, try std.fmt.allocPrint(a, "/user\n" ++ begin_line ++ "\n/a\n" ++ end_line ++ "\n/outside\n" ++ begin_line ++ "\n/b\n/{s}\n", .{temp}));
+    const got = try salvage(a, try a.print("/user\n" ++ begin_line ++ "\n/a\n" ++ end_line ++ "\n/outside\n" ++ begin_line ++ "\n/b\n/{s}\n", .{temp}));
     try testing.expectEqual(@as(usize, 2), got.rels.len);
     try testing.expectEqualStrings("a", got.rels[0]);
     try testing.expectEqualStrings("b", got.rels[1]);

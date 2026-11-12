@@ -116,7 +116,7 @@ pub fn newStamp(alloc: std.mem.Allocator, machine_id: []const u8) ![]u8 {
     const ds = secs.getDaySeconds();
     var rand: [4]u8 = undefined;
     io().random(&rand);
-    return std.fmt.allocPrint(alloc, "{d:0>4}{d:0>2}{d:0>2}T{d:0>2}{d:0>2}{d:0>2}.{d:0>3}Z-{s}-{s}", .{
+    return alloc.print("{d:0>4}{d:0>2}{d:0>2}T{d:0>2}{d:0>2}{d:0>2}.{d:0>3}Z-{s}-{s}", .{
         day.year,             md.month.numeric(),      md.day_index + 1,
         ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute(),
         ms % 1000,            machine_id,              &std.fmt.bytesToHex(rand, .lower),
@@ -124,12 +124,12 @@ pub fn newStamp(alloc: std.mem.Allocator, machine_id: []const u8) ![]u8 {
 }
 
 fn entryDir(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) ![]u8 {
-    return std.fs.path.join(alloc, &.{ try layout.asideDir(alloc), stamp });
+    return std.Io.Dir.path.join(alloc, &.{ try layout.asideDir(alloc), stamp });
 }
 
 /// Where an entry holds `rel`.
 pub fn dataPath(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8, rel: []const u8) ![]u8 {
-    return fsutil.joinSlashy(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "data" }), rel);
+    return fsutil.joinSlashy(alloc, try std.Io.Dir.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "data" }), rel);
 }
 
 /// What an entry for `rel` made from `source` records.
@@ -169,7 +169,7 @@ fn sourceFiles(alloc: std.mem.Allocator, source: []const u8, rel: []const u8, ho
                 },
             };
             const files = try alloc.alloc(content.FileHash, inner.len);
-            for (inner, 0..) |f, i| files[i] = .{ .path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ rel, f.path }), .hex = f.hex };
+            for (inner, 0..) |f, i| files[i] = .{ .path = try alloc.print("{s}/{s}", .{ rel, f.path }), .hex = f.hex };
             break :blk .{ .hash = .{ .kind = .dir, .hex = content.treeHash(inner) }, .files = files, .modes = null, .skipped = skipped, .links = links.items };
         },
         .absent => return error.FileNotFound,
@@ -185,7 +185,7 @@ fn sourceFiles(alloc: std.mem.Allocator, source: []const u8, rel: []const u8, ho
 
 fn prefixSkipped(alloc: std.mem.Allocator, rel: []const u8, skipped: []const content.Skipped) ![]const content.Skipped {
     const out = try alloc.alloc(content.Skipped, skipped.len);
-    for (skipped, out) |sk, *o| o.* = .{ .path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ rel, sk.path }), .why = sk.why };
+    for (skipped, out) |sk, *o| o.* = .{ .path = try alloc.print("{s}/{s}", .{ rel, sk.path }), .why = sk.why };
     return out;
 }
 
@@ -218,7 +218,7 @@ fn writeManifest(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8, m:
     try obj.put(alloc, "key", .{ .string = m.key });
     if (m.modes) |modes| {
         var mo: json.ObjectMap = .empty;
-        for (modes) |md| try mo.put(alloc, md.path, .{ .string = try std.fmt.allocPrint(alloc, "{o:0>3}", .{md.mode}) });
+        for (modes) |md| try mo.put(alloc, md.path, .{ .string = try alloc.print("{o:0>3}", .{md.mode}) });
         try obj.put(alloc, "modes", .{ .object = mo });
     }
     try obj.put(alloc, "reason", .{ .string = m.reason });
@@ -241,7 +241,7 @@ fn writeManifest(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8, m:
     var aw: std.Io.Writer.Allocating = .init(alloc);
     try json.encode(&aw.writer, .{ .object = obj }, .{ .indent = 2, .sort_keys = true });
     try aw.writer.writeByte('\n');
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "manifest" }), aw.written());
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "manifest" }), aw.written());
 }
 
 /// Copies the content at `source` into a new entry for `rel` of `key`,
@@ -260,7 +260,7 @@ fn create(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8, key:
 
 fn fill(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const u8, source: []const u8, reason: Reason, src: Source, stamp: []const u8) !Entry {
     const dest = try dataPath(alloc, layout, stamp, rel);
-    try fsutil.ensureDir(std.fs.path.dirname(dest).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(dest).?);
     if (src.skipped.len == 0) {
         try content.copyRegular(alloc, source, dest);
     } else {
@@ -268,7 +268,7 @@ fn fill(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const 
         try fsutil.ensureDir(dest);
         for (src.files) |f| {
             const to = try fsutil.joinSlashy(alloc, dest, f.path[rel.len + 1 ..]);
-            try fsutil.ensureDir(std.fs.path.dirname(to).?);
+            try fsutil.ensureDir(std.Io.Dir.path.dirname(to).?);
             try cwd.copyFile(try sourcePath(alloc, source, rel, f.path), cwd, to, io(), .{});
         }
     }
@@ -293,8 +293,8 @@ pub fn setAsideStaged(alloc: std.mem.Allocator, layout: Layout, machine_id: []co
 }
 
 fn fillStaged(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const u8, staged: []const u8, reason: Reason, hex: [64]u8, stamp: []const u8, edir: []const u8) !Entry {
-    const dest = try fsutil.joinSlashy(alloc, try std.fs.path.join(alloc, &.{ edir, "index" }), rel);
-    try fsutil.ensureDir(std.fs.path.dirname(dest).?);
+    const dest = try fsutil.joinSlashy(alloc, try std.Io.Dir.path.join(alloc, &.{ edir, "index" }), rel);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(dest).?);
     try content.copyRegular(alloc, staged, dest);
     const index = try alloc.dupe(content.FileHash, &.{.{ .path = rel, .hex = hex }});
     try writeManifest(alloc, layout, stamp, .{ .key = key, .rel = rel, .reason = @tagName(reason), .files = &.{}, .index = index });
@@ -343,7 +343,7 @@ pub fn moveAside(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u
 fn moveIn(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const u8, source: []const u8, reason: Reason, src: Source, stamp: []const u8, dest: []const u8) !void {
     try writeManifest(alloc, layout, stamp, .{ .key = key, .rel = rel, .reason = @tagName(reason), .files = src.files, .modes = src.modes });
     try interrupt.check(.move_manifest);
-    try fsutil.ensureDir(std.fs.path.dirname(dest).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(dest).?);
     try content.renameNoReplace(alloc, source, dest);
 }
 
@@ -360,7 +360,7 @@ fn discard(edir: []const u8, err: anytype) @TypeOf(err) {
 /// key, is accepted, so content under names a kept path may not have can
 /// still be set aside; placing it back takes `unplaceable` first.
 pub fn readManifest(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !?Manifest {
-    const bytes = content.readLarge(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "manifest" })) catch |err| switch (err) {
+    const bytes = content.readLarge(alloc, try std.Io.Dir.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "manifest" })) catch |err| switch (err) {
         error.FileNotFound, error.NotDir, error.StreamTooLong => return null,
         else => return err,
     };
@@ -498,7 +498,7 @@ pub fn present(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8, m: M
     const dir = try entryDir(alloc, layout, stamp);
     const Side = struct { sub: []const u8, files: []const content.FileHash };
     for ([_]Side{ .{ .sub = "index", .files = m.index }, .{ .sub = "data", .files = m.files } }) |side| {
-        const root = try std.fs.path.join(alloc, &.{ dir, side.sub });
+        const root = try std.Io.Dir.path.join(alloc, &.{ dir, side.sub });
         for (side.files) |f| {
             if (try content.entryAt(try fsutil.joinSlashy(alloc, root, f.path)) != .file) return false;
         }
@@ -523,7 +523,7 @@ pub fn verify(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !Chec
     const m = (try readManifest(alloc, layout, stamp)) orelse return .missing;
     if (windowsNames() and windowsUnsafeManifest(m)) return .unverifiable;
     for (m.index) |f| {
-        const at = try fsutil.joinSlashy(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "index" }), f.path);
+        const at = try fsutil.joinSlashy(alloc, try std.Io.Dir.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "index" }), f.path);
         if (try content.entryAt(at) != .file) return if (fsutil.hasIcloudPlaceholder(alloc, at)) .online_only else .missing;
         const hex = content.hashFile(alloc, at) catch |err| switch (err) {
             error.OnlineOnly => return .online_only,
@@ -531,7 +531,7 @@ pub fn verify(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !Chec
         };
         if (!std.mem.eql(u8, &hex, &f.hex)) return .mismatch;
     }
-    const data = try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "data" });
+    const data = try std.Io.Dir.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), "data" });
     const want = try alloc.dupe(content.FileHash, m.files);
     std.mem.sort(content.FileHash, want, {}, content.fileLess);
     const rel_root = try fsutil.joinSlashy(alloc, data, m.rel);
@@ -552,7 +552,7 @@ pub fn verify(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !Chec
                 else => return err,
             };
             const prefixed = try alloc.alloc(content.FileHash, inner.len);
-            for (inner, 0..) |f, i| prefixed[i] = .{ .path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ m.rel, f.path }), .hex = f.hex };
+            for (inner, 0..) |f, i| prefixed[i] = .{ .path = try alloc.print("{s}/{s}", .{ m.rel, f.path }), .hex = f.hex };
             break :blk prefixed;
         },
         .absent => {
@@ -659,14 +659,14 @@ const taken_basename = "took-kept";
 /// it holds aside at `now_ms` (milliseconds since the epoch), so pruning
 /// spares it for a while (`takenMs`).
 pub fn markTaken(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8, now_ms: i64) !void {
-    const text = try std.fmt.allocPrint(alloc, "{d}\n", .{now_ms});
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), taken_basename }), text);
+    const text = try alloc.print("{d}\n", .{now_ms});
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), taken_basename }), text);
 }
 
 /// When `--take-kept` last set content aside into the entry `stamp`
 /// (`markTaken`), or null when it never did.
 pub fn takenMs(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !?i64 {
-    const bytes = content.readSmall(alloc, try std.fs.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), taken_basename })) catch |err| switch (err) {
+    const bytes = content.readSmall(alloc, try std.Io.Dir.path.join(alloc, &.{ try entryDir(alloc, layout, stamp), taken_basename })) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return null,
         else => return err,
     };
@@ -678,7 +678,7 @@ pub fn takenMs(alloc: std.mem.Allocator, layout: Layout, stamp: []const u8) !?i6
 pub const Done = struct { rel: []const u8, sha256: []const u8, synced_root: []const u8, stamp: []const u8 };
 
 fn donePath(alloc: std.mem.Allocator, common_dir: []const u8) ![]u8 {
-    return std.fs.path.join(alloc, &.{ common_dir, "holt", "aside-done" });
+    return std.Io.Dir.path.join(alloc, &.{ common_dir, "holt", "aside-done" });
 }
 
 pub fn readDone(alloc: std.mem.Allocator, common_dir: []const u8) ![]const Done {
@@ -708,7 +708,7 @@ fn appendDone(alloc: std.mem.Allocator, common_dir: []const u8, d: Done) !void {
     for (try readDone(alloc, common_dir)) |old| try appendDoneLine(alloc, &buf, old);
     try appendDoneLine(alloc, &buf, d);
     const path = try donePath(alloc, common_dir);
-    try fsutil.ensureDir(std.fs.path.dirname(path).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path).?);
     try fsutil.writeFileAtomic(alloc, path, buf.items);
 }
 
@@ -799,8 +799,8 @@ test "readManifest: a path that escapes the entry, or a file outside rel, makes 
         "{\"files\": {\"d/../../y\": \"" ++ h ++ "\"}, \"key\": \"k/r\", \"reason\": \"keep\", \"rel\": \"d\"}",
         "{\"files\": {\"other\": \"" ++ h ++ "\"}, \"key\": \"k/r\", \"reason\": \"keep\", \"rel\": \"d\"}",
     }, 0..) |bytes, i| {
-        const stamp = try std.fmt.allocPrint(a, "s{d}", .{i});
-        _ = try f.write(try std.fmt.allocPrint(a, "synced/kept/.holt-aside/{s}/manifest", .{stamp}), bytes);
+        const stamp = try a.print("s{d}", .{i});
+        _ = try f.write(try a.print("synced/kept/.holt-aside/{s}/manifest", .{stamp}), bytes);
         try testing.expect((try readManifest(a, layout, stamp)) == null);
         try testing.expectEqual(Check.missing, try verify(a, layout, stamp));
     }
@@ -890,7 +890,7 @@ test "a partial aside records each symlink it leaves out by its target, and is r
     const common = try f.path("clone/.git");
     _ = try f.write("clone/d/a", "a");
     const link_path = try f.path("clone/d/sub/link");
-    try fsutil.ensureDir(std.fs.path.dirname(link_path).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(link_path).?);
     try content.createLink("/nix/store/abc", link_path, .file);
     const src = try f.path("clone/d");
 
@@ -968,12 +968,12 @@ test "ensureAside: reuses a recorded entry, copies again once its data or the en
     const e2 = try ensureAside(a, layout, common, mid, "k/r", ".env", src, .local_differs, .whole);
     try testing.expectEqualStrings(e1.stamp, e2.stamp);
 
-    try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ try layout.asideDir(a), e1.stamp, "data" }));
+    try std.Io.Dir.cwd().deleteTree(io(), try std.Io.Dir.path.join(a, &.{ try layout.asideDir(a), e1.stamp, "data" }));
     const e2b = try ensureAside(a, layout, common, mid, "k/r", ".env", src, .local_differs, .whole);
     try testing.expect(!std.mem.eql(u8, e1.stamp, e2b.stamp));
     try testing.expectEqual(Check.ok, try verify(a, layout, e2b.stamp));
 
-    try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ try layout.asideDir(a), e2b.stamp }));
+    try std.Io.Dir.cwd().deleteTree(io(), try std.Io.Dir.path.join(a, &.{ try layout.asideDir(a), e2b.stamp }));
     const e3 = try ensureAside(a, layout, common, mid, "k/r", ".env", src, .local_differs, .whole);
     try testing.expect(!std.mem.eql(u8, e2b.stamp, e3.stamp));
     try testing.expectEqual(Check.ok, try verify(a, layout, e3.stamp));
@@ -1067,10 +1067,10 @@ test "setAside: a directory whose manifest passes 1 MiB is set aside, verifies, 
     const a = f.alloc();
     const layout: Layout = .{ .synced_root = try f.path("synced") };
     const rel = &@as([200]u8, @splat('d'));
-    for (0..2400) |i| _ = try f.write(try std.fmt.allocPrint(a, "clone/{s}/{d:0>4}{s}", .{ rel, i, &@as([196]u8, @splat('f')) }), "x");
+    for (0..2400) |i| _ = try f.write(try a.print("clone/{s}/{d:0>4}{s}", .{ rel, i, &@as([196]u8, @splat('f')) }), "x");
 
     const e = try setAside(a, layout, mid, "k/r", rel, try f.path("clone/" ++ rel), .keep);
-    const st = try std.Io.Dir.cwd().statFile(io(), try std.fs.path.join(a, &.{ try entryDir(a, layout, e.stamp), "manifest" }), .{});
+    const st = try std.Io.Dir.cwd().statFile(io(), try std.Io.Dir.path.join(a, &.{ try entryDir(a, layout, e.stamp), "manifest" }), .{});
     try testing.expect(st.size > 1 << 20);
     try testing.expectEqual(Check.ok, try verify(a, layout, e.stamp));
     const found = try findEntries(a, layout, "k/r", rel, &e.hash.hex);
@@ -1086,7 +1086,7 @@ test "ensureAside: an aside-done record past 1 MiB does not fail the next set-as
     const common = try f.path("clone/.git");
     var buf: std.ArrayList(u8) = .empty;
     for (0..6000) |i| try appendDoneLine(a, &buf, .{
-        .rel = try std.fmt.allocPrint(a, "old/{d}", .{i}),
+        .rel = try a.print("old/{d}", .{i}),
         .sha256 = &@as([64]u8, @splat('a')),
         .synced_root = try f.path("elsewhere"),
         .stamp = "20260101T000000.000Z-" ++ mid ++ "-00000000",
@@ -1109,7 +1109,7 @@ test "findEntries: a manifest that is not JSON, or too large to read, makes only
     _ = try f.write("synced/kept/.holt-aside/garbage/manifest", "not json");
     content.large_read_max_for_test = 4096;
     defer content.large_read_max_for_test = null;
-    const good_manifest = try content.readSmall(a, try std.fs.path.join(a, &.{ try entryDir(a, layout, good.stamp), "manifest" }));
+    const good_manifest = try content.readSmall(a, try std.Io.Dir.path.join(a, &.{ try entryDir(a, layout, good.stamp), "manifest" }));
     const big = try a.alloc(u8, 4096 + 1);
     @memset(big, ' ');
     @memcpy(big[0..good_manifest.len], good_manifest);

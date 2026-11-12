@@ -49,8 +49,8 @@ fn makeTempRoot(alloc: std.mem.Allocator, total_projects: usize) ![]const u8 {
         else => return err,
     };
     const seq = tmp_seq.fetchAdd(1, .monotonic);
-    const leaf = try std.fmt.allocPrint(alloc, "holt-bench-{d}-{d}-{d}", .{ total_projects, std.Thread.getCurrentId(), seq });
-    const root = try std.fs.path.join(alloc, &.{ base, leaf });
+    const leaf = try alloc.print("holt-bench-{d}-{d}-{d}", .{ total_projects, std.Thread.getCurrentId(), seq });
+    const root = try std.Io.Dir.path.join(alloc, &.{ base, leaf });
     // A stale dir from a prior crashed run must not leak leftover markers/
     // clones into this run's fresh seed.
     std.Io.Dir.cwd().deleteTree(fsutil.io(), root) catch {};

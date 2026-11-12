@@ -125,7 +125,7 @@ fn runRename(ctx: *app.Ctx, a: cli.Args(RenameSpec)) anyerror!u8 {
             first = false;
         }
         const total = members.items.len + archived.len;
-        const message = try std.fmt.allocPrint(alloc, "rename org {s} -> {s} ({d} projects: {s})?", .{ old_org, new_org, total, names.items });
+        const message = try alloc.print("rename org {s} -> {s} ({d} projects: {s})?", .{ old_org, new_org, total, names.items });
         if (!try ui.confirm(ctx.out, message)) {
             try ctx.out.writeAll("org rename cancelled\n");
             return 0;
@@ -156,8 +156,8 @@ fn runRename(ctx: *app.Ctx, a: cli.Args(RenameSpec)) anyerror!u8 {
     // Archived projects have no hub; move the content dir and rewrite the
     // marker's self-description, nothing more.
     for (archived, 0..) |name, idx| {
-        const from = try std.fs.path.join(alloc, &.{ archive_root, old_org, name });
-        const to = try std.fs.path.join(alloc, &.{ archive_root, new_org, name });
+        const from = try std.Io.Dir.path.join(alloc, &.{ archive_root, old_org, name });
+        const to = try std.Io.Dir.path.join(alloc, &.{ archive_root, new_org, name });
         common.moveDir(ctx, from, to) catch {
             var rest: std.ArrayList([]const u8) = .empty;
             for (archived[idx + 1 ..]) |nm| try rest.append(alloc, nm);
@@ -165,18 +165,18 @@ fn runRename(ctx: *app.Ctx, a: cli.Args(RenameSpec)) anyerror!u8 {
             return 1;
         };
 
-        const marker_path = try std.fs.path.join(alloc, &.{ to, marker.marker_basename });
+        const marker_path = try std.Io.Dir.path.join(alloc, &.{ to, marker.marker_basename });
         var m = try marker.load(alloc, marker_path, null);
         m.org = new_org;
         try marker.save(&m, marker_path);
         try moved_names.append(alloc, name);
     }
 
-    const old_org_content = try std.fs.path.join(alloc, &.{ projects_root, old_org });
+    const old_org_content = try std.Io.Dir.path.join(alloc, &.{ projects_root, old_org });
     fsutil.rmdirIfEmpty(old_org_content);
-    const old_org_archive = try std.fs.path.join(alloc, &.{ archive_root, old_org });
+    const old_org_archive = try std.Io.Dir.path.join(alloc, &.{ archive_root, old_org });
     fsutil.rmdirIfEmpty(old_org_archive);
-    const old_org_hub = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, old_org });
+    const old_org_hub = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.hub_root, old_org });
     fsutil.rmdirIfEmpty(old_org_hub);
 
     try ctx.out.print("renamed org {s} -> {s} ({d} projects, {d} archived)\n", .{ old_org, new_org, members.items.len, archived.len });
@@ -209,7 +209,7 @@ fn writeNameList(ctx: *app.Ctx, names: []const []const u8) !void {
 /// Names of the archived projects under `<archive_root>/<org>` (dirs holding
 /// a marker file). Empty when the org has no archive dir at all.
 fn archivedNames(alloc: std.mem.Allocator, archive_root: []const u8, org: []const u8) ![][]const u8 {
-    const org_dir = try std.fs.path.join(alloc, &.{ archive_root, org });
+    const org_dir = try std.Io.Dir.path.join(alloc, &.{ archive_root, org });
     var names: std.ArrayList([]const u8) = .empty;
 
     var dir: ?std.Io.Dir = std.Io.Dir.openDirAbsolute(fsutil.io(), org_dir, .{ .iterate = true }) catch |err| switch (err) {
@@ -221,7 +221,7 @@ fn archivedNames(alloc: std.mem.Allocator, archive_root: []const u8, org: []cons
         var it = d.iterate();
         while (try it.next(fsutil.io())) |entry| {
             if (entry.kind != .directory) continue;
-            const marker_path = try std.fs.path.join(alloc, &.{ org_dir, entry.name, marker.marker_basename });
+            const marker_path = try std.Io.Dir.path.join(alloc, &.{ org_dir, entry.name, marker.marker_basename });
             if (!fsutil.exists(marker_path)) continue;
             try names.append(alloc, try alloc.dupe(u8, entry.name));
         }
@@ -231,9 +231,9 @@ fn archivedNames(alloc: std.mem.Allocator, archive_root: []const u8, org: []cons
 
 /// True if either tree already holds `<new_org>/<name>`.
 fn destCollides(alloc: std.mem.Allocator, projects_root: []const u8, archive_root: []const u8, new_org: []const u8, name: []const u8) !bool {
-    const in_projects = try std.fs.path.join(alloc, &.{ projects_root, new_org, name });
+    const in_projects = try std.Io.Dir.path.join(alloc, &.{ projects_root, new_org, name });
     if (fsutil.exists(in_projects)) return true;
-    const in_archive = try std.fs.path.join(alloc, &.{ archive_root, new_org, name });
+    const in_archive = try std.Io.Dir.path.join(alloc, &.{ archive_root, new_org, name });
     return fsutil.exists(in_archive);
 }
 
@@ -251,9 +251,9 @@ test "run: rename moves every project in the org, rebuilds hubs, and leaves an u
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "a", .empty, .empty);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "b", .empty, .empty);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "work", "c", .empty, .empty);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a", "docs" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b", "docs" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "work", "c", "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a", "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b", "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "work", "c", "docs" }));
 
     for (&[_][]const u8{ "acme/a", "acme/b", "work/c" }) |query| {
         const p = switch (try ws.find(arena, query)) {
@@ -265,32 +265,32 @@ test "run: rename moves every project in the org, rebuilds hubs, and leaves an u
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "me", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "renamed org acme -> me (2 projects, 0 archived)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "renamed org acme -> me (2 projects, 0 archived)") != null);
 
-    const old_org_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
+    const old_org_content = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" });
     try testing.expect(!fsutil.exists(old_org_content));
-    const old_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
+    const old_org_hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme" });
     try testing.expect(!fsutil.exists(old_org_hub));
 
     for ([_][]const u8{ "a", "b" }) |name| {
-        const new_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "me", name });
+        const new_content = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "me", name });
         try testing.expect(fsutil.exists(new_content));
 
-        const marker_path = try std.fs.path.join(arena, &.{ new_content, marker.marker_basename });
+        const marker_path = try std.Io.Dir.path.join(arena, &.{ new_content, marker.marker_basename });
         const loaded = try marker.load(arena, marker_path, null);
         try testing.expectEqualStrings("me", loaded.org);
         try testing.expectEqualStrings(name, loaded.name);
 
-        const new_hub_docs = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "me", name, "docs" });
+        const new_hub_docs = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "me", name, "docs" });
         switch (try fsutil.linkState(arena, new_hub_docs)) {
             .symlink => {},
             else => return error.TestUnexpectedResult,
         }
     }
 
-    const work_content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "work", "c" });
+    const work_content = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "work", "c" });
     try testing.expect(fsutil.exists(work_content));
-    const work_hub_docs = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "work", "c", "docs" });
+    const work_hub_docs = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "work", "c", "docs" });
     switch (try fsutil.linkState(arena, work_hub_docs)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
@@ -310,7 +310,7 @@ test "run: rename moves an org's active and archived projects, clearing the old 
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "live", .empty, .empty);
     try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "old", .empty, .empty);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "live", "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "live", "docs" }));
 
     const p = switch (try ws.find(arena, "acme/live")) {
         .one => |proj| proj,
@@ -320,21 +320,21 @@ test "run: rename moves an org's active and archived projects, clearing the old 
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "renamed org acme -> corp (1 projects, 1 archived)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "renamed org acme -> corp (1 projects, 1 archived)") != null);
 
-    const live_marker_path = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "live", marker.marker_basename });
+    const live_marker_path = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "live", marker.marker_basename });
     try testing.expect(fsutil.exists(live_marker_path));
     try testing.expectEqualStrings("corp", (try marker.load(arena, live_marker_path, null)).org);
 
-    const arch_marker_path = try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "corp", "old", marker.marker_basename });
+    const arch_marker_path = try std.Io.Dir.path.join(arena, &.{ try ws.archiveRoot(arena), "corp", "old", marker.marker_basename });
     try testing.expect(fsutil.exists(arch_marker_path));
     try testing.expectEqualStrings("corp", (try marker.load(arena, arch_marker_path, null)).org);
 
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" })));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme" })));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.archiveRoot(arena), "acme" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme" })));
 
-    const new_hub_docs = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "corp", "live", "docs" });
+    const new_hub_docs = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "corp", "live", "docs" });
     switch (try fsutil.linkState(arena, new_hub_docs)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
@@ -356,10 +356,10 @@ test "run: rename an org that has only archived projects moves them and reports 
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "renamed org acme -> corp (0 projects, 1 archived)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "renamed org acme -> corp (0 projects, 1 archived)") != null);
 
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "corp", "old", marker.marker_basename })));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.archiveRoot(arena), "corp", "old", marker.marker_basename })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.archiveRoot(arena), "acme" })));
 }
 
 test "run: rename refuses atomically on an archive-side collision, moving nothing" {
@@ -379,11 +379,11 @@ test "run: rename refuses atomically on an archive-side collision, moving nothin
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "corp/old already exists") != null);
+    try testing.expect(std.mem.find(u8, got.err, "corp/old already exists") != null);
 
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" })));
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "old" })));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "widget" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.archiveRoot(arena), "acme", "old" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "widget" })));
 }
 
 test "run: a mid-loop move failure reports progress and the rename converges on re-run" {
@@ -399,7 +399,7 @@ test "run: a mid-loop move failure reports progress and the rename converges on 
 
     for ([_][]const u8{ "a", "b", "c" }) |name| {
         try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", name, .empty, .empty);
-        const query = try std.fmt.allocPrint(arena, "acme/{s}", .{name});
+        const query = try arena.print("acme/{s}", .{name});
         const p = switch (try ws.find(arena, query)) {
             .one => |proj| proj,
             else => return error.TestUnexpectedResult,
@@ -410,30 +410,30 @@ test "run: a mid-loop move failure reports progress and the rename converges on 
     // Block the hub rebuild for the 2nd project (sorted a, b, c) with a real
     // file where its new hub dir must be created: its move fails after a and
     // before c.
-    const new_org_hub = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "corp" });
+    const new_org_hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "corp" });
     try fsutil.ensureDir(new_org_hub);
-    const blocker = try std.fs.path.join(arena, &.{ new_org_hub, "b" });
+    const blocker = try std.Io.Dir.path.join(arena, &.{ new_org_hub, "b" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = blocker, .data = "x" });
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "stopped partway") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "moved to corp: a") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "failed: b") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "not attempted: c") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "re-run \"holt org rename acme corp\"") != null);
+    try testing.expect(std.mem.find(u8, got.err, "stopped partway") != null);
+    try testing.expect(std.mem.find(u8, got.err, "moved to corp: a") != null);
+    try testing.expect(std.mem.find(u8, got.err, "failed: b") != null);
+    try testing.expect(std.mem.find(u8, got.err, "not attempted: c") != null);
+    try testing.expect(std.mem.find(u8, got.err, "re-run \"holt org rename acme corp\"") != null);
 
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "a" })));
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "c" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", "a" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "c" })));
 
     try std.Io.Dir.cwd().deleteFile(fsutil.io(), blocker);
     const again = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 0), again.code);
 
     for ([_][]const u8{ "a", "b", "c" }) |name| {
-        try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", name })));
+        try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "corp", name })));
     }
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme" })));
 }
 
 test "run: rename merges into an existing org when no project name collides" {
@@ -455,7 +455,7 @@ test "run: rename merges into an existing org when no project name collides" {
     try testing.expectEqual(@as(u8, 0), got.code);
 
     for ([_][]const u8{ "a", "b", "x" }) |name| {
-        const content = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "me", name });
+        const content = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "me", name });
         try testing.expect(fsutil.exists(content));
     }
 }
@@ -477,11 +477,11 @@ test "run: refuses atomically when a destination name collides, moving nothing" 
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "me", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "me/a already exists") != null);
+    try testing.expect(std.mem.find(u8, got.err, "me/a already exists") != null);
 
-    const acme_a = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a" });
+    const acme_a = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a" });
     try testing.expect(fsutil.exists(acme_a));
-    const acme_b = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b" });
+    const acme_b = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b" });
     try testing.expect(fsutil.exists(acme_b));
 }
 
@@ -503,9 +503,9 @@ test "run: renaming an org to itself reports the clearer message instead of fals
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expectStringEndsWith(got.err, "holt: the source and target org are the same\n");
 
-    const acme_a = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a" });
+    const acme_a = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a" });
     try testing.expect(fsutil.exists(acme_a));
-    const acme_b = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b" });
+    const acme_b = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "b" });
     try testing.expect(fsutil.exists(acme_b));
 }
 
@@ -524,7 +524,7 @@ test "run: renaming an org with no projects reports no projects and exits 1" {
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", "me", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no projects in org \"acme\"") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no projects in org \"acme\"") != null);
 }
 
 test "run: a new org that traverses or contains a slash is rejected, moving nothing" {
@@ -543,12 +543,12 @@ test "run: a new org that traverses or contains a slash is rejected, moving noth
     for ([_][]const u8{ "..", "x/y" }) |bad| {
         const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "acme", bad, "--yes" });
         try testing.expectEqual(@as(u8, 1), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.err, "invalid org name") != null);
+        try testing.expect(std.mem.find(u8, got.err, "invalid org name") != null);
     }
 
-    const source = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a" });
+    const source = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "a" });
     try testing.expect(fsutil.exists(source));
-    const escape = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "..", "a" });
+    const escape = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "..", "a" });
     try testing.expect(!fsutil.exists(escape));
 }
 
@@ -565,7 +565,7 @@ test "run: an old org that traverses is rejected before scanning projects" {
 
     const got = try testutil.runCmd(arena, rename_command.run, ws, &.{ "..", "corp", "--yes" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "invalid org name") != null);
+    try testing.expect(std.mem.find(u8, got.err, "invalid org name") != null);
 }
 
 test "run: an unrecognized subcommand is a usage error naming the accepted form" {
@@ -575,7 +575,7 @@ test "run: an unrecognized subcommand is a usage error naming the accepted form"
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt org rename <old-org> <new-org>") != null);
+    try testing.expect(std.mem.find(u8, got.err, "holt org rename <old-org> <new-org>") != null);
 }
 
 test "run: rename with missing old-org/new-org args is a usage error" {

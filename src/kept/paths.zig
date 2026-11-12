@@ -50,8 +50,8 @@ pub fn isReserved(component: []const u8) bool {
 /// directory, `/`-joined.
 pub fn tempRel(alloc: std.mem.Allocator, rel: []const u8) ![]u8 {
     const rid = id(rel);
-    if (std.mem.lastIndexOfScalar(u8, rel, '/')) |i| return std.fmt.allocPrint(alloc, "{s}/" ++ temp_prefix ++ "{s}", .{ rel[0..i], &rid });
-    return std.fmt.allocPrint(alloc, temp_prefix ++ "{s}", .{&rid});
+    if (std.mem.findScalarLast(u8, rel, '/')) |i| return alloc.print("{s}/" ++ temp_prefix ++ "{s}", .{ rel[0..i], &rid });
+    return alloc.print(temp_prefix ++ "{s}", .{&rid});
 }
 
 const temp_prefix = ".holt-tmp-";
@@ -63,7 +63,7 @@ const probe_suffix = "-\u{e9}";
 /// and a precomposed letter to decompose. `isTempRel` recognizes it, so it
 /// can stand under a block line while it exists.
 pub fn probeName(alloc: std.mem.Allocator, suffix: [16]u8) ![]u8 {
-    return std.fmt.allocPrint(alloc, probe_prefix ++ "{s}" ++ probe_suffix, .{&suffix});
+    return alloc.print(probe_prefix ++ "{s}" ++ probe_suffix, .{&suffix});
 }
 
 fn isHex(s: []const u8) bool {
@@ -76,7 +76,7 @@ fn isHex(s: []const u8) bool {
 
 /// True for a name `tempRel` or `probeName` produces.
 pub fn isTempRel(s: []const u8) bool {
-    const slash = std.mem.lastIndexOfScalar(u8, s, '/');
+    const slash = std.mem.findScalarLast(u8, s, '/');
     const base = if (slash) |i| s[i + 1 ..] else s;
     const temp = base.len == temp_prefix.len + 64 and std.mem.startsWith(u8, base, temp_prefix) and isHex(base[temp_prefix.len..]);
     if (!temp and !isProbeBase(base)) return false;
@@ -85,7 +85,7 @@ pub fn isTempRel(s: []const u8) bool {
 
 /// True for a temporary (`isTempRel`) whose name `probeName` produces.
 pub fn isProbeRel(s: []const u8) bool {
-    const base = if (std.mem.lastIndexOfScalar(u8, s, '/')) |i| s[i + 1 ..] else s;
+    const base = if (std.mem.findScalarLast(u8, s, '/')) |i| s[i + 1 ..] else s;
     return isTempRel(s) and isProbeBase(base);
 }
 
@@ -151,7 +151,7 @@ pub fn check(rel: []const u8) ?Invalid {
 /// may be kept: git never reads inside a directory link.
 pub fn keepable(rel: []const u8) ?Invalid {
     if (check(rel)) |inv| return inv;
-    const base = if (std.mem.lastIndexOfScalar(u8, rel, '/')) |i| rel[i + 1 ..] else rel;
+    const base = if (std.mem.findScalarLast(u8, rel, '/')) |i| rel[i + 1 ..] else rel;
     return if (gitReadsUnlinked(base)) .git_reads_unlinked else null;
 }
 
@@ -181,7 +181,7 @@ pub fn gitReadsUnlinked(comp: []const u8) bool {
 pub fn contained(rel: []const u8) bool {
     if (rel.len == 0 or rel[0] == '/' or rel[0] == '\\') return false;
     if (rel.len >= 2 and rel[1] == ':' and std.ascii.isAlphabetic(rel[0])) return false;
-    if (std.mem.indexOfScalar(u8, rel, 0) != null) return false;
+    if (std.mem.findScalar(u8, rel, 0) != null) return false;
     var it = std.mem.splitAny(u8, rel, "/\\");
     while (it.next()) |comp| {
         if (comp.len == 0 or std.mem.eql(u8, comp, ".") or std.mem.eql(u8, comp, "..")) return false;
@@ -200,9 +200,9 @@ pub fn contained(rel: []const u8) bool {
 pub fn windowsUnsafe(rel: []const u8) bool {
     var it = std.mem.splitAny(u8, rel, "/\\");
     while (it.next()) |comp| {
-        if (std.mem.indexOfScalar(u8, comp, ':') != null) return true;
+        if (std.mem.findScalar(u8, comp, ':') != null) return true;
         if (comp.len > 0 and (comp[comp.len - 1] == '.' or comp[comp.len - 1] == ' ')) return true;
-        const stem = std.mem.trimEnd(u8, comp[0 .. std.mem.indexOfScalar(u8, comp, '.') orelse comp.len], " ");
+        const stem = std.mem.trimEnd(u8, comp[0 .. std.mem.findScalar(u8, comp, '.') orelse comp.len], " ");
         for ([_][]const u8{ "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$" }) |d| {
             if (std.ascii.eqlIgnoreCase(stem, d)) return true;
         }
@@ -508,7 +508,7 @@ test "probeName: recognized as a temporary, beside no other name" {
     const a = arena_state.allocator();
     const name = try probeName(a, "0123456789abcdef".*);
     try testing.expectEqualStrings(".holt-tmp-probe-0123456789abcdef-\u{e9}", name);
-    try testing.expect(isProbeRel(name) and isProbeRel(try std.fmt.allocPrint(a, "d/{s}", .{name})));
+    try testing.expect(isProbeRel(name) and isProbeRel(try a.print("d/{s}", .{name})));
     try testing.expect(!isProbeRel(try tempRel(a, "x")));
     try testing.expect(isTempRel(name));
     try testing.expect(!isTempRel(".holt-tmp-probe-0123456789abcdef"));

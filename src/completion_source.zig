@@ -45,7 +45,7 @@ pub fn resolveCompletion(alloc: std.mem.Allocator, key: []const u8, prev: ?[]con
     // A `<project>/<repo>@<branch>` selector (for `h`/`holt path`) completes
     // the repo's worktree branches after the '@'.
     if (std.mem.eql(u8, key, "project_repo")) {
-        if (std.mem.indexOfScalar(u8, cur, '@')) |at| {
+        if (std.mem.findScalar(u8, cur, '@')) |at| {
             const branches = worktreeBranchCandidates(alloc, cur[0..at], ws) catch &.{};
             return .{ .directive = .default, .candidates = try filterMatches(alloc, branches, cur) };
         }
@@ -237,11 +237,11 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
         },
         .org => {
             const all = try w.list(alloc);
-            var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+            var seen: std.array_hash_map.String(void) = .empty;
             for (all) |p| try seen.put(alloc, p.org, {});
             for (try archivedOrgNames(alloc, w)) |org| try seen.put(alloc, org, {});
             var out: std.ArrayList([]const u8) = .empty;
-            for (seen.keys()) |org| try out.append(alloc, try std.fmt.allocPrint(alloc, "{s}/", .{org}));
+            for (seen.keys()) |org| try out.append(alloc, try alloc.print("{s}/", .{org}));
             return plain(alloc, try out.toOwnedSlice(alloc));
         },
         .repo => {
@@ -260,7 +260,7 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
                 }
             }
             const all = try w.list(alloc);
-            var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+            var seen: std.array_hash_map.String(void) = .empty;
             for (all) |p| {
                 for (p.marker.entries) |*e| {
                     if (e.raw_source == null) continue;
@@ -273,7 +273,7 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
         },
         .local_repo => {
             const all = try w.list(alloc);
-            var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+            var seen: std.array_hash_map.String(void) = .empty;
             for (all) |p| {
                 for (p.marker.entries) |*e| {
                     const src = e.source orelse continue;
@@ -317,7 +317,7 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
                 if (e.kind != .directory) continue;
                 const name = try alloc.dupe(u8, e.name);
                 const m = kept.aside.readManifest(alloc, layout, name) catch null;
-                const desc: ?[]const u8 = if (m) |man| try std.fmt.allocPrint(alloc, "{s} {s}", .{ man.key, man.rel }) else null;
+                const desc: ?[]const u8 = if (m) |man| try alloc.print("{s} {s}", .{ man.key, man.rel }) else null;
                 try out.append(alloc, .{ .value = name, .description = desc });
             }
             std.mem.sort(Candidate, out.items, {}, struct {
@@ -334,7 +334,7 @@ fn candidatesFor(alloc: std.mem.Allocator, key: []const u8, prev: ?[]const u8, w
         .keep_arg => {
             const layout: kept.store.Layout = .{ .synced_root = w.cfg.synced_root };
             var out: std.ArrayList(Candidate) = .empty;
-            var d = std.Io.Dir.cwd().openDir(fsutil.io(), try std.fs.path.join(alloc, &.{ try layout.keptDir(alloc), ".holt-machines" }), .{ .iterate = true }) catch return &.{};
+            var d = std.Io.Dir.cwd().openDir(fsutil.io(), try std.Io.Dir.path.join(alloc, &.{ try layout.keptDir(alloc), ".holt-machines" }), .{ .iterate = true }) catch return &.{};
             defer d.close(fsutil.io());
             var it = d.iterate();
             while (try it.next(fsutil.io())) |e| {
@@ -374,7 +374,7 @@ fn keptPathCandidates(alloc: std.mem.Allocator, w: *const workspace.Workspace, w
     if (!std.mem.eql(u8, cwd, c.worktree)) {
         if (!fsutil.pathIsInside(cwd, c.worktree)) return &.{};
         const rel = try alloc.dupe(u8, cwd[c.worktree.len + 1 ..]);
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
         prefix = try std.mem.concat(alloc, u8, &.{ rel, "/" });
     }
     var out: std.ArrayList(Candidate) = .empty;
@@ -416,7 +416,7 @@ fn repoState(alloc: std.mem.Allocator, e: *const marker.Entry, code_root: []cons
 /// tree).
 fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: ?*const workspace.Workspace) ![]const Candidate {
     const w = ws orelse return &.{};
-    const slash = std.mem.lastIndexOfScalar(u8, repo_sel, '/') orelse return &.{};
+    const slash = std.mem.findScalarLast(u8, repo_sel, '/') orelse return &.{};
 
     const p = switch (try w.find(alloc, repo_sel[0..slash])) {
         .one => |one| one,
@@ -427,7 +427,7 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
     const member = p.marker.findRepo(repo_query) orelse return &.{};
     const src = member.source orelse return &.{};
     const clone_path = try src.id().clonePath(alloc, w.cfg.code_root);
-    const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
+    const worktrees_dir = try alloc.print("{s}@worktrees", .{clone_path});
 
     var out: std.ArrayList(Candidate) = .empty;
     var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), worktrees_dir, .{ .iterate = true }) catch return out.toOwnedSlice(alloc);
@@ -436,17 +436,17 @@ fn worktreeBranchCandidates(alloc: std.mem.Allocator, repo_sel: []const u8, ws: 
     defer walker.deinit();
     while (try walker.next(fsutil.io())) |entry| {
         if (entry.kind != .directory) continue;
-        const full = try std.fs.path.join(alloc, &.{ worktrees_dir, entry.path });
-        if (fsutil.exists(try std.fs.path.join(alloc, &.{ full, ".git" }))) {
+        const full = try std.Io.Dir.path.join(alloc, &.{ worktrees_dir, entry.path });
+        if (fsutil.exists(try std.Io.Dir.path.join(alloc, &.{ full, ".git" }))) {
             // Branch names namespace on '/' (git's own separator, not the
             // platform's); the walker reports nesting with the native
             // separator, so translate it back for a round-trippable token.
-            const branch = if (std.fs.path.sep == '/') try alloc.dupe(u8, entry.path) else blk: {
+            const branch = if (std.Io.Dir.path.sep == '/') try alloc.dupe(u8, entry.path) else blk: {
                 const buf = try alloc.dupe(u8, entry.path);
-                std.mem.replaceScalar(u8, buf, std.fs.path.sep, '/');
+                std.mem.replaceScalar(u8, buf, std.Io.Dir.path.sep, '/');
                 break :blk buf;
             };
-            try out.append(alloc, .{ .value = try std.fmt.allocPrint(alloc, "{s}@{s}", .{ repo_sel, branch }), .description = branch });
+            try out.append(alloc, .{ .value = try alloc.print("{s}@{s}", .{ repo_sel, branch }), .description = branch });
         } else {
             try walker.enter(fsutil.io(), entry);
         }
@@ -486,7 +486,7 @@ fn archivedProjects(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![
         var name_it = org_dir.iterate();
         while (try name_it.next(fsutil.io())) |name_entry| {
             if (name_entry.kind != .directory) continue;
-            const marker_path = try std.fs.path.join(alloc, &.{ root, org_entry.name, name_entry.name, marker.marker_basename });
+            const marker_path = try std.Io.Dir.path.join(alloc, &.{ root, org_entry.name, name_entry.name, marker.marker_basename });
             if (!fsutil.exists(marker_path)) continue;
             try out.append(alloc, .{ .org = try alloc.dupe(u8, org_entry.name), .name = try alloc.dupe(u8, name_entry.name) });
         }
@@ -508,7 +508,7 @@ fn archivedProjects(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![
 /// under them has been archived (no active project keeps them alive in
 /// `w.list`).
 fn archivedOrgNames(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const []const u8 {
-    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+    var seen: std.array_hash_map.String(void) = .empty;
     for (try archivedProjects(alloc, ws)) |p| try seen.put(alloc, p.org, {});
     return alloc.dupe([]const u8, seen.keys());
 }
@@ -517,7 +517,7 @@ fn archivedOrgNames(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![
 fn archivedQueries(alloc: std.mem.Allocator, ws: *const workspace.Workspace) ![]const Candidate {
     var out: std.ArrayList(Candidate) = .empty;
     for (try archivedProjects(alloc, ws)) |p| {
-        try out.append(alloc, .{ .value = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ p.org, p.name }), .description = "archived" });
+        try out.append(alloc, .{ .value = try alloc.print("{s}/{s}", .{ p.org, p.name }), .description = "archived" });
     }
     return out.toOwnedSlice(alloc);
 }
@@ -591,7 +591,7 @@ test "resolveCompletion: repo completes off the preceding project positional" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try repos.put(arena, "frontend", "https://holt-test.invalid/acme/frontend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
@@ -648,14 +648,14 @@ test "resolveCompletion: project_repo with an '@' completes worktree branches fi
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
-    const leaf = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature", "x" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    const leaf = try std.Io.Dir.path.join(arena, &.{ try arena.print("{s}@worktrees", .{clone_path}), "feature", "x" });
     try fsutil.ensureDir(leaf);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ leaf, ".git" }), .data = "gitdir: x\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ leaf, ".git" }), .data = "gitdir: x\n" });
 
     var ctx = withWs(ws);
 
@@ -679,14 +679,14 @@ test "resolveCompletion: worktree_branch returns bare branch names for the prece
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
-    const leaf = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature", "x" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    const leaf = try std.Io.Dir.path.join(arena, &.{ try arena.print("{s}@worktrees", .{clone_path}), "feature", "x" });
     try fsutil.ensureDir(leaf);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ leaf, ".git" }), .data = "gitdir: x\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ leaf, ".git" }), .data = "gitdir: x\n" });
 
     var ctx = withWs(ws);
     const got = try resolveCompletion(arena, "worktree_branch", "proj/backend", "", &ctx);
@@ -705,7 +705,7 @@ test "candidatesFor: .repo offers every project's members when no project preced
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
@@ -728,7 +728,7 @@ test "candidatesFor: .local_repo offers a usable local name and skips a traversi
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
     try repos.put(arena, "widget", "local:../../outside/victim");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
@@ -844,7 +844,7 @@ test "resolveCompletion: holt keep completes files, machine ids with their hosts
     try testing.expectEqualStrings("000000000000000b", retired.candidates[0].value);
     try testing.expectEqualStrings("desktop", retired.candidates[0].description.?);
 
-    const source = try std.fs.path.join(arena, &.{ sb.root, "env" });
+    const source = try std.Io.Dir.path.join(arena, &.{ sb.root, "env" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = source, .data = "x" });
     const e = try kept.aside.setAside(arena, layout, "000000000000000a", "github.com/acme/widget", ".env", source, .keep);
     command_line = &.{ "holt", "__complete", "keep", "--prune-aside", "" };

@@ -65,7 +65,7 @@ jobs:
         run: zig build test --summary all
 
       - name: zig build (release)
-        run: zig build -Doptimize=ReleaseSafe --summary all
+        run: zig build -Doptimize=safe --summary all
 
       # Cross-compile and package each shipped target. The tarball holds the
       # bare `holt` binary at its root, which `holt upgrade` extracts as-is.
@@ -77,12 +77,12 @@ jobs:
             set -- $entry
             os="$1"; target="$2"
             arch="${target%%-*}"
-            zig build -Dtarget="$target" -Doptimize=ReleaseSafe
+            zig build -Dtarget="$target" -Doptimize=safe
             tar -C zig-out/bin -czf "holt-${os}-${arch}.tar.gz" holt
           done
           for target in x86_64-windows aarch64-windows; do
             arch="${target%%-*}"
-            zig build -Dtarget="$target" -Doptimize=ReleaseSafe
+            zig build -Dtarget="$target" -Doptimize=safe
             (cd zig-out/bin && zip -q "$OLDPWD/holt-windows-${arch}.zip" holt.exe)
           done
           sha256sum holt-*.tar.gz holt-*.zip > SHA256SUMS

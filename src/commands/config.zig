@@ -99,9 +99,9 @@ fn runEdit(ctx: *app.Ctx, _: cli.Args(EditSpec)) anyerror!u8 {
 }
 
 fn writeConfigFile(alloc: std.mem.Allocator, xdg_root: []const u8, content: []const u8) ![]u8 {
-    const holt_dir = try std.fs.path.join(alloc, &.{ xdg_root, "holt" });
+    const holt_dir = try std.Io.Dir.path.join(alloc, &.{ xdg_root, "holt" });
     try fsutil.ensureDir(holt_dir);
-    const path = try std.fs.path.join(alloc, &.{ holt_dir, "config.toml" });
+    const path = try std.Io.Dir.path.join(alloc, &.{ holt_dir, "config.toml" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = path, .data = content });
     return path;
 }
@@ -123,10 +123,10 @@ test "run: with no argument, prints the three roots, the active backend, and the
     const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
-    const synced_root = try std.fs.path.join(arena, &.{ root, "synced" });
-    const code_root = try std.fs.path.join(arena, &.{ root, "code" });
-    const hub_root = try std.fs.path.join(arena, &.{ root, "hub" });
-    const content = try std.fmt.allocPrint(arena,
+    const synced_root = try std.Io.Dir.path.join(arena, &.{ root, "synced" });
+    const code_root = try std.Io.Dir.path.join(arena, &.{ root, "code" });
+    const hub_root = try std.Io.Dir.path.join(arena, &.{ root, "hub" });
+    const content = try arena.print(
         \\[workspace]
         \\backend = "dropbox"
         \\code_root = "{s}"
@@ -141,11 +141,11 @@ test "run: with no argument, prints the three roots, the active backend, and the
     const got = try testutil.runCmd(arena, command.run, null, &.{});
 
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, synced_root) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, code_root) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, hub_root) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "backend = dropbox") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, path) != null);
+    try testing.expect(std.mem.find(u8, got.out, synced_root) != null);
+    try testing.expect(std.mem.find(u8, got.out, code_root) != null);
+    try testing.expect(std.mem.find(u8, got.out, hub_root) != null);
+    try testing.expect(std.mem.find(u8, got.out, "backend = dropbox") != null);
+    try testing.expect(std.mem.find(u8, got.out, path) != null);
 }
 
 test "run: each root line stays `<key> = <absolute>`, parseable by an hir copied from an older holt" {
@@ -160,8 +160,8 @@ test "run: each root line stays `<key> = <absolute>`, parseable by an hir copied
     const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
-    const synced_root = try std.fs.path.join(arena, &.{ root, "synced" });
-    const content = try std.fmt.allocPrint(arena,
+    const synced_root = try std.Io.Dir.path.join(arena, &.{ root, "synced" });
+    const content = try arena.print(
         \\[workspace]
         \\synced_root = "{s}"
         \\
@@ -177,12 +177,12 @@ test "run: each root line stays `<key> = <absolute>`, parseable by an hir copied
     // user's dotfiles keeps parsing this, so the shape has to hold: one space
     // either side of `=`, and a value no shell has to expand.
     for ([_][]const u8{ "synced_root", "code_root", "hub_root" }) |key| {
-        const prefix = try std.fmt.allocPrint(arena, "{s} = ", .{key});
-        const at = std.mem.indexOf(u8, got.out, prefix) orelse return error.TestUnexpectedResult;
+        const prefix = try arena.print("{s} = ", .{key});
+        const at = std.mem.find(u8, got.out, prefix) orelse return error.TestUnexpectedResult;
         const rest = got.out[at + prefix.len ..];
-        const value = rest[0 .. std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len];
+        const value = rest[0 .. std.mem.findScalar(u8, rest, '\n') orelse rest.len];
         try testing.expect(value.len > 0);
-        try testing.expect(std.fs.path.isAbsolute(value));
+        try testing.expect(std.Io.Dir.path.isAbsolute(value));
         try testing.expect(value[0] != '~');
     }
 }
@@ -199,8 +199,8 @@ test "run: with no argument in direct mode, the backend line reads (direct synce
     const xdg_override = try testutil.EnvScope.install(arena, &.{.{ "XDG_CONFIG_HOME", root }});
     defer xdg_override.restore();
 
-    const synced_root = try std.fs.path.join(arena, &.{ root, "synced" });
-    const content = try std.fmt.allocPrint(arena,
+    const synced_root = try std.Io.Dir.path.join(arena, &.{ root, "synced" });
+    const content = try arena.print(
         \\[workspace]
         \\synced_root = "{s}"
         \\
@@ -210,7 +210,7 @@ test "run: with no argument in direct mode, the backend line reads (direct synce
     const got = try testutil.runCmd(arena, command.run, null, &.{});
 
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "backend = (direct synced_root)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "backend = (direct synced_root)") != null);
 }
 
 test "run: with no argument, a broken config reports the path and diagnostic instead of aborting" {
@@ -234,9 +234,9 @@ test "run: with no argument, a broken config reports the path and diagnostic ins
     const got = try testutil.runCmd(arena, command.run, null, &.{});
 
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, try fsutil.contractTilde(arena, app.envOf_current(), path)) != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "fix it with \"holt config edit\"") != null);
+    try testing.expect(std.mem.find(u8, got.err, try fsutil.contractTilde(arena, app.envOf_current(), path)) != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "fix it with \"holt config edit\"") != null);
 }
 
 test "run: an argument other than \"edit\" is a usage error naming the accepted form" {
@@ -246,7 +246,7 @@ test "run: an argument other than \"edit\" is a usage error naming the accepted 
 
     const got = try testutil.runCmd(arena, command.run, null, &.{"bogus"});
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt config [edit]") != null);
+    try testing.expect(std.mem.find(u8, got.err, "holt config [edit]") != null);
 }
 
 test "run: config edit opens $EDITOR even when the config file is malformed" {
@@ -258,7 +258,7 @@ test "run: config edit opens $EDITOR even when the config file is malformed" {
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
+    const marker_path = try std.Io.Dir.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{});
 
     const editor_override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
@@ -288,7 +288,7 @@ test "run: config edit with no config file errors, pointing at holt setup, witho
     defer tmp.cleanup();
     const root = try tmpRoot(arena, &tmp);
 
-    const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
+    const marker_path = try std.Io.Dir.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{});
 
     const editor_override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
@@ -298,8 +298,8 @@ test "run: config edit with no config file errors, pointing at holt setup, witho
 
     const got = try testutil.runCmd(arena, edit_command.run, null, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no config at") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt setup") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no config at") != null);
+    try testing.expect(std.mem.find(u8, got.err, "holt setup") != null);
     try testing.expect(!fsutil.exists(marker_path));
 }
 
@@ -325,5 +325,5 @@ test "run: config edit with no $EDITOR errors cleanly, without spawning anything
 
     const got = try testutil.runCmd(arena, edit_command.run, null, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "EDITOR") != null);
+    try testing.expect(std.mem.find(u8, got.err, "EDITOR") != null);
 }

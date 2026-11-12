@@ -50,7 +50,7 @@ pub const Fixture = struct {
     /// Writes `data` at `rel`, creating parents, and returns its path.
     pub fn write(f: *Fixture, rel: []const u8, data: []const u8) ![]u8 {
         const p = try f.path(rel);
-        if (std.fs.path.dirname(p)) |d| try fsutil.ensureDir(d);
+        if (std.Io.Dir.path.dirname(p)) |d| try fsutil.ensureDir(d);
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
         return p;
     }
@@ -59,10 +59,10 @@ pub const Fixture = struct {
 /// Whether names differing only in case are different files under `dir`,
 /// as on Linux or a case-sensitive APFS volume.
 pub fn caseSensitive(alloc: std.mem.Allocator, dir: []const u8) !bool {
-    const probe = try std.fs.path.join(alloc, &.{ dir, "case-probe" });
+    const probe = try std.Io.Dir.path.join(alloc, &.{ dir, "case-probe" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = probe, .data = "" });
     defer fsutil.removePath(probe) catch {};
-    return try content.entryAt(try std.fs.path.join(alloc, &.{ dir, "CASE-PROBE" })) == .absent;
+    return try content.entryAt(try std.Io.Dir.path.join(alloc, &.{ dir, "CASE-PROBE" })) == .absent;
 }
 
 pub const repo_key = "github.com/acme/widget";
@@ -88,7 +88,7 @@ pub const Machine = struct {
     /// link when one is there.
     pub fn write(m: *const Machine, rel: []const u8, data: []const u8) !void {
         const p = try m.path(rel);
-        const parent = std.fs.path.dirname(p).?;
+        const parent = std.Io.Dir.path.dirname(p).?;
         if (fsutil.exists(parent) == false) try fsutil.ensureDir(parent);
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
     }
@@ -97,7 +97,7 @@ pub const Machine = struct {
     /// saves by writing a new file and renaming it over the old one.
     pub fn saveByRename(m: *const Machine, rel: []const u8, data: []const u8) !void {
         const p = try m.path(rel);
-        const tmp = try std.fmt.allocPrint(m.ctx.alloc, "{s}.save", .{p});
+        const tmp = try m.ctx.alloc.print("{s}.save", .{p});
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = tmp, .data = data });
         try std.Io.Dir.cwd().rename(tmp, std.Io.Dir.cwd(), p, io());
     }
@@ -162,10 +162,10 @@ pub const World = struct {
         const bare = try a.dupe(u8, bare_owned);
         const machines = try a.alloc(Machine, n);
         for (machines, 0..) |*mach, i| {
-            const root = try std.fs.path.join(a, &.{ sb.root, "machine", names[i] });
-            const synced = try std.fs.path.join(a, &.{ root, "synced" });
-            const code = try std.fs.path.join(a, &.{ root, "code" });
-            const tmp = try std.fs.path.join(a, &.{ root, "tmp" });
+            const root = try std.Io.Dir.path.join(a, &.{ sb.root, "machine", names[i] });
+            const synced = try std.Io.Dir.path.join(a, &.{ root, "synced" });
+            const code = try std.Io.Dir.path.join(a, &.{ root, "code" });
+            const tmp = try std.Io.Dir.path.join(a, &.{ root, "tmp" });
             try fsutil.ensureDir(synced);
             try fsutil.ensureDir(tmp);
             const clone_path = try fsutil.joinSlashy(a, code, repo_key);
@@ -177,7 +177,7 @@ pub const World = struct {
             try map.put("TEMP", tmp);
             try map.put("HOME", root);
             try map.put("USERPROFILE", root);
-            try map.put("XDG_STATE_HOME", try std.fs.path.join(a, &.{ root, "state" }));
+            try map.put("XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ root, "state" }));
             mach.* = .{
                 .name = names[i],
                 .synced = synced,
@@ -201,7 +201,7 @@ pub const World = struct {
 
     fn snapshot(w: *World, i: usize, sub: []const u8) !SnapMap {
         var out: SnapMap = .empty;
-        const kept = try std.fs.path.join(w.a, &.{ w.machines[i].synced, "kept" });
+        const kept = try std.Io.Dir.path.join(w.a, &.{ w.machines[i].synced, "kept" });
         var d = std.Io.Dir.cwd().openDir(io(), kept, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound => return out,
             else => return err,
@@ -211,11 +211,11 @@ pub const World = struct {
         defer walker.deinit();
         while (try walker.next(io())) |e| {
             const rel = try w.a.dupe(u8, e.path);
-            if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+            if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
             if (!under(rel, sub)) continue;
             switch (e.kind) {
                 .directory => try out.put(w.a, rel, .{ .dir = true, .hex = @splat('0') }),
-                .file => try out.put(w.a, rel, .{ .dir = false, .hex = try content.hashFile(w.a, try std.fs.path.join(w.a, &.{ kept, e.path })) }),
+                .file => try out.put(w.a, rel, .{ .dir = false, .hex = try content.hashFile(w.a, try std.Io.Dir.path.join(w.a, &.{ kept, e.path })) }),
                 else => {},
             }
         }
@@ -237,8 +237,8 @@ pub const World = struct {
         if (w.offline[from] or w.offline[to]) return error.Offline;
         const cur = try w.snapshot(from, sub);
         const prev = &w.delivered[from][to];
-        const src_kept = try std.fs.path.join(w.a, &.{ w.machines[from].synced, "kept" });
-        const dst_kept = try std.fs.path.join(w.a, &.{ w.machines[to].synced, "kept" });
+        const src_kept = try std.Io.Dir.path.join(w.a, &.{ w.machines[from].synced, "kept" });
+        const dst_kept = try std.Io.Dir.path.join(w.a, &.{ w.machines[to].synced, "kept" });
 
         var changed: std.ArrayList([]const u8) = .empty;
         var it = cur.iterator();
@@ -256,7 +256,7 @@ pub const World = struct {
                 try fsutil.ensureDir(dst);
             } else {
                 if (existing == .dir) try std.Io.Dir.cwd().deleteTree(io(), dst);
-                try fsutil.ensureDir(std.fs.path.dirname(dst).?);
+                try fsutil.ensureDir(std.Io.Dir.path.dirname(dst).?);
                 const bytes = try content.readSmall(w.a, try fsutil.joinSlashy(w.a, src_kept, rel));
                 try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = dst, .data = bytes });
             }
@@ -311,15 +311,15 @@ test "World: delivery is per sender and receiver, can be withheld, and carries d
     defer sb.deinit();
     var w = try World.init(a, &sb, 3);
 
-    const f = try std.fs.path.join(a, &.{ w.m(0).synced, "kept", "x", "f" });
-    try fsutil.ensureDir(std.fs.path.dirname(f).?);
+    const f = try std.Io.Dir.path.join(a, &.{ w.m(0).synced, "kept", "x", "f" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(f).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = f, .data = "one" });
 
     w.offline[2] = true;
     try testing.expectError(error.Offline, w.deliver(0, 2));
     try w.sync();
-    const at_b = try std.fs.path.join(a, &.{ w.m(1).synced, "kept", "x", "f" });
-    const at_c = try std.fs.path.join(a, &.{ w.m(2).synced, "kept", "x", "f" });
+    const at_b = try std.Io.Dir.path.join(a, &.{ w.m(1).synced, "kept", "x", "f" });
+    const at_c = try std.Io.Dir.path.join(a, &.{ w.m(2).synced, "kept", "x", "f" });
     try testing.expectEqualStrings("one", try content.readSmall(a, at_b));
     try testing.expectEqual(content.Entry.absent, try content.entryAt(at_c));
 
@@ -330,10 +330,10 @@ test "World: delivery is per sender and receiver, can be withheld, and carries d
     try w.deliver(0, 2);
     try testing.expectEqual(content.Entry.absent, try content.entryAt(at_c));
 
-    const g = try std.fs.path.join(a, &.{ w.m(0).synced, "kept", "x", "g" });
+    const g = try std.Io.Dir.path.join(a, &.{ w.m(0).synced, "kept", "x", "g" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = g, .data = "from a" });
     try w.deliver(0, 1);
-    try std.Io.Dir.cwd().deleteFile(io(), try std.fs.path.join(a, &.{ w.m(1).synced, "kept", "x", "g" }));
+    try std.Io.Dir.cwd().deleteFile(io(), try std.Io.Dir.path.join(a, &.{ w.m(1).synced, "kept", "x", "g" }));
     try w.deliver(1, 0);
     try testing.expectEqual(content.Entry.absent, try content.entryAt(g));
 }

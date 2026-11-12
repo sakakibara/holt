@@ -201,7 +201,7 @@ const Builder = struct {
             if (!failsLinked(i)) continue;
             const own = i.worktree == null;
             const place: Place = .{ .tree = tree, .key = rep.key, .item = i };
-            const id = try std.fmt.allocPrint(b.a, "{s}\x00{s}", .{ i.worktree orelse tree, i.rel });
+            const id = try b.a.print("{s}\x00{s}", .{ i.worktree orelse tree, i.rel });
             const gop = try b.seen.getOrPut(b.a, id);
             if (!gop.found_existing) {
                 gop.value_ptr.* = .{ .at = b.unlinked.items.len, .own = own };
@@ -238,9 +238,9 @@ const CloneInfo = struct {
 /// Whether the clone at `path` has holt's block in its `info/exclude`,
 /// read directly for a main working tree.
 fn hasBlock(alloc: std.mem.Allocator, path: []const u8) !bool {
-    const exclude = try std.fs.path.join(alloc, &.{ path, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(alloc, &.{ path, ".git", "info", "exclude" });
     const text = content.readSmall(alloc, exclude) catch return false;
-    return std.mem.indexOf(u8, text, kept.block.begin_line) != null;
+    return std.mem.find(u8, text, kept.block.begin_line) != null;
 }
 
 /// Runs every kept-file check over the clones of the code tree and the hub
@@ -453,7 +453,7 @@ fn trackedLinks(ctx: kept.Ctx, tree: []const u8, chain: []const []const u8, root
     var it = std.mem.splitScalar(u8, res.stdout, 0);
     while (it.next()) |rec| {
         if (!std.mem.startsWith(u8, rec, "120000 ")) continue;
-        const tab = std.mem.indexOfScalar(u8, rec, '\t') orelse continue;
+        const tab = std.mem.findScalar(u8, rec, '\t') orelse continue;
         const rel = rec[tab + 1 ..];
         const lp = try fsutil.joinSlashy(a, tree, rel);
         const raw = (try content.readLink(a, lp)) orelse continue;
@@ -582,7 +582,7 @@ fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIn
         var it = dir.iterate();
         while (try it.next(io())) |e| {
             if (e.kind != .directory) {
-                if (!isTemp(e.name) and !store.isMetadata(e.name)) try unknown.append(alloc, try std.fs.path.join(alloc, &.{ aside_dir, e.name }));
+                if (!isTemp(e.name) and !store.isMetadata(e.name)) try unknown.append(alloc, try std.Io.Dir.path.join(alloc, &.{ aside_dir, e.name }));
                 continue;
             }
             if (store.isMetadata(e.name)) continue;
@@ -619,7 +619,7 @@ fn checkStore(alloc: std.mem.Allocator, ctx: kept.Ctx, index: *const store.KeyIn
 /// Whether `rel`, an unknown file of a key, is iCloud's `.<name>.icloud`
 /// stand-in for a path the key names: reported as a placeholder instead.
 fn icloudStandIn(named: []const []const u8, rel: []const u8) bool {
-    const base = std.fs.path.basename(rel);
+    const base = std.Io.Dir.path.basename(rel);
     if (!std.mem.startsWith(u8, base, ".") or !std.mem.endsWith(u8, base, ".icloud")) return false;
     const dir = rel[0 .. rel.len - base.len];
     const name = base[1 .. base.len - ".icloud".len];
@@ -638,7 +638,7 @@ fn reservedCopiesIn(alloc: std.mem.Allocator, dir: []const u8, known: []const []
     var it = d.iterate();
     while (try it.next(io())) |e| {
         if (!isReservedCopy(e.name, known)) continue;
-        try found.append(alloc, .{ .path = try std.fs.path.join(alloc, &.{ dir, e.name }), .dir = e.kind == .directory });
+        try found.append(alloc, .{ .path = try std.Io.Dir.path.join(alloc, &.{ dir, e.name }), .dir = e.kind == .directory });
     }
     std.mem.sort(Copy, found.items, {}, struct {
         fn lt(_: void, x: Copy, y: Copy) bool {
@@ -658,7 +658,7 @@ fn reservedStandIns(alloc: std.mem.Allocator, dir: []const u8, out: *std.ArrayLi
     var it = d.iterate();
     while (try it.next(io())) |e| if (store.reservedStandIn(e.name)) |r| try names.append(alloc, try alloc.dupe(u8, r));
     std.mem.sort([]const u8, names.items, {}, paths.lessThan);
-    for (names.items) |n| try out.append(alloc, try std.fs.path.join(alloc, &.{ dir, n }));
+    for (names.items) |n| try out.append(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, n }));
 }
 
 /// Whether the directory `dir` directly holds a name holt reserves, or
@@ -693,7 +693,7 @@ fn strayOutsideKeys(alloc: std.mem.Allocator, kept_dir: []const u8, keys: []cons
     while (try walker.next(io())) |entry| {
         if (paths.isReserved(entry.basename) or store.reservedStandIn(entry.basename) != null or store.isMetadata(entry.basename)) continue;
         const rel = try alloc.dupe(u8, entry.path);
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
         if (paths.contains(keys, rel)) continue;
         if (entry.kind != .directory) {
             try files.append(alloc, try fsutil.joinSlashy(alloc, kept_dir, rel));
@@ -717,9 +717,9 @@ fn strayOutsideKeys(alloc: std.mem.Allocator, kept_dir: []const u8, keys: []cons
             continue;
         }
         for (marked) |m| {
-            const record_stand_in = try std.fs.path.join(alloc, &.{ m, "." ++ store.record_basename ++ ".icloud" });
+            const record_stand_in = try std.Io.Dir.path.join(alloc, &.{ m, "." ++ store.record_basename ++ ".icloud" });
             if (try content.entryAt(record_stand_in) != .absent) {
-                try placeholders.append(alloc, try std.fs.path.join(alloc, &.{ m, store.record_basename }));
+                try placeholders.append(alloc, try std.Io.Dir.path.join(alloc, &.{ m, store.record_basename }));
             } else try unrecorded.append(alloc, m);
         }
     }
@@ -742,7 +742,7 @@ fn markedDirs(alloc: std.mem.Allocator, root: []const u8) ![]const []const u8 {
     defer walker.deinit();
     while (try walker.next(io())) |entry| {
         if (entry.kind != .directory or store.isMetadata(entry.basename) or paths.isReserved(entry.basename)) continue;
-        const full = try std.fs.path.join(alloc, &.{ root, entry.path });
+        const full = try std.Io.Dir.path.join(alloc, &.{ root, entry.path });
         if (try holdsReserved(alloc, full)) {
             try out.append(alloc, full);
             continue;
@@ -762,8 +762,8 @@ fn scanDir(alloc: std.mem.Allocator, root: []const u8, host: []const u8, placeho
     var walker = try d.walkSelectively(alloc);
     defer walker.deinit();
     while (try walker.next(io())) |entry| {
-        const full = try std.fs.path.join(alloc, &.{ root, entry.path });
-        const parent = std.fs.path.dirname(full) orelse root;
+        const full = try std.Io.Dir.path.join(alloc, &.{ root, entry.path });
+        const parent = std.Io.Dir.path.dirname(full) orelse root;
         if (try suspectedConflict(alloc, parent, entry.basename, host)) try suspected.append(alloc, full);
         switch (entry.kind) {
             .directory => try walker.enter(io(), entry),
@@ -780,18 +780,18 @@ fn scanDir(alloc: std.mem.Allocator, root: []const u8, host: []const u8, placeho
 /// "<stem> <n><ext>", and OneDrive's "<stem>-<this host><ext>" only while
 /// "<stem><ext>" is beside it.
 fn suspectedConflict(alloc: std.mem.Allocator, dir: []const u8, name: []const u8, host: []const u8) !bool {
-    if (containsIgnoreCase(name, "conflicted copy") or std.mem.indexOf(u8, name, ".sync-conflict-") != null) return true;
-    const dot = std.mem.lastIndexOfScalar(u8, name, '.');
+    if (containsIgnoreCase(name, "conflicted copy") or std.mem.find(u8, name, ".sync-conflict-") != null) return true;
+    const dot = std.mem.findScalarLast(u8, name, '.');
     const split = if (dot) |i| (if (i == 0) name.len else i) else name.len;
     const stem = name[0..split];
     const ext = name[split..];
     const original: ?[]const u8 = blk: {
         if (std.mem.endsWith(u8, stem, ")")) {
-            if (std.mem.lastIndexOf(u8, stem, " (")) |open| {
+            if (std.mem.findLast(u8, stem, " (")) |open| {
                 if (allDigits(stem[open + 2 .. stem.len - 1]) and open > 0) break :blk stem[0..open];
             }
         }
-        if (std.mem.lastIndexOfScalar(u8, stem, ' ')) |sp| {
+        if (std.mem.findScalarLast(u8, stem, ' ')) |sp| {
             if (sp > 0 and allDigits(stem[sp + 1 ..])) break :blk stem[0..sp];
         }
         if (host.len > 0 and stem.len > host.len + 1 and stem[stem.len - host.len - 1] == '-' and std.ascii.eqlIgnoreCase(stem[stem.len - host.len ..], host)) {
@@ -800,7 +800,7 @@ fn suspectedConflict(alloc: std.mem.Allocator, dir: []const u8, name: []const u8
         break :blk null;
     };
     const o = original orelse return false;
-    const sibling = try std.fs.path.join(alloc, &.{ dir, try std.mem.concat(alloc, u8, &.{ o, ext }) });
+    const sibling = try std.Io.Dir.path.join(alloc, &.{ dir, try std.mem.concat(alloc, u8, &.{ o, ext }) });
     return try content.entryAt(sibling) != .absent;
 }
 
@@ -896,7 +896,7 @@ test "suspectedConflict: each client's form, the numbered ones only beside their
     const a = arena_state.allocator();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = try a.dupe(u8, buf[0..try tmp.dir.realPath(std.testing.io, &buf)]);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ dir, "notes.md" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ dir, "notes.md" }), .data = "" });
 
     try std.testing.expect(try suspectedConflict(a, dir, "notes (host's conflicted copy 2024-01-01).md", "h"));
     try std.testing.expect(try suspectedConflict(a, dir, "notes.sync-conflict-20240101-000000-ABC.md", "h"));
@@ -932,7 +932,7 @@ test "checkStore: a released path git reads only as a regular file is not report
     try m.write("first.json", "kept by hand, so the key exists");
     _ = try m.keep("first.json");
     const kp = try m.keptPath("a/.mailmap");
-    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(kp).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = kp, .data = "A <a@example.com>\n" });
     const h = try content.hashPath(a, kp);
     try store.writeFact(a, m.ctx.layout, harness.repo_key, m.ctx.machine_id, "a/.mailmap", .file, &h.hex);

@@ -28,7 +28,7 @@ pub const Handle = struct {
 /// processes resolving the same project derive the same lock file, so their
 /// critical sections run one at a time.
 pub fn acquire(alloc: std.mem.Allocator, env: Env, content_path: []const u8) !Handle {
-    return acquireIn(alloc, try std.fs.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), "holt-locks" }), content_path);
+    return acquireIn(alloc, try std.Io.Dir.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), "holt-locks" }), content_path);
 }
 
 /// Blocks until it holds the exclusive lock that `name` maps to in the
@@ -49,7 +49,7 @@ pub fn acquireAt(path: []const u8) !Handle {
 /// that is never part of a synced tree, so lock files are never cloud-synced.
 /// The lock dir is created if absent. Exposed for tests.
 fn lockPath(alloc: std.mem.Allocator, env: Env, content_path: []const u8) ![]const u8 {
-    return lockPathIn(alloc, try std.fs.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), "holt-locks" }), content_path);
+    return lockPathIn(alloc, try std.Io.Dir.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), "holt-locks" }), content_path);
 }
 
 /// `<dir>/holt-<hash of name>.lock`, creating `dir` if absent.
@@ -61,8 +61,8 @@ pub fn lockPathIn(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) !
 /// `<dir>/holt-<hash of name>.lock`, creating nothing.
 pub fn lockFileIn(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ![]const u8 {
     const key = std.hash.Wyhash.hash(0, name);
-    const filename = try std.fmt.allocPrint(alloc, "holt-{x}.lock", .{key});
-    return std.fs.path.join(alloc, &.{ dir, filename });
+    const filename = try alloc.print("holt-{x}.lock", .{key});
+    return std.Io.Dir.path.join(alloc, &.{ dir, filename });
 }
 
 test "acquire: a held lock blocks a second acquirer; releasing frees it" {

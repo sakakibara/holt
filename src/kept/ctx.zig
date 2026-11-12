@@ -88,7 +88,7 @@ pub const RunScratch = struct {
 
     pub fn init(alloc: std.mem.Allocator, env: Env) !RunScratch {
         const suffix = content.randomSuffix();
-        const dir = try std.fs.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), try std.mem.concat(alloc, u8, &.{ "holt-report-", &suffix }) });
+        const dir = try std.Io.Dir.path.join(alloc, &.{ try fsutil.tempDir(alloc, env), try std.mem.concat(alloc, u8, &.{ "holt-report-", &suffix }) });
         try fsutil.ensureDir(dir);
         return .{ .dir = dir };
     }
@@ -151,10 +151,10 @@ fn lockAt(path: []const u8) !projectlock.Handle {
 /// which only serializes them.
 fn lockName(ctx: Ctx, key: []const u8) ![]const u8 {
     const a = ctx.alloc;
-    const full = try std.fs.path.resolve(a, &.{try ctx.layout.keyDir(a, key)});
+    const full = try std.Io.Dir.path.resolveAlloc(a, &.{try ctx.layout.keyDir(a, key)});
     var head: []const u8 = full;
     while (try content.entryAt(head) == .absent) {
-        head = std.fs.path.dirname(head) orelse break;
+        head = std.Io.Dir.path.dirname(head) orelse break;
     }
     if (try content.entryAt(head) == .absent) return full;
     const real = try fsutil.realPathOrSelf(a, head);
@@ -187,7 +187,7 @@ pub fn lockClone(ctx: Ctx, common_dir: []const u8) !Lock {
 /// The lock file of the clone's lock (`lockClone`) whose common directory
 /// is `common_dir`.
 pub fn cloneLockPath(ctx: Ctx, common_dir: []const u8) ![]const u8 {
-    return std.fs.path.join(ctx.alloc, &.{ try clone.stateDir(ctx.alloc, common_dir), "lock" });
+    return std.Io.Dir.path.join(ctx.alloc, &.{ try clone.stateDir(ctx.alloc, common_dir), "lock" });
 }
 
 /// Locks a caller already holds, handed to a call that would otherwise
@@ -217,7 +217,7 @@ pub const Held = struct {
 };
 
 fn lockDir(ctx: Ctx) ![]const u8 {
-    return std.fs.path.join(ctx.alloc, &.{ try machine.stateDir(ctx.alloc, ctx.env), "locks" });
+    return std.Io.Dir.path.join(ctx.alloc, &.{ try machine.stateDir(ctx.alloc, ctx.env), "locks" });
 }
 
 /// Test seam: every key `lockKey` locks is appended, in order.

@@ -56,14 +56,14 @@ fn resolveTarget(ctx: *app.Ctx, ws: workspace.Workspace, query: []const u8) !?[]
     const whole = try ws.find(alloc, query);
     switch (whole) {
         .one => |p| {
-            const docs_path = try std.fs.path.join(alloc, &.{ p.content_path, "docs" });
+            const docs_path = try std.Io.Dir.path.join(alloc, &.{ p.content_path, "docs" });
             try fsutil.ensureDir(docs_path);
             return docs_path;
         },
         .none, .ambiguous => {},
     }
 
-    if (std.mem.lastIndexOfScalar(u8, query, '/')) |slash| {
+    if (std.mem.findScalarLast(u8, query, '/')) |slash| {
         const project_query = query[0..slash];
         const repo_query = query[slash + 1 ..];
         if (project_query.len > 0 and repo_query.len > 0) {
@@ -88,7 +88,7 @@ test "run: spawns $EDITOR with the docs path as both argv[1] and cwd" {
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
-    const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
+    const marker_path = try std.Io.Dir.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
     const override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
@@ -97,7 +97,7 @@ test "run: spawns $EDITOR with the docs path as both argv[1] and cwd" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const docs_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "docs" });
+    const docs_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "docs" });
     try testing.expect(fsutil.exists(docs_path));
 
     const recorded = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), marker_path, arena, .limited(1 << 20));
@@ -117,14 +117,14 @@ test "run: <project>/<repo> opens the repo's real clone path, not the docs dir" 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos, .empty);
 
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
     try fsutil.ensureDir(clone_path);
 
-    const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
+    const marker_path = try std.Io.Dir.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
     const override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
@@ -137,8 +137,8 @@ test "run: <project>/<repo> opens the repo's real clone path, not the docs dir" 
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\r\n"), '\n');
     try testing.expectEqualStrings(clone_path, std.mem.trimEnd(u8, lines.next().?, "\r"));
 
-    const docs_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", "docs" });
-    try testing.expect(std.mem.indexOf(u8, recorded, docs_path) == null);
+    const docs_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "widget", "docs" });
+    try testing.expect(std.mem.find(u8, recorded, docs_path) == null);
 }
 
 test "run: a project with no docs dir yet still gets one created for the editor" {
@@ -153,10 +153,10 @@ test "run: a project with no docs dir yet still gets one created for the editor"
     const ws = try testutil.testWorkspace(arena, root);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
-    const docs_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "docs" });
+    const docs_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "docs" });
     try testing.expect(!fsutil.exists(docs_path));
 
-    const marker_path = try std.fs.path.join(arena, &.{ root, "editor-invocation.txt" });
+    const marker_path = try std.Io.Dir.path.join(arena, &.{ root, "editor-invocation.txt" });
     const script_path = try testutil.writeFakeEditor(arena, root, marker_path, .{ .args = 1, .cwd = true });
 
     const override = try testutil.EnvScope.install(arena, &.{.{ "EDITOR", script_path }});
@@ -184,7 +184,7 @@ test "run: missing $EDITOR errors cleanly, without ever spawning anything" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "EDITOR") != null);
+    try testing.expect(std.mem.find(u8, got.err, "EDITOR") != null);
 }
 
 test "run: no matching project exits 1 and reports on stderr" {
@@ -200,5 +200,5 @@ test "run: no matching project exits 1 and reports on stderr" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
 }

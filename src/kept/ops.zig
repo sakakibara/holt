@@ -69,7 +69,7 @@ fn usableRecord(a: std.mem.Allocator, layout: store.Layout, key: []const u8, roo
 /// The kept directory path `rel` lies below, if any.
 pub fn keptDirAbove(ks: store.KeyState, rel: []const u8) ?[]const u8 {
     var end: usize = rel.len;
-    while (std.mem.lastIndexOfScalar(u8, rel[0..end], '/')) |slash| {
+    while (std.mem.findScalarLast(u8, rel[0..end], '/')) |slash| {
         end = slash;
         const up = rel[0..end];
         const facts = ks.factsFor(up);
@@ -317,13 +317,13 @@ fn stageMerged(ctx: Ctx, key: []const u8, src: []const u8, src_hash: content.Has
     var added = false;
     next: for (try content.treeFiles(a, target)) |kf| {
         var end: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, kf.path, end, '/')) |slash| : (end = slash + 1) {
+        while (std.mem.findScalarPos(u8, kf.path, end, '/')) |slash| : (end = slash + 1) {
             const up = try fsutil.joinSlashy(a, staged.path, kf.path[0..slash]);
             if (try content.entryAt(up) == .file) continue :next;
         }
         const to = try fsutil.joinSlashy(a, staged.path, kf.path);
         if (try content.entryAt(to) != .absent) continue;
-        try fsutil.ensureDir(std.fs.path.dirname(to).?);
+        try fsutil.ensureDir(std.Io.Dir.path.dirname(to).?);
         try content.copyRegular(a, try fsutil.joinSlashy(a, target, kf.path), to);
         if (!try content.executableCarried(a, try fsutil.joinSlashy(a, target, kf.path), to)) _ = try content.carryExecutable(a, try fsutil.joinSlashy(a, target, kf.path), to);
         added = true;
@@ -979,9 +979,9 @@ pub fn asideEntries(ctx: Ctx, index: *const store.KeyIndex, now_ms: i64, referen
     var out: std.ArrayList(AsideInfo) = .empty;
     for (names.items) |name| {
         const m = try aside.readManifest(a, ctx.layout, name);
-        const dir = try std.fs.path.join(a, &.{ try ctx.layout.asideDir(a), name });
+        const dir = try std.Io.Dir.path.join(a, &.{ try ctx.layout.asideDir(a), name });
         const time = stampTime(name) orelse modifiedMs(dir);
-        const bytes = try treeBytes(a, try std.fs.path.join(a, &.{ dir, "data" })) + try treeBytes(a, try std.fs.path.join(a, &.{ dir, "index" }));
+        const bytes = try treeBytes(a, try std.Io.Dir.path.join(a, &.{ dir, "data" })) + try treeBytes(a, try std.Io.Dir.path.join(a, &.{ dir, "index" }));
         var info: AsideInfo = .{ .stamp = name, .manifest = m, .time_ms = time, .bytes = bytes, .held = null };
         if (m) |man| {
             if (man.hash(a)) |h| {
@@ -1137,8 +1137,8 @@ pub fn pruneEntry(ctx: Ctx, info: AsideInfo) !bool {
     };
     if (purged) try store.writePruned(a, ctx.layout, info.stamp);
     try interrupt.check(.prune_marked);
-    const dir = try std.fs.path.join(a, &.{ try ctx.layout.asideDir(a), info.stamp });
-    try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ dir, "data" }));
+    const dir = try std.Io.Dir.path.join(a, &.{ try ctx.layout.asideDir(a), info.stamp });
+    try std.Io.Dir.cwd().deleteTree(io(), try std.Io.Dir.path.join(a, &.{ dir, "data" }));
     try interrupt.check(.prune_data);
     try std.Io.Dir.cwd().deleteTree(io(), dir);
     return true;
@@ -1344,7 +1344,7 @@ test "takeKept interrupted at every point: rerunning finishes and the local copy
 }
 
 fn writeProbe(a: std.mem.Allocator, root: []const u8, data: []const u8) ![]const u8 {
-    const p = try std.fs.path.join(a, &.{ root, "probe" });
+    const p = try std.Io.Dir.path.join(a, &.{ root, "probe" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
     return p;
 }
@@ -1363,7 +1363,7 @@ test "takeAside: settles two machines' different keeps; every machine links the 
     try mb.write(".clasp.json", "B");
     _ = try ma.keep(".clasp.json");
     _ = try mb.keep(".clasp.json");
-    try w.deliverPath(1, 0, try std.fmt.allocPrint(a, "{s}/.holt-paths", .{test_key}));
+    try w.deliverPath(1, 0, try a.print("{s}/.holt-paths", .{test_key}));
     try w.deliverPath(1, 0, ".holt-aside");
     const report = try ma.reconcile();
     const two = report.find(".clasp.json", .two_machines).?;
@@ -1458,7 +1458,7 @@ test "takeFrom: copies an old key's kept set into the clone's key, refusing a di
     idx = try indexOf(m);
     try testing.expectError(error.RootMismatch, takeFrom(m.ctx, &idx, m.clone, old_key, .{}));
 
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try m.ctx.layout.reserved(a, old_key, store.record_basename), .data = try std.fmt.allocPrint(a, "{{\"version\": 1, \"root\": \"{s}\"}}", .{root}) });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try m.ctx.layout.reserved(a, old_key, store.record_basename), .data = try a.print("{{\"version\": 1, \"root\": \"{s}\"}}", .{root}) });
     try m.write("keep.me", "mine");
     _ = try m.keep("keep.me");
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try m.ctx.layout.copyPath(a, old_key, "keep.me"), .data = "theirs" });
@@ -1725,7 +1725,7 @@ test "purge: refuses while a working tree links the path, then sets the kept con
     const m = w.m(0);
     try m.write(".env", "secret");
     _ = try m.keep(".env");
-    const wt = try std.fs.path.join(a, &.{ sb.root, "linked-tree" });
+    const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "linked-tree" });
     try m.git(&sb, &.{ "worktree", "add", "-q", wt, "-b", "side" });
     _ = try harness.reconcileIn(m.ctx, wt, .apply);
     var idx = try indexOf(m);
@@ -1855,9 +1855,9 @@ test "purge: another machine's restore from the purge's aside entry resumes afte
     defer interrupt.at = null;
     try ma.write(".env", "v1");
     _ = try ma.keep(".env");
-    const wt_path = try std.fs.path.join(a, &.{ std.fs.path.dirname(ma.clone).?, "widget@worktrees", "feature" });
+    const wt_path = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(ma.clone).?, "widget@worktrees", "feature" });
     try ma.git(&sb, &.{ "worktree", "add", "-q", "-b", "feature", wt_path });
-    const wt = try fsutil.realPathOrSelf(a, try std.fs.path.resolve(a, &.{wt_path}));
+    const wt = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.resolveAlloc(a, &.{wt_path}));
     try testing.expect((try harness.reconcileIn(ma.ctx, wt, .apply)).find(".env", .linked).?.done);
     try w.sync();
     _ = try mb.reconcile();
@@ -1925,7 +1925,7 @@ test "purge: with the purge's aside entry pruned, another machine's link is remo
     try testing.expect(removed.done and !removed.unsettled);
     try testing.expectEqualStrings(got.entry.?, removed.entry.?);
     try testing.expectEqual(content.Entry.absent, try content.entryAt(try ma.path(".env")));
-    try testing.expect(!paths.contains((try block.read(a, try std.fs.path.join(a, &.{ ma.clone, ".git" }))).rels, ".env"));
+    try testing.expect(!paths.contains((try block.read(a, try std.Io.Dir.path.join(a, &.{ ma.clone, ".git" }))).rels, ".env"));
 }
 
 test "purge: a purge mark that arrives before its aside entry leaves the link unsettled, and the entry arriving later restores the copy" {
@@ -2062,7 +2062,7 @@ test "pruneEntry: records the prune in a file of its own and leaves the released
     _ = try mb.reconcile();
     const got = try purge(mb.ctx, &idx, mb.clone, ".env", .{ .confirmed = true });
     const sid = paths.id(".env");
-    const marker = try std.fs.path.join(a, &.{ try mb.ctx.layout.reserved(a, test_key, ".holt-released"), &sid });
+    const marker = try std.Io.Dir.path.join(a, &.{ try mb.ctx.layout.reserved(a, test_key, ".holt-released"), &sid });
     const before = try content.readSmall(a, marker);
     const now_ms: i64 = @as(i64, @intCast(@divFloor(std.Io.Clock.real.now(io()).nanoseconds, std.time.ns_per_ms))) + (young_days + 1) * std.time.ms_per_day;
     const info = for (try asideEntries(mb.ctx, &idx, now_ms, &Referenced{}, .verified)) |e| {
@@ -2072,7 +2072,7 @@ test "pruneEntry: records the prune in a file of its own and leaves the released
     try testing.expect(try pruneEntry(mb.ctx, info));
     try testing.expectEqualStrings(before, try content.readSmall(a, marker));
     try testing.expect(try store.isPruned(a, mb.ctx.layout, got.entry.?));
-    try testing.expectEqual(content.Entry.file, try content.entryAt(try std.fs.path.join(a, &.{ try mb.ctx.layout.keptDir(a), store.pruned_basename, got.entry.? })));
+    try testing.expectEqual(content.Entry.file, try content.entryAt(try std.Io.Dir.path.join(a, &.{ try mb.ctx.layout.keptDir(a), store.pruned_basename, got.entry.? })));
 
     try w.sync();
     try testing.expect((try ma.reconcile()).find(".env", .purged_link_removed).?.done);
@@ -2086,9 +2086,9 @@ test "asideEntries: an entry with no manifest yet is held as recent while its st
     defer sb.deinit();
     var w = try World.init(a, &sb, 1);
     const m = w.m(0);
-    const entry = try std.fs.path.join(a, &.{ try m.ctx.layout.asideDir(a), "20000101T000000.000Z-000000000000000b-arriving" });
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ entry, "data" }));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ entry, "data", ".env" }), .data = "downloading" });
+    const entry = try std.Io.Dir.path.join(a, &.{ try m.ctx.layout.asideDir(a), "20000101T000000.000Z-000000000000000b-arriving" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ entry, "data" }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ entry, "data", ".env" }), .data = "downloading" });
     const idx = try indexOf(m);
     const now_ms: i64 = @intCast(@divFloor(std.Io.Clock.real.now(io()).nanoseconds, std.time.ns_per_ms));
 
@@ -2144,7 +2144,7 @@ test "asideEntries and pruneEntry: an unsettled two-machine side is held, an unr
     _ = try ma.keep("other");
     _ = try mb.keep(".clasp.json");
     try w.sync();
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ try ma.ctx.layout.asideDir(a), "half-made" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ try ma.ctx.layout.asideDir(a), "half-made" }));
 
     var idx = try indexOf(ma);
     const now = std.Io.Clock.real.now(io()).nanoseconds;
@@ -2191,7 +2191,7 @@ test "asideEntries: an entry whose stamp names a time long past is young while i
     const kept_ = try m.keep(".env");
     const dir = try m.ctx.layout.asideDir(a);
     const old = "20000101T000000.000Z-000000000000000b-slowclock";
-    try std.Io.Dir.renameAbsolute(try std.fs.path.join(a, &.{ dir, kept_.entry.? }), try std.fs.path.join(a, &.{ dir, old }), io());
+    try std.Io.Dir.renameAbsolute(try std.Io.Dir.path.join(a, &.{ dir, kept_.entry.? }), try std.Io.Dir.path.join(a, &.{ dir, old }), io());
     const idx = try indexOf(m);
     const now_ms: i64 = @intCast(@divFloor(std.Io.Clock.real.now(io()).nanoseconds, std.time.ns_per_ms));
 
@@ -2236,9 +2236,9 @@ test "takeLocal: what the block hides in another working tree is set aside by th
     const m = w.m(0);
     try m.write(".env", "kept");
     _ = try m.keep(".env");
-    const wt = try std.fs.path.join(a, &.{ sb.root, "other-tree" });
+    const wt = try std.Io.Dir.path.join(a, &.{ sb.root, "other-tree" });
     try m.git(&sb, &.{ "worktree", "add", "-q", wt, "-b", "side" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ wt, ".env" }), .data = "only in the other tree" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ wt, ".env" }), .data = "only in the other tree" });
 
     try m.saveByRename(".env", "new");
     var idx = try indexOf(m);
@@ -2250,12 +2250,12 @@ test "takeLocal: what the block hides in another working tree is set aside by th
         if (std.mem.eql(u8, try content.readSmall(a, try aside.dataPath(a, m.ctx.layout, e, ".env")), "only in the other tree")) found = true;
     }
     try testing.expect(found);
-    try testing.expectEqualStrings("only in the other tree", try content.readSmall(a, try std.fs.path.join(a, &.{ wt, ".env" })));
+    try testing.expectEqualStrings("only in the other tree", try content.readSmall(a, try std.Io.Dir.path.join(a, &.{ wt, ".env" })));
 
     interrupt.at = .take_pending;
     defer interrupt.at = null;
-    try std.Io.Dir.cwd().deleteFile(io(), try std.fs.path.join(a, &.{ wt, ".env" }));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ wt, ".env" }), .data = "tree edit" });
+    try std.Io.Dir.cwd().deleteFile(io(), try std.Io.Dir.path.join(a, &.{ wt, ".env" }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ wt, ".env" }), .data = "tree edit" });
     try testing.expectError(error.Interrupted, takeKept(m.ctx, &idx, wt, ".env", .{}));
     interrupt.at = null;
     const c = try clone.inspect(a, wt, m.ctx.code_root);
@@ -2263,7 +2263,7 @@ test "takeLocal: what the block hides in another working tree is set aside by th
     try testing.expect(std.mem.startsWith(u8, rec.tree, "worktrees/"));
     try testing.expect(clone.findPending(try clone.readPending(a, c.common_dir), ".", ".env") == null);
     _ = try takeKept(m.ctx, &idx, wt, ".env", .{});
-    try testing.expectEqualStrings("new", try content.readSmall(a, try std.fs.path.join(a, &.{ wt, ".env" })));
+    try testing.expectEqualStrings("new", try content.readSmall(a, try std.Io.Dir.path.join(a, &.{ wt, ".env" })));
     try testing.expectEqualStrings("new", try m.read(".env"));
 }
 
@@ -2367,7 +2367,7 @@ test "an interrupted take whose path is then given up clears its pending record,
     interrupt.at = .take_pending;
     try testing.expectError(error.Interrupted, takeAside(m.ctx, &idx, first.entry.?, m.clone));
     interrupt.at = null;
-    try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ try m.ctx.layout.asideDir(a), first.entry.? }));
+    try std.Io.Dir.cwd().deleteTree(io(), try std.Io.Dir.path.join(a, &.{ try m.ctx.layout.asideDir(a), first.entry.? }));
     try testing.expectError(error.NoSuchEntry, takeAside(m.ctx, &idx, first.entry.?, m.clone));
     try testing.expect((try m.reconcile()).find(".env", .interrupted) == null);
 }
@@ -2396,7 +2396,7 @@ test "takeFrom: a copy placed before its fact gets the fact on rerun, and a path
     try m.write("notes/x", "x");
     _ = try m.keep("notes");
     const op = try m.ctx.layout.copyPath(a, old_key, "notes/y");
-    try fsutil.ensureDir(std.fs.path.dirname(op).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(op).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = op, .data = "y" });
     const hy = try content.hashPath(a, op);
     try store.writeFact(a, m.ctx.layout, old_key, "000000000000000f", "notes/y", .file, &hy.hex);
@@ -2557,7 +2557,7 @@ test "takeLocal: a retired machine's fact rewritten back to the bytes its retire
     try testing.expectEqualStrings("Y", try keptBytes(mb, ".env"));
     const x_hex = (try store.loadKeyState(a, mb.ctx.layout, test_key)).factsFor(".env")[0].sha256;
     for (try aside.findEntries(a, mb.ctx.layout, test_key, ".env", x_hex)) |stamp| {
-        try std.Io.Dir.cwd().deleteTree(fsutil.io(), try std.fs.path.join(a, &.{ try mb.ctx.layout.asideDir(a), stamp }));
+        try std.Io.Dir.cwd().deleteTree(fsutil.io(), try std.Io.Dir.path.join(a, &.{ try mb.ctx.layout.asideDir(a), stamp }));
     }
 
     try fsutil.removePath(try mb.path(".env"));

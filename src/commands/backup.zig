@@ -36,7 +36,7 @@ fn formatTimestamp(alloc: std.mem.Allocator, secs: i64) ![]u8 {
     const year_day = epoch_secs.getEpochDay().calculateYearDay();
     const month_day = year_day.calculateMonthDay();
     const day_secs = epoch_secs.getDaySeconds();
-    return std.fmt.allocPrint(alloc, "{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{
+    return alloc.print("{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{
         year_day.year,
         month_day.month.numeric(),
         @as(u32, month_day.day_index) + 1,
@@ -54,10 +54,10 @@ fn pickBackupPath(alloc: std.mem.Allocator, backups_root: []const u8, org: []con
     var suffix: u32 = 1;
     while (true) : (suffix += 1) {
         const out_name = if (suffix == 1)
-            try std.fmt.allocPrint(alloc, "{s}-{s}-{s}.tar.gz", .{ org, name, stamp })
+            try alloc.print("{s}-{s}-{s}.tar.gz", .{ org, name, stamp })
         else
-            try std.fmt.allocPrint(alloc, "{s}-{s}-{s}-{d}.tar.gz", .{ org, name, stamp, suffix });
-        const out_path = try std.fs.path.join(alloc, &.{ backups_root, out_name });
+            try alloc.print("{s}-{s}-{s}-{d}.tar.gz", .{ org, name, stamp, suffix });
+        const out_path = try std.Io.Dir.path.join(alloc, &.{ backups_root, out_name });
         if (!fsutil.exists(out_path)) return out_path;
     }
 }
@@ -73,7 +73,7 @@ fn pickBackupPath(alloc: std.mem.Allocator, backups_root: []const u8, org: []con
 fn runTar(alloc: std.mem.Allocator, argv: []const []const u8) !proc.RunResult {
     const res = try proc.run(alloc, argv, null);
     if (builtin.os.tag != .windows or res.status == 0) return res;
-    if (std.mem.indexOf(u8, res.stderr, "resolve failed") == null) return res;
+    if (std.mem.find(u8, res.stderr, "resolve failed") == null) return res;
     alloc.free(res.stdout);
     alloc.free(res.stderr);
 
@@ -101,13 +101,13 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const stamp = try formatTimestamp(alloc, secs);
     const out_path = try pickBackupPath(alloc, backups_root, p.org, p.name, stamp);
 
-    const org_dir = std.fs.path.dirname(p.content_path) orelse return error.InvalidContentPath;
+    const org_dir = std.Io.Dir.path.dirname(p.content_path) orelse return error.InvalidContentPath;
 
     // tar writes to a ".partial" sibling; only a fully successful tar is
     // renamed onto the real name. A failure (or a SIGKILL/power loss mid-tar,
     // where the error path never runs) thus leaves at most a ".partial" that
     // never masquerades as a complete backup under the real name.
-    const partial_path = try std.fmt.allocPrint(alloc, "{s}.partial", .{out_path});
+    const partial_path = try alloc.print("{s}.partial", .{out_path});
     // `p.name` is a directory name read out of the synced tree, so `--`
     // separates it from the options: a name starting with `-` would otherwise
     // be read by tar as one (`--use-compress-program=<cmd>` names a command
@@ -173,7 +173,7 @@ test "run: creates a tar.gz under backups/ whose contents list the marker" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "backed up acme/widget ->") != null);
+    try testing.expect(std.mem.find(u8, got.out, "backed up acme/widget ->") != null);
 
     const backups_root = try ws.backupsRoot(arena);
     var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), backups_root, .{ .iterate = true });
@@ -183,10 +183,10 @@ test "run: creates a tar.gz under backups/ whose contents list the marker" {
     try testing.expect(std.mem.startsWith(u8, entry.name, "acme-widget-"));
     try testing.expect(std.mem.endsWith(u8, entry.name, ".tar.gz"));
 
-    const tar_path = try std.fs.path.join(arena, &.{ backups_root, entry.name });
+    const tar_path = try std.Io.Dir.path.join(arena, &.{ backups_root, entry.name });
     const list_res = try runTar(arena, &.{ "tar", "-tzf", tar_path });
     try testing.expectEqual(@as(u8, 0), list_res.status);
-    try testing.expect(std.mem.indexOf(u8, list_res.stdout, marker.marker_basename) != null);
+    try testing.expect(std.mem.find(u8, list_res.stdout, marker.marker_basename) != null);
 }
 
 test "run: a project directory name beginning with `-` is archived, not read by tar as an option" {
@@ -205,7 +205,7 @@ test "run: a project directory name beginning with `-` is archived, not read by 
     const name = "--holt-not-an-option";
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", name, .empty, .empty);
 
-    const got = try testutil.runCmd(arena, command.run, ws, &.{try std.fmt.allocPrint(arena, "acme/{s}", .{name})});
+    const got = try testutil.runCmd(arena, command.run, ws, &.{try arena.print("acme/{s}", .{name})});
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const backups_root = try ws.backupsRoot(arena);
@@ -214,11 +214,11 @@ test "run: a project directory name beginning with `-` is archived, not read by 
     var it = dir.iterate();
     const entry = (try it.next(fsutil.io())) orelse return error.TestUnexpectedResult;
 
-    const tar_path = try std.fs.path.join(arena, &.{ backups_root, entry.name });
+    const tar_path = try std.Io.Dir.path.join(arena, &.{ backups_root, entry.name });
     const list_res = try runTar(arena, &.{ "tar", "-tzf", tar_path });
     try testing.expectEqual(@as(u8, 0), list_res.status);
-    try testing.expect(std.mem.indexOf(u8, list_res.stdout, name) != null);
-    try testing.expect(std.mem.indexOf(u8, list_res.stdout, marker.marker_basename) != null);
+    try testing.expect(std.mem.find(u8, list_res.stdout, name) != null);
+    try testing.expect(std.mem.find(u8, list_res.stdout, marker.marker_basename) != null);
 }
 
 test "run: a tar failure removes the partial tarball instead of leaving a truncated backup" {
@@ -245,7 +245,7 @@ test "run: a tar failure removes the partial tarball instead of leaving a trunca
 
         const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/widget"});
         try testing.expectEqual(@as(u8, 1), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.err, "tar failed") != null);
+        try testing.expect(std.mem.find(u8, got.err, "tar failed") != null);
 
         const backups_root = try ws.backupsRoot(arena);
         var dir = try std.Io.Dir.cwd().openDir(fsutil.io(), backups_root, .{ .iterate = true });
@@ -268,5 +268,5 @@ test "run: no matching project exits 1 and reports on stderr" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
 }

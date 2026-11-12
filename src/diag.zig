@@ -8,7 +8,7 @@ pub const Diagnostic = struct {
     message: []const u8 = "",
 
     pub fn set(self: *Diagnostic, alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) void {
-        self.message = std.fmt.allocPrint(alloc, fmt, args) catch "out of memory";
+        self.message = alloc.print(fmt, args) catch "out of memory";
     }
 };
 
@@ -19,6 +19,6 @@ test "Diagnostic.set: formats and stores the message" {
 
     var d: Diagnostic = .{};
     d.set(arena, "unknown value \"{s}\" (want {s})", .{ "dropbox", "icloud" });
-    try testing.expect(std.mem.indexOf(u8, d.message, "dropbox") != null);
-    try testing.expect(std.mem.indexOf(u8, d.message, "icloud") != null);
+    try testing.expect(std.mem.find(u8, d.message, "dropbox") != null);
+    try testing.expect(std.mem.find(u8, d.message, "icloud") != null);
 }

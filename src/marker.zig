@@ -27,9 +27,9 @@ pub const marker_version = 1;
 /// cloud placeholder (`fsutil.isOnlineOnly`) the cloud could not download
 /// for holt to read. Any allocation failure conservatively answers false.
 pub fn markerEvicted(alloc: std.mem.Allocator, content_dir: []const u8) bool {
-    const placeholder = std.fs.path.join(alloc, &.{ content_dir, evicted_marker_basename }) catch return false;
+    const placeholder = std.Io.Dir.path.join(alloc, &.{ content_dir, evicted_marker_basename }) catch return false;
     if (fsutil.exists(placeholder)) return true;
-    const path = std.fs.path.join(alloc, &.{ content_dir, marker_basename }) catch return false;
+    const path = std.Io.Dir.path.join(alloc, &.{ content_dir, marker_basename }) catch return false;
     if (!fsutil.isOnlineOnly(alloc, path)) return false;
     _ = load(alloc, path, null) catch return true;
     return false;
@@ -198,7 +198,7 @@ pub const Marker = struct {
     pub fn remove(m: *Marker, name: []const u8) bool {
         for (m.entries, 0..) |*e, i| {
             if (std.mem.eql(u8, e.name, name)) {
-                std.mem.copyForwards(Entry, m.entries[i .. m.entries.len - 1], m.entries[i + 1 ..]);
+                @memmove(m.entries[i .. m.entries.len - 1], m.entries[i + 1 ..]);
                 m.entries = m.entries[0 .. m.entries.len - 1];
                 return true;
             }
@@ -421,7 +421,7 @@ pub fn save(m: *const Marker, path: []const u8) !void {
 fn markerPath(tmp: *testing.TmpDir) ![]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    return std.fs.path.join(testing.allocator, &.{ root, marker_basename });
+    return std.Io.Dir.path.join(testing.allocator, &.{ root, marker_basename });
 }
 
 test "save writes a sorted-key, 2-space pretty golden document" {
@@ -462,7 +462,7 @@ test "save is atomic: no leftover .tmp file after a successful write" {
     const m: Marker = .init("o", "n");
     try save(&m, path);
 
-    const tmp_path = try std.fmt.allocPrint(testing.allocator, "{s}.tmp", .{path});
+    const tmp_path = try testing.allocator.print("{s}.tmp", .{path});
     defer testing.allocator.free(tmp_path);
     try testing.expect(!fsutil.exists(tmp_path));
     try testing.expect(fsutil.exists(path));
@@ -538,7 +538,7 @@ test "save: a marker without aliases is byte-identical to the pre-alias form" {
     try save(&m, path);
 
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
-    try testing.expect(std.mem.indexOf(u8, got, "aliases") == null);
+    try testing.expect(std.mem.find(u8, got, "aliases") == null);
 }
 
 test "round-trip: load(save(m)) preserves aliases" {
@@ -602,7 +602,7 @@ test "load: a non-string aliases entry is kept faulted, not fatal" {
     // save re-emits the value it could not parse.
     try save(&m, path);
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
-    try testing.expect(std.mem.indexOf(u8, got, "\"a\": 7") != null);
+    try testing.expect(std.mem.find(u8, got, "\"a\": 7") != null);
 }
 
 test "load: rejects an unsupported marker version" {
@@ -621,7 +621,7 @@ test "load: rejects an unsupported marker version" {
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.UnsupportedMarkerVersion, load(arena, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "2") != null);
+    try testing.expect(std.mem.find(u8, d.message, "2") != null);
 }
 
 test "load: rejects a missing required field" {
@@ -640,7 +640,7 @@ test "load: rejects a missing required field" {
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.MissingField, load(arena, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "name") != null);
+    try testing.expect(std.mem.find(u8, d.message, "name") != null);
 }
 
 test "load: an unknown top-level field is carried and re-emitted by save" {
@@ -662,7 +662,7 @@ test "load: an unknown top-level field is carried and re-emitted by save" {
 
     try save(&m, path);
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1 << 20));
-    try testing.expect(std.mem.indexOf(u8, got, "\"future\": true") != null);
+    try testing.expect(std.mem.find(u8, got, "\"future\": true") != null);
 }
 
 test "load: rejects a non-object repos value" {
@@ -681,7 +681,7 @@ test "load: rejects a non-object repos value" {
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.MalformedMarker, load(arena, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "repos") != null);
+    try testing.expect(std.mem.find(u8, d.message, "repos") != null);
 }
 
 test "load: entries classify remote, local, and faulted sources, keeping raw values" {
@@ -896,5 +896,5 @@ test "load: a non-object aliases container stays fatal" {
 
     var d: diagnostic.Diagnostic = .{};
     try testing.expectError(error.MalformedMarker, load(arena, path, &d));
-    try testing.expect(std.mem.indexOf(u8, d.message, "aliases") != null);
+    try testing.expect(std.mem.find(u8, d.message, "aliases") != null);
 }

@@ -34,9 +34,9 @@ pub const Staged = struct { path: []const u8, hash: content.Hash };
 pub fn stage(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8, key: []const u8, source: []const u8) !Staged {
     const before = try content.hashPath(alloc, source);
     const suffix = content.randomSuffix();
-    const slot = try std.fs.path.join(alloc, &.{ try layout.stagingDir(alloc, machine_id, key), &suffix });
+    const slot = try std.Io.Dir.path.join(alloc, &.{ try layout.stagingDir(alloc, machine_id, key), &suffix });
     try fsutil.ensureDir(slot);
-    const dest = try std.fs.path.join(alloc, &.{ slot, "content" });
+    const dest = try std.Io.Dir.path.join(alloc, &.{ slot, "content" });
     try content.copyRegular(alloc, source, dest);
     try interrupt.check(.stage_copied);
     const after = try content.hashPath(alloc, dest);
@@ -69,14 +69,14 @@ pub fn clearStaging(alloc: std.mem.Allocator, layout: Layout, machine_id: []cons
     }
     var left: std.ArrayList(Left) = .empty;
     for (slots.items) |name| {
-        const slot = try std.fs.path.join(alloc, &.{ dir, name });
-        const mark = try std.fs.path.join(alloc, &.{ slot, swap_mark });
+        const slot = try std.Io.Dir.path.join(alloc, &.{ dir, name });
+        const mark = try std.Io.Dir.path.join(alloc, &.{ slot, swap_mark });
         if (try content.entryAt(mark) != .absent) {
             const sw = (try readSwapOut(alloc, mark)) orelse {
                 try left.append(alloc, .{ .slot = slot, .reason = "unreadable mark" });
                 continue;
             };
-            dropSwapOut(alloc, layout, machine_id, key, sw.rel, try std.fs.path.join(alloc, &.{ slot, sw.name }), sw.entry) catch |err| {
+            dropSwapOut(alloc, layout, machine_id, key, sw.rel, try std.Io.Dir.path.join(alloc, &.{ slot, sw.name }), sw.entry) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 try left.append(alloc, .{ .slot = slot, .reason = @errorName(err) });
                 continue;
@@ -108,7 +108,7 @@ fn markSwapOut(alloc: std.mem.Allocator, staged: Staged, rel: []const u8, name: 
     try obj.put(alloc, "stamp", .{ .string = e.stamp });
     var aw: std.Io.Writer.Allocating = .init(alloc);
     try json.encode(&aw.writer, .{ .object = obj }, .{ .sort_keys = true });
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ std.fs.path.dirname(staged.path).?, swap_mark }), aw.written());
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ std.Io.Dir.path.dirname(staged.path).?, swap_mark }), aw.written());
 }
 
 /// The mark at `mark`, or null when it does not say which path and slot
@@ -131,7 +131,7 @@ fn readSwapOut(alloc: std.mem.Allocator, mark: []const u8) !?SwapOut {
     const kind = std.meta.stringToEnum(content.Kind, field(v.object, "kind") orelse return out) orelse return out;
     const sha = field(v.object, "sha256") orelse return out;
     const stamp = field(v.object, "stamp") orelse return out;
-    if (sha.len != 64 or !paths.contained(stamp) or std.mem.indexOfAny(u8, stamp, "/\\") != null) return out;
+    if (sha.len != 64 or !paths.contained(stamp) or std.mem.findAny(u8, stamp, "/\\") != null) return out;
     var hash: content.Hash = .{ .kind = kind, .hex = undefined };
     @memcpy(&hash.hex, sha);
     return .{ .rel = rel, .name = name, .entry = .{ .stamp = stamp, .hash = hash } };
@@ -171,7 +171,7 @@ fn ensureKeptParents(alloc: std.mem.Allocator, layout: Layout, key: []const u8, 
     try fsutil.ensureDir(key_dir);
     if (!try link.parentsReal(alloc, key_dir, rel)) return error.ParentNotDir;
     const dest = try layout.copyPath(alloc, key, rel);
-    try fsutil.ensureDir(std.fs.path.dirname(dest).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(dest).?);
 }
 
 /// Places `staged` as the kept copy of `rel`. Something already there is
@@ -245,7 +245,7 @@ pub fn replaceKept(alloc: std.mem.Allocator, layout: Layout, machine_id: []const
                 try cwd.rename(staged.path, cwd, dest, io());
                 return e;
             }
-            old = try std.fs.path.join(alloc, &.{ std.fs.path.dirname(staged.path).?, "old" });
+            old = try std.Io.Dir.path.join(alloc, &.{ std.Io.Dir.path.dirname(staged.path).?, "old" });
             try markSwapOut(alloc, staged, rel, "old", e);
             try content.renameNoReplace(alloc, dest, old);
             try interrupt.check(.replace_moved_out);
@@ -753,7 +753,7 @@ pub fn keepPath(ctx: Ctx, index: *const store.KeyIndex, worktree_path: []const u
 
     if (merge) |m| {
         for (m.place) |f| {
-            const full = try std.fmt.allocPrint(a, "{s}/{s}", .{ rel, f.path });
+            const full = try a.print("{s}/{s}", .{ rel, f.path });
             const staged = try stage(a, ctx.layout, ctx.machine_id, key, try fsutil.joinSlashy(a, src, f.path));
             placeNew(a, ctx.layout, key, full, staged) catch |err| switch (err) {
                 error.PathAlreadyExists => {
@@ -866,7 +866,7 @@ fn planMerge(t: Tree, rel: []const u8, src: []const u8, target: []const u8) !Mer
     var absorbed: std.ArrayList(Merge.Absorbed) = .empty;
     for (part.skipped) |sk| switch (sk.why) {
         .symlink => {
-            const full = try std.fmt.allocPrint(a, "{s}/{s}", .{ rel, sk.path });
+            const full = try a.print("{s}/{s}", .{ rel, sk.path });
             switch (try link.classify(a, try fsutil.joinSlashy(a, src, sk.path), try t.ctx.layout.copyPath(a, t.key, full), t.chain, t.roots, full)) {
                 .right => |raw| try absorbed.append(a, .{ .sub = sk.path, .raw = raw }),
                 else => return error.NotRegular,
@@ -887,18 +887,18 @@ fn planMerge(t: Tree, rel: []const u8, src: []const u8, target: []const u8) !Mer
     var differs: std.ArrayList([]const u8) = .empty;
     next: for (part.files) |f| {
         if (kept_map.get(f.path)) |hex| {
-            if (!std.mem.eql(u8, &hex, &f.hex)) try differs.append(a, try std.fmt.allocPrint(a, "{s}/{s}", .{ rel, f.path }));
+            if (!std.mem.eql(u8, &hex, &f.hex)) try differs.append(a, try a.print("{s}/{s}", .{ rel, f.path }));
             continue;
         }
         var end: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, f.path, end, '/')) |slash| : (end = slash + 1) {
+        while (std.mem.findScalarPos(u8, f.path, end, '/')) |slash| : (end = slash + 1) {
             if (kept_map.contains(f.path[0..slash])) {
-                try differs.append(a, try std.fmt.allocPrint(a, "{s}/{s}", .{ rel, f.path }));
+                try differs.append(a, try a.print("{s}/{s}", .{ rel, f.path }));
                 continue :next;
             }
         }
         if (try content.entryAt(try fsutil.joinSlashy(a, target, f.path)) != .absent) {
-            try differs.append(a, try std.fmt.allocPrint(a, "{s}/{s}", .{ rel, f.path }));
+            try differs.append(a, try a.print("{s}/{s}", .{ rel, f.path }));
             continue;
         }
         try place_list.append(a, f);
@@ -1189,11 +1189,11 @@ test "replaceKept interrupted at every point: the old copy is always in kept or 
     for ([_]bool{ false, true }) |no_exchange| {
         for (points, 0..) |point, i| {
             if (point == .replace_moved_out and !no_exchange) continue;
-            const synced = try std.fmt.allocPrint(a, "synced-{d}-{}", .{ i, no_exchange });
+            const synced = try a.print("synced-{d}-{}", .{ i, no_exchange });
             const layout: Layout = .{ .synced_root = try f.path(synced) };
-            _ = try f.write(try std.fmt.allocPrint(a, "{s}/kept/{s}/d/old", .{ synced, test_key }), "old");
-            _ = try f.write(try std.fmt.allocPrint(a, "{s}-clone/d/new", .{synced}), "new");
-            const staged = try stage(a, layout, mid, test_key, try f.path(try std.fmt.allocPrint(a, "{s}-clone/d", .{synced})));
+            _ = try f.write(try a.print("{s}/kept/{s}/d/old", .{ synced, test_key }), "old");
+            _ = try f.write(try a.print("{s}-clone/d/new", .{synced}), "new");
+            const staged = try stage(a, layout, mid, test_key, try f.path(try a.print("{s}-clone/d", .{synced})));
 
             content.no_exchange_for_test = no_exchange;
             interrupt.at = point;
@@ -1287,7 +1287,7 @@ test "replaceWithLink: the kept copy gains the executable bits of the content it
     for ([_][]const u8{ target, dtarget }) |x| try cwd.setFilePermissions(io(), x, @fromBackingInt(0o644), .{});
 
     try testing.expect(try replaceWithLink(t, "run.sh", target, try content.hashPath(a, p)));
-    try testing.expect(try replaceWithLink(t, "bin", std.fs.path.dirname(dtarget).?, try content.hashPath(a, try f.path("clone/bin"))));
+    try testing.expect(try replaceWithLink(t, "bin", std.Io.Dir.path.dirname(dtarget).?, try content.hashPath(a, try f.path("clone/bin"))));
     for ([_][]const u8{ target, dtarget }) |x| {
         const mode = @backingInt((try cwd.statFile(io(), x, .{})).permissions);
         try testing.expectEqual(@as(@TypeOf(mode), 0o755), mode & 0o777);
@@ -1405,11 +1405,11 @@ test "clearStaging: a swapped-out copy an interruption left in staging is set as
 
     for ([_]bool{ false, true }) |no_exchange| {
         if (!no_exchange and !has_exchange) continue;
-        const synced = try std.fmt.allocPrint(a, "synced-{}", .{no_exchange});
+        const synced = try a.print("synced-{}", .{no_exchange});
         const layout: Layout = .{ .synced_root = try f.path(synced) };
-        cloud_write_path = try f.write(try std.fmt.allocPrint(a, "{s}/kept/{s}/d/old", .{ synced, test_key }), "old");
-        _ = try f.write(try std.fmt.allocPrint(a, "{s}-clone/d/new", .{synced}), "new");
-        const staged = try stage(a, layout, mid, test_key, try f.path(try std.fmt.allocPrint(a, "{s}-clone/d", .{synced})));
+        cloud_write_path = try f.write(try a.print("{s}/kept/{s}/d/old", .{ synced, test_key }), "old");
+        _ = try f.write(try a.print("{s}-clone/d/new", .{synced}), "new");
+        const staged = try stage(a, layout, mid, test_key, try f.path(try a.print("{s}-clone/d", .{synced})));
 
         content.no_exchange_for_test = no_exchange;
         interrupt.hook = cloudWrite;
@@ -1434,11 +1434,11 @@ test "clearStaging: a swapped-out copy whose aside entry no longer verifies is s
     defer content.no_exchange_for_test = false;
 
     for ([_]bool{ false, true }) |pruned| {
-        const synced = try std.fmt.allocPrint(a, "synced-{}", .{pruned});
+        const synced = try a.print("synced-{}", .{pruned});
         const layout: Layout = .{ .synced_root = try f.path(synced) };
-        _ = try f.write(try std.fmt.allocPrint(a, "{s}/kept/{s}/d/old", .{ synced, test_key }), "old");
-        _ = try f.write(try std.fmt.allocPrint(a, "{s}-clone/d/new", .{synced}), "new");
-        const staged = try stage(a, layout, mid, test_key, try f.path(try std.fmt.allocPrint(a, "{s}-clone/d", .{synced})));
+        _ = try f.write(try a.print("{s}/kept/{s}/d/old", .{ synced, test_key }), "old");
+        _ = try f.write(try a.print("{s}-clone/d/new", .{synced}), "new");
+        const staged = try stage(a, layout, mid, test_key, try f.path(try a.print("{s}-clone/d", .{synced})));
 
         content.no_exchange_for_test = true;
         interrupt.at = .replace_moved_out;
@@ -1451,7 +1451,7 @@ test "clearStaging: a swapped-out copy whose aside entry no longer verifies is s
         const stamp = try a.dupe(u8, (try it.next(io())).?.name);
         dir.close(io());
         if (pruned) {
-            try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ try layout.asideDir(a), stamp }));
+            try std.Io.Dir.cwd().deleteTree(io(), try std.Io.Dir.path.join(a, &.{ try layout.asideDir(a), stamp }));
         } else {
             try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try aside.dataPath(a, layout, stamp, "d/old"), .data = "damaged" });
         }
@@ -1480,7 +1480,7 @@ test "clearStaging: a swap mark that names no aside entry is taken as unverified
     interrupt.at = null;
     content.no_exchange_for_test = false;
     try std.Io.Dir.cwd().deleteTree(io(), try layout.asideDir(a));
-    const mark = try std.fs.path.join(a, &.{ std.fs.path.dirname(staged.path).?, swap_mark });
+    const mark = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(staged.path).?, swap_mark });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = mark, .data = "{\"name\": \"old\", \"rel\": \"d\"}" });
 
     try testing.expectEqual(@as(usize, 0), (try clearStaging(a, layout, mid, test_key)).len);
@@ -1514,9 +1514,9 @@ test "clearStaging: a slot whose swapped-out copy cannot be set aside is left in
     defer std.Io.Dir.cwd().setFilePermissions(io(), asides, @fromBackingInt(0o755), .{}) catch {};
     const left = try clearStaging(a, layout, mid, test_key);
     try testing.expectEqual(@as(usize, 1), left.len);
-    try testing.expectEqualStrings(std.fs.path.dirname(staged.path).?, left[0].slot);
-    try testing.expectEqualStrings("old", try content.readSmall(a, try std.fs.path.join(a, &.{ left[0].slot, "old", "old" })));
-    try testing.expectEqual(content.Entry.absent, try content.entryAt(std.fs.path.dirname(other.path).?));
+    try testing.expectEqualStrings(std.Io.Dir.path.dirname(staged.path).?, left[0].slot);
+    try testing.expectEqualStrings("old", try content.readSmall(a, try std.Io.Dir.path.join(a, &.{ left[0].slot, "old", "old" })));
+    try testing.expectEqual(content.Entry.absent, try content.entryAt(std.Io.Dir.path.dirname(other.path).?));
 
     try std.Io.Dir.cwd().setFilePermissions(io(), asides, @fromBackingInt(0o755), .{});
     try testing.expectEqual(@as(usize, 0), (try clearStaging(a, layout, mid, test_key)).len);
@@ -1549,7 +1549,7 @@ test "keepPath: a directory holding holt's link to a kept file merges into it: t
     try testing.expectEqual(@as(usize, 0), ks.factsFor("notes/a").len);
     try testing.expectEqual(content.Kind.dir, ks.factsFor("notes")[0].kind);
     try testing.expectEqual(@as(usize, 0), (try m.reconcile()).unsettledCount());
-    try testing.expectEqual(@as(usize, 0), (try clone.readPending(a, try std.fs.path.join(a, &.{ m.clone, ".git" }))).len);
+    try testing.expectEqual(@as(usize, 0), (try clone.readPending(a, try std.Io.Dir.path.join(a, &.{ m.clone, ".git" }))).len);
 }
 
 test "keepPath: on another machine, holt's link to a file a merge took in gives way to the directory's link, and keeping the directory there too finds it kept" {
@@ -1676,7 +1676,7 @@ test "keepPath interrupted at every point of a merge: content stays in place, in
 }
 
 fn writeProbe(a: std.mem.Allocator, root: []const u8, data: []const u8) ![]const u8 {
-    const p = try std.fs.path.join(a, &.{ root, "probe" });
+    const p = try std.Io.Dir.path.join(a, &.{ root, "probe" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
     return p;
 }

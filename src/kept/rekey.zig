@@ -178,7 +178,7 @@ pub fn holds(a: std.mem.Allocator, layout: store.Layout, key: []const u8) !bool 
     var it = d.iterate();
     while (try it.next(io())) |e| {
         if (e.kind == .directory) {
-            const rec = try std.fs.path.join(a, &.{ dir, e.name, store.record_basename });
+            const rec = try std.Io.Dir.path.join(a, &.{ dir, e.name, store.record_basename });
             if (try content.entryAt(rec) == .file) continue;
         }
         return true;
@@ -229,9 +229,9 @@ const DirId = struct { head: []const u8, rest: []const u8 };
 
 fn dirId(ctx: Ctx, key: []const u8) !DirId {
     const a = ctx.alloc;
-    const full = try std.fs.path.resolve(a, &.{try ctx.layout.keyDir(a, key)});
+    const full = try std.Io.Dir.path.resolveAlloc(a, &.{try ctx.layout.keyDir(a, key)});
     var head: []const u8 = full;
-    while (try content.entryAt(head) == .absent) head = std.fs.path.dirname(head) orelse break;
+    while (try content.entryAt(head) == .absent) head = std.Io.Dir.path.dirname(head) orelse break;
     const rest = paths.Folding.all.key(a, full[head.len..]) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => full[head.len..],
@@ -253,7 +253,7 @@ fn sameDir(ctx: Ctx, x: []const u8, y: []const u8) !bool {
 fn below(ctx: Ctx, child: []const u8, parent: []const u8) !bool {
     const pid = try dirId(ctx, parent);
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, child, i, '/')) |j| : (i = j + 1) {
+    while (std.mem.findScalarPos(u8, child, i, '/')) |j| : (i = j + 1) {
         if (try sameId(ctx.alloc, try dirId(ctx, child[0..j]), pid)) return true;
     }
     return false;
@@ -280,15 +280,15 @@ fn copySkipLines(ctx: Ctx, old: []const u8, new: []const u8) !void {
     const text = try patterns.repoSkipText(a, ctx.layout, old, null);
     const dir = try ctx.layout.reserved(a, new, ".holt-skip.d");
     const oid = paths.id(old);
-    const prefix = try std.fmt.allocPrint(a, "from-{s}-", .{oid[0..16]});
+    const prefix = try a.print("from-{s}-", .{oid[0..16]});
     var n: usize = 0;
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |raw| {
         const l = std.mem.trimEnd(u8, raw, "\r");
         if (l.len == 0 or l[0] == '#') continue;
         try fsutil.ensureDir(dir);
-        const name = try std.fmt.allocPrint(a, "{s}{d:0>6}", .{ prefix, n });
-        try fsutil.writeFileAtomic(a, try std.fs.path.join(a, &.{ dir, name }), try std.mem.concat(a, u8, &.{ l, "\n" }));
+        const name = try a.print("{s}{d:0>6}", .{ prefix, n });
+        try fsutil.writeFileAtomic(a, try std.Io.Dir.path.join(a, &.{ dir, name }), try std.mem.concat(a, u8, &.{ l, "\n" }));
         n += 1;
     }
     var d = std.Io.Dir.cwd().openDir(io(), dir, .{ .iterate = true }) catch |err| switch (err) {
@@ -303,7 +303,7 @@ fn copySkipLines(ctx: Ctx, old: []const u8, new: []const u8) !void {
         const place_n = std.fmt.parseUnsigned(usize, e.name[prefix.len..], 10) catch continue;
         if (place_n >= n) try stale.append(a, try a.dupe(u8, e.name));
     }
-    for (stale.items) |name| try fsutil.removePath(try std.fs.path.join(a, &.{ dir, name }));
+    for (stale.items) |name| try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ dir, name }));
 }
 
 /// The names holt writes in a key's directory.
@@ -388,7 +388,7 @@ const Run = struct {
         }
         for (names.items) |name| {
             if (paths.contains(&own_names, name)) continue;
-            const p = try std.fs.path.join(a, &.{ old_dir, name });
+            const p = try std.Io.Dir.path.join(a, &.{ old_dir, name });
             if (isTemp(name)) {
                 try std.Io.Dir.cwd().deleteTree(io(), p);
             } else try r.leave(old, p, .reserved, null);
@@ -396,14 +396,14 @@ const Run = struct {
         if (r.left.items.len > before) return;
 
         for ([_][]const u8{ ".holt-paths", ".holt-released" }) |name| {
-            const p = try std.fs.path.join(a, &.{ old_dir, name });
+            const p = try std.Io.Dir.path.join(a, &.{ old_dir, name });
             if (!try pruneMarkers(a, p)) try r.leave(old, p, .changed, null);
         }
         if (r.left.items.len > before) return;
         try fsutil.removePath(try ctx.layout.reserved(a, old, store.record_basename));
         try interrupt.check(.rekey_reserved);
         for ([_][]const u8{ ".holt-from", ".holt-skip.d", ".holt-skip" }) |name| {
-            try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ old_dir, name }));
+            try std.Io.Dir.cwd().deleteTree(io(), try std.Io.Dir.path.join(a, &.{ old_dir, name }));
         }
         try removeEmptyDirs(a, try ctx.layout.keptDir(a), old_dir);
     }
@@ -435,7 +435,7 @@ const Run = struct {
                 try store.removeFacts(a, ctx.layout, old, rel);
                 try store.removeReleased(a, ctx.layout, old, rel);
                 try removeIfUnchanged(a, from, e.hash);
-                try removeEmptyDirs(a, old_dir, std.fs.path.dirname(from).?);
+                try removeEmptyDirs(a, old_dir, std.Io.Dir.path.dirname(from).?);
                 return .{ .differs = e.stamp };
             }
             const e = try aside.setAside(a, ctx.layout, ctx.machine_id, new, rel, to, .replaced);
@@ -448,16 +448,16 @@ const Run = struct {
 
         const new_names = new_st.factsFor(rel).len > 0 or new_st.isReleased(rel);
         const sid = paths.id(rel);
-        const old_released = try std.fs.path.join(a, &.{ try ctx.layout.reserved(a, old, ".holt-released"), &sid });
+        const old_released = try std.Io.Dir.path.join(a, &.{ try ctx.layout.reserved(a, old, ".holt-released"), &sid });
         if (try content.entryAt(old_released) != .absent) {
             if (new_names) {
                 try fsutil.removePath(old_released);
             } else {
-                try moveFile(a, old_released, try std.fs.path.join(a, &.{ try ctx.layout.reserved(a, new, ".holt-released"), &sid }));
+                try moveFile(a, old_released, try std.Io.Dir.path.join(a, &.{ try ctx.layout.reserved(a, new, ".holt-released"), &sid }));
             }
         }
-        const old_facts = try std.fs.path.join(a, &.{ try ctx.layout.reserved(a, old, ".holt-paths"), &sid });
-        const new_facts = try std.fs.path.join(a, &.{ try ctx.layout.reserved(a, new, ".holt-paths"), &sid });
+        const old_facts = try std.Io.Dir.path.join(a, &.{ try ctx.layout.reserved(a, old, ".holt-paths"), &sid });
+        const new_facts = try std.Io.Dir.path.join(a, &.{ try ctx.layout.reserved(a, new, ".holt-paths"), &sid });
         if (std.Io.Dir.cwd().openDir(io(), old_facts, .{ .iterate = true })) |opened| {
             var d = opened;
             defer d.close(io());
@@ -466,7 +466,7 @@ const Run = struct {
             while (try it.next(io())) |e| {
                 if (!isTemp(e.name)) try names.append(a, try a.dupe(u8, e.name));
             }
-            for (names.items) |n| try moveFile(a, try std.fs.path.join(a, &.{ old_facts, n }), try std.fs.path.join(a, &.{ new_facts, n }));
+            for (names.items) |n| try moveFile(a, try std.Io.Dir.path.join(a, &.{ old_facts, n }), try std.Io.Dir.path.join(a, &.{ new_facts, n }));
         } else |err| switch (err) {
             error.FileNotFound, error.NotDir => {},
             else => return err,
@@ -475,18 +475,18 @@ const Run = struct {
 
         if (oe == .absent) return .none;
         if (ne == .absent) {
-            try fsutil.ensureDir(std.fs.path.dirname(to).?);
+            try fsutil.ensureDir(std.Io.Dir.path.dirname(to).?);
             content.renameNoReplace(a, from, to) catch |err| switch (err) {
                 error.PathAlreadyExists => return r.movePath(old, rel, old_st),
                 else => return err,
             };
-            try removeEmptyDirs(a, old_dir, std.fs.path.dirname(from).?);
+            try removeEmptyDirs(a, old_dir, std.Io.Dir.path.dirname(from).?);
             try interrupt.check(.rekey_path);
             return if (stray) |s| .{ .stray = s } else .moved;
         }
         const e = try aside.setAside(a, ctx.layout, ctx.machine_id, old, rel, from, .old_location);
         try removeIfUnchanged(a, from, e.hash);
-        try removeEmptyDirs(a, old_dir, std.fs.path.dirname(from).?);
+        try removeEmptyDirs(a, old_dir, std.Io.Dir.path.dirname(from).?);
         try interrupt.check(.rekey_path);
         return .none;
     }
@@ -500,7 +500,7 @@ fn pruneMarkers(a: std.mem.Allocator, path: []const u8) !bool {
         .absent => return true,
         .dir => {},
         else => {
-            if (!isTemp(std.fs.path.basename(path))) return false;
+            if (!isTemp(std.Io.Dir.path.basename(path))) return false;
             try fsutil.removePath(path);
             return true;
         },
@@ -514,7 +514,7 @@ fn pruneMarkers(a: std.mem.Allocator, path: []const u8) !bool {
     }
     var empty = true;
     for (names.items) |n| {
-        if (!try pruneMarkers(a, try std.fs.path.join(a, &.{ path, n }))) empty = false;
+        if (!try pruneMarkers(a, try std.Io.Dir.path.join(a, &.{ path, n }))) empty = false;
     }
     if (!empty) return false;
     try std.Io.Dir.cwd().deleteDir(io(), path);
@@ -547,13 +547,13 @@ fn sameContent(alloc: std.mem.Allocator, x: []const u8, y: []const u8) !bool {
 /// Moves the marker file `from` to `to` unless one is there already, in
 /// which case `from` is dropped: the marker at `to` wins.
 fn moveFile(alloc: std.mem.Allocator, from: []const u8, to: []const u8) !void {
-    try fsutil.ensureDir(std.fs.path.dirname(to).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(to).?);
     content.renameNoReplace(alloc, from, to) catch |err| switch (err) {
         error.PathAlreadyExists => try fsutil.removePath(from),
         error.FileNotFound => {},
         else => return err,
     };
-    if (std.fs.path.dirname(from)) |d| fsutil.rmdirIfEmpty(d);
+    if (std.Io.Dir.path.dirname(from)) |d| fsutil.rmdirIfEmpty(d);
 }
 
 /// Removes `dir` and each parent up to, not including, `stop`, while empty.
@@ -561,7 +561,7 @@ fn removeEmptyDirs(alloc: std.mem.Allocator, stop: []const u8, dir: []const u8) 
     var cur = try alloc.dupe(u8, dir);
     while (cur.len > stop.len and fsutil.pathIsInside(cur, stop)) {
         std.Io.Dir.cwd().deleteDir(io(), cur) catch return;
-        cur = @constCast(std.fs.path.dirname(cur) orelse return);
+        cur = @constCast(std.Io.Dir.path.dirname(cur) orelse return);
     }
 }
 
@@ -583,9 +583,9 @@ fn seeded(a: std.mem.Allocator, sb: *testutil.Sandbox) !harness.World {
     for ([_][]const u8{ ".clasp.json", ".superpowers", "gone.txt", "same.txt" }) |rel| _ = try m.keep(rel);
     try store.writeReleased(a, m.ctx.layout, harness.repo_key, "gone.txt");
     const key_dir = try m.ctx.layout.keyDir(a, harness.repo_key);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ key_dir, ".holt-skip" }), .data = "# mine\n*.tmp\n" });
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ key_dir, ".holt-skip.d" }));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ key_dir, ".holt-skip.d", "0001" }), .data = "/build\n" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ key_dir, ".holt-skip" }), .data = "# mine\n*.tmp\n" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ key_dir, ".holt-skip.d" }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ key_dir, ".holt-skip.d", "0001" }), .data = "/build\n" });
     return w;
 }
 
@@ -611,9 +611,9 @@ fn expectMoved(m: *const harness.Machine) !void {
     try testing.expectEqualStrings("gone", try content.readSmall(a, try layout.copyPath(a, renamed, "gone.txt")));
     try testing.expectEqualStrings("same", try content.readSmall(a, try layout.copyPath(a, renamed, "same.txt")));
     const skip = try patterns.repoSkipText(a, layout, renamed, null);
-    try testing.expect(std.mem.indexOf(u8, skip, "*.tmp\n") != null);
-    try testing.expect(std.mem.indexOf(u8, skip, "/build\n") != null);
-    try testing.expect(std.mem.indexOf(u8, skip, "# mine") == null);
+    try testing.expect(std.mem.find(u8, skip, "*.tmp\n") != null);
+    try testing.expect(std.mem.find(u8, skip, "/build\n") != null);
+    try testing.expect(std.mem.find(u8, skip, "# mine") == null);
 }
 
 test "moveKey: content, facts, released markers, and skip lines move; the old key is named; links retarget through the chain" {
@@ -871,24 +871,24 @@ test "moveKey: this machine's staging for the old key is cleared, a swapped-out 
     const m = w.m(0);
     const layout = m.ctx.layout;
     const staging = try layout.stagingDir(a, m.ctx.machine_id, harness.repo_key);
-    const src = try std.fs.path.join(a, &.{ sb.root, "replacement" });
+    const src = try std.Io.Dir.path.join(a, &.{ sb.root, "replacement" });
     try fsutil.ensureDir(src);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ src, "notes.md" }), .data = "notes" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ src, "notes.md" }), .data = "notes" });
     const staged = try place.stage(a, layout, m.ctx.machine_id, harness.repo_key, src);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try layout.copyPath(a, harness.repo_key, ".superpowers/notes.md"), .data = "swapped out" });
     interrupt.at = .replace_swapped;
     try testing.expectError(error.Interrupted, place.replaceKept(a, layout, m.ctx.machine_id, harness.repo_key, ".superpowers", staged));
     interrupt.at = null;
-    const odd = try std.fs.path.join(a, &.{ staging, "odd" });
+    const odd = try std.Io.Dir.path.join(a, &.{ staging, "odd" });
     try fsutil.ensureDir(odd);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ odd, "swapped-out" }), .data = "{" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ odd, "swapped-out" }), .data = "{" });
 
     const first = try moveTo(m, harness.repo_key, renamed);
     try testing.expectEqual(@as(usize, 1), first.left.len);
     try testing.expectEqual(Left.Why.staging, first.left[0].why);
     try testing.expectEqualStrings(odd, first.left[0].rel);
     try testing.expect(try store.readRecord(a, layout, harness.repo_key) != null);
-    try testing.expectEqual(content.Entry.absent, try content.entryAt(std.fs.path.dirname(staged.path).?));
+    try testing.expectEqual(content.Entry.absent, try content.entryAt(std.Io.Dir.path.dirname(staged.path).?));
 
     try std.Io.Dir.cwd().deleteTree(io(), odd);
     const again = try moveTo(m, harness.repo_key, renamed);
@@ -1017,11 +1017,11 @@ test "moveKey: a rerun after the old skip lists shrank leaves no stale line, and
     interrupt.at = .rekey_from;
     try testing.expectError(error.Interrupted, moveTo(m, harness.repo_key, renamed));
     interrupt.at = null;
-    try fsutil.removePath(try std.fs.path.join(a, &.{ key_dir, ".holt-skip.d", "0001" }));
-    const bad_from = try std.fs.path.join(a, &.{ key_dir, ".holt-from", "not-a-marker" });
-    try fsutil.ensureDir(std.fs.path.dirname(bad_from).?);
+    try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ key_dir, ".holt-skip.d", "0001" }));
+    const bad_from = try std.Io.Dir.path.join(a, &.{ key_dir, ".holt-from", "not-a-marker" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(bad_from).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = bad_from, .data = "x" });
-    const conflict = try std.fs.path.join(a, &.{ key_dir, ".holt-skip (1)" });
+    const conflict = try std.Io.Dir.path.join(a, &.{ key_dir, ".holt-skip (1)" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = conflict, .data = "/mine\n" });
 
     const got = try moveTo(m, harness.repo_key, renamed);
@@ -1038,8 +1038,8 @@ test "moveKey: a rerun after the old skip lists shrank leaves no stale line, and
     try testing.expectEqualStrings("x", try content.readSmall(a, bad_from));
     try testing.expectEqualStrings("/mine\n", try content.readSmall(a, conflict));
     const skip = try patterns.repoSkipText(a, layout, renamed, null);
-    try testing.expect(std.mem.indexOf(u8, skip, "*.tmp\n") != null);
-    try testing.expect(std.mem.indexOf(u8, skip, "/build\n") == null);
+    try testing.expect(std.mem.find(u8, skip, "*.tmp\n") != null);
+    try testing.expect(std.mem.find(u8, skip, "/build\n") == null);
 
     try fsutil.removePath(bad_from);
     try fsutil.removePath(conflict);

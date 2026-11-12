@@ -105,7 +105,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     const ws = ctx.context.?.ws;
     const alloc = ctx.alloc;
 
-    const slash = std.mem.lastIndexOfScalar(u8, a.repo, '/') orelse {
+    const slash = std.mem.findScalarLast(u8, a.repo, '/') orelse {
         return app.usageError(ctx, "worktree takes <project>/<repo>", .{});
     };
     const project_query = a.repo[0..slash];
@@ -125,7 +125,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         try ctx.err.print("holt: {s} is not cloned yet; run `holt restore` first\n", .{a.repo});
         return 1;
     }
-    const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
+    const worktrees_dir = try alloc.print("{s}@worktrees", .{clone_path});
 
     if (a.force and !a.remove) {
         return app.usageError(ctx, "--force only applies to --remove", .{});
@@ -156,7 +156,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
             try ctx.err.print("holt: {s} is locked; refusing to remove (run: git -C {s} worktree unlock {s})\n", .{ try quotePath(ctx, wt_path), try quotePath(ctx, clone_path), try quotePath(ctx, wt_path) });
             return 1;
         }
-        const force_cmd = try std.fmt.allocPrint(alloc, "holt worktree {s} {s} -r --force", .{ try ui.shellQuote(alloc, a.repo), try ui.shellQuote(alloc, branch) });
+        const force_cmd = try alloc.print("holt worktree {s} {s} -r --force", .{ try ui.shellQuote(alloc, a.repo), try ui.shellQuote(alloc, branch) });
         var gone: ?Gone = null;
         defer if (gone) |g| g.lock.release();
         if (named.link == .absent) gone = (try weighGone(ctx, clone_path, wt_path, force_cmd, a.force)) orelse return 1;
@@ -374,14 +374,14 @@ test "run: creating a worktree before the clone exists reports a restore hint" {
     const ws = try testutil.testWorkspace(arena, root);
 
     // A member repo whose clone was never fetched (fresh-machine case).
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", "feature" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "not cloned") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "restore") != null);
+    try testing.expect(std.mem.find(u8, got.err, "not cloned") != null);
+    try testing.expect(std.mem.find(u8, got.err, "restore") != null);
 }
 
 test "run: a branch whose segments would escape the worktrees dir is a usage error" {
@@ -397,18 +397,18 @@ test "run: a branch whose segments would escape the worktrees dir is a usage err
     defer state.restore();
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     for ([_][]const u8{ "../evil", "a/../b", "..\\..\\pwn" }) |branch| {
         const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", branch });
         try testing.expectEqual(@as(u8, 2), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.err, "invalid branch name") != null);
+        try testing.expect(std.mem.find(u8, got.err, "invalid branch name") != null);
 
         const removed = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", branch, "-r" });
         try testing.expectEqual(@as(u8, 2), removed.code);
-        try testing.expect(std.mem.indexOf(u8, removed.err, "invalid branch name") != null);
+        try testing.expect(std.mem.find(u8, removed.err, "invalid branch name") != null);
     }
 }
 
@@ -423,17 +423,17 @@ test "run: an emptied @worktrees dir (raw git removal) drops the hub link on rec
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
-    try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(clone_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, clone_path });
     try testutil.runGit(&sb, clone_path, &.{ "branch", "feature-x" });
 
-    const wt_path = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature-x" });
-    const hub_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "backend@worktrees" });
+    const wt_path = try std.Io.Dir.path.join(arena, &.{ try arena.print("{s}@worktrees", .{clone_path}), "feature-x" });
+    const hub_link = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "backend@worktrees" });
 
     _ = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", "feature-x" });
     switch (try fsutil.linkState(arena, hub_link)) {
@@ -471,15 +471,15 @@ test "run: a worktree on a shared repo surfaces in every project that uses it" {
     const url = "https://holt-test.invalid/acme/lib";
 
     // Two projects share the same repo.
-    var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_a: std.array_hash_map.String([]const u8) = .empty;
     try repos_a.put(arena, "lib", url);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "one", repos_a, .empty);
-    var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_b: std.array_hash_map.String([]const u8) = .empty;
     try repos_b.put(arena, "lib", url);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "two", repos_b, .empty);
 
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "lib" });
-    try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "lib" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(clone_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, clone_path });
     try testutil.runGit(&sb, clone_path, &.{ "branch", "feature" });
 
@@ -488,7 +488,7 @@ test "run: a worktree on a shared repo surfaces in every project that uses it" {
     try testing.expectEqual(@as(u8, 0), got.code);
 
     for ([_][]const u8{ "one", "two" }) |proj| {
-        const link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", proj, "code", "lib@worktrees" });
+        const link = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", proj, "code", "lib@worktrees" });
         switch (try fsutil.linkState(arena, link)) {
             .symlink => {},
             else => return error.TestUnexpectedResult,
@@ -510,22 +510,22 @@ test "run: create, list, and remove a worktree; the hub link tracks it" {
     defer state.restore();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // Clone the repo into its identity path and add a branch to check out.
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
-    try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(clone_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, clone_path });
     try testutil.runGit(&sb, clone_path, &.{ "branch", "feature-x" });
 
-    const wt_path = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature-x" });
-    const hub_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "backend@worktrees" });
+    const wt_path = try std.Io.Dir.path.join(arena, &.{ try arena.print("{s}@worktrees", .{clone_path}), "feature-x" });
+    const hub_link = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "code", "backend@worktrees" });
 
     const created = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", "feature-x" });
     try testing.expectEqual(@as(u8, 0), created.code);
-    try testing.expect(std.mem.indexOf(u8, created.out, wt_path) != null);
+    try testing.expect(std.mem.find(u8, created.out, wt_path) != null);
     try testing.expectEqualStrings("feature-x", (try git.currentBranch(arena, wt_path)).?);
     switch (try fsutil.linkState(arena, hub_link)) {
         .symlink => {},
@@ -534,7 +534,7 @@ test "run: create, list, and remove a worktree; the hub link tracks it" {
 
     const listed = try testutil.runCmd(arena, command.run, ws, &.{"proj/backend"});
     try testing.expectEqual(@as(u8, 0), listed.code);
-    try testing.expect(std.mem.indexOf(u8, listed.out, "feature-x") != null);
+    try testing.expect(std.mem.find(u8, listed.out, "feature-x") != null);
 
     const removed = try testutil.runCmd(arena, command.run, ws, &.{ "proj/backend", "feature-x", "--remove" });
     try testing.expectEqual(@as(u8, 0), removed.code);
@@ -556,7 +556,7 @@ test "run: a new worktree gets links to the repo's kept files" {
     try testutil.runGit(&sb, c, &.{ "branch", "feature" });
     try bed.write(c, ".clasp.json", "{\"scriptId\": \"abc\"}");
     try bed.keep(c, ".clasp.json");
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
@@ -565,5 +565,5 @@ test "run: a new worktree gets links to the repo's kept files" {
     const wt = std.mem.trim(u8, got.out, "\n");
     try testing.expect(try bed.linked(wt, key, ".clasp.json"));
     try testing.expectEqualStrings("{\"scriptId\": \"abc\"}", try bed.read(wt, ".clasp.json"));
-    try testing.expect(std.mem.indexOf(u8, got.err, "linked ") != null);
+    try testing.expect(std.mem.find(u8, got.err, "linked ") != null);
 }

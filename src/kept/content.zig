@@ -39,7 +39,7 @@ pub fn entryAt(path: []const u8) !Entry {
 /// False when that ancestor is a directory, or when none is there.
 pub fn underNonDir(path: []const u8) !bool {
     var at = path;
-    while (std.fs.path.dirname(at)) |parent| {
+    while (std.Io.Dir.path.dirname(at)) |parent| {
         at = parent;
         switch (try entryAt(at)) {
             .absent => continue,
@@ -146,7 +146,7 @@ pub fn probeFolding(alloc: std.mem.Allocator, dir: []const u8) !paths.Folding {
 /// when it cannot be created.
 pub fn probeFoldingAs(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) !paths.Folding {
     if (builtin.is_test) if (paths.folding_for_test) |f| return f;
-    const probe = try std.fs.path.join(alloc, &.{ dir, name });
+    const probe = try std.Io.Dir.path.join(alloc, &.{ dir, name });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = probe, .data = "", .flags = .{ .exclusive = true } });
     defer fsutil.removePath(probe) catch {};
     const swapped = try alloc.dupe(u8, name);
@@ -154,8 +154,8 @@ pub fn probeFoldingAs(alloc: std.mem.Allocator, dir: []const u8, name: []const u
         if (std.ascii.isLower(c.*)) c.* = std.ascii.toUpper(c.*) else if (std.ascii.isUpper(c.*)) c.* = std.ascii.toLower(c.*);
     }
     return .{
-        .case = try entryAt(try std.fs.path.join(alloc, &.{ dir, swapped })) != .absent,
-        .norm = try entryAt(try std.fs.path.join(alloc, &.{ dir, try paths.nfd(alloc, name) })) != .absent,
+        .case = try entryAt(try std.Io.Dir.path.join(alloc, &.{ dir, swapped })) != .absent,
+        .norm = try entryAt(try std.Io.Dir.path.join(alloc, &.{ dir, try paths.nfd(alloc, name) })) != .absent,
     };
 }
 
@@ -208,7 +208,7 @@ fn fileId(alloc: std.mem.Allocator, path: []const u8) !?FileId {
 /// where the filesystem has them, else the 64-bit index. Null when absent;
 /// `FileId.unknown` when it cannot be opened or identified otherwise.
 fn windowsFileId(alloc: std.mem.Allocator, path: []const u8) !?FileId {
-    const long = try windowsLongPath(alloc, try std.fs.path.resolveWindows(alloc, &.{path}));
+    const long = try windowsLongPath(alloc, try std.Io.Dir.path.resolveAllocWindows(alloc, &.{path}));
     const w = std.unicode.wtf8ToWtf16LeAllocZ(alloc, long) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return FileId.unknown,
@@ -282,7 +282,7 @@ fn handleId(file: std.Io.File) ?FileId {
 /// Always false elsewhere, and when it cannot be read.
 pub fn isPlainReparseDir(alloc: std.mem.Allocator, path: []const u8) !bool {
     if (builtin.os.tag != .windows) return false;
-    const long = try windowsLongPath(alloc, try std.fs.path.resolveWindows(alloc, &.{path}));
+    const long = try windowsLongPath(alloc, try std.Io.Dir.path.resolveAllocWindows(alloc, &.{path}));
     const w = std.unicode.wtf8ToWtf16LeAllocZ(alloc, long) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return false,
@@ -438,9 +438,9 @@ pub fn treeFiles(alloc: std.mem.Allocator, root: []const u8) ![]FileHash {
         if (std.mem.startsWith(u8, entry.basename, ".") and std.mem.endsWith(u8, entry.basename, ".icloud")) {
             return error.OnlineOnly;
         }
-        const native = try std.fs.path.join(alloc, &.{ root, entry.path });
+        const native = try std.Io.Dir.path.join(alloc, &.{ root, entry.path });
         const rel = try alloc.dupe(u8, entry.path);
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
         try out.append(alloc, .{ .path = rel, .hex = try hashFile(alloc, native) });
     }
     std.mem.sort(FileHash, out.items, {}, fileLess);
@@ -512,7 +512,7 @@ pub fn treeFilesPartial(alloc: std.mem.Allocator, root: []const u8, windows_name
             continue;
         }
         for (found.items) |f| {
-            const rel = if (sub.len == 0) f.name else try std.fmt.allocPrint(alloc, "{s}/{s}", .{ sub, f.name });
+            const rel = if (sub.len == 0) f.name else try alloc.print("{s}/{s}", .{ sub, f.name });
             const why: Skip = switch (f.kind) {
                 .directory => {
                     try pending.append(alloc, rel);
@@ -523,7 +523,7 @@ pub fn treeFilesPartial(alloc: std.mem.Allocator, root: []const u8, windows_name
                     .windows_name
                 else if (std.mem.startsWith(u8, f.name, ".") and std.mem.endsWith(u8, f.name, ".icloud"))
                     .online_only
-                else if (hashFile(alloc, try std.fs.path.join(alloc, &.{ here, f.name }))) |hex| {
+                else if (hashFile(alloc, try std.Io.Dir.path.join(alloc, &.{ here, f.name }))) |hex| {
                     try files.append(alloc, .{ .path = rel, .hex = hex });
                     continue;
                 } else |err| switch (err) {
@@ -555,7 +555,7 @@ pub fn holdsAnything(alloc: std.mem.Allocator, root: []const u8) !bool {
         var it = dir.iterate();
         while (it.next(io()) catch return true) |e| {
             if (e.kind != .directory) return true;
-            try pending.append(alloc, try std.fs.path.join(alloc, &.{ here, e.name }));
+            try pending.append(alloc, try std.Io.Dir.path.join(alloc, &.{ here, e.name }));
         }
     }
     return false;
@@ -591,7 +591,7 @@ pub fn isNestedRepo(alloc: std.mem.Allocator, dir_path: []const u8, ignore_case:
 /// Whether `<dir_path>/.git` names anything on the filesystem, links not
 /// followed. The error when it cannot be looked up.
 pub fn dotGitResolves(alloc: std.mem.Allocator, dir_path: []const u8) !bool {
-    return try entryAt(try std.fs.path.join(alloc, &.{ dir_path, ".git" })) != .absent;
+    return try entryAt(try std.Io.Dir.path.join(alloc, &.{ dir_path, ".git" })) != .absent;
 }
 
 /// The nested repositories at or below the directory `root`: each
@@ -706,7 +706,7 @@ fn treeFilesNoHash(alloc: std.mem.Allocator, root: []const u8) !Listing {
     var files: std.ArrayList([]const u8) = .empty;
     while (try walker.next(io())) |entry| {
         const rel = try alloc.dupe(u8, entry.path);
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
         switch (entry.kind) {
             .directory => try dirs.append(alloc, rel),
             .file => try files.append(alloc, rel),
@@ -826,9 +826,9 @@ pub fn randomSuffix() [16]u8 {
 /// A path beside `path`, in the same directory and so on the same
 /// filesystem, that nothing occupies yet.
 pub fn tempSibling(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
-    const parent = std.fs.path.dirname(path) orelse ".";
+    const parent = std.Io.Dir.path.dirname(path) orelse ".";
     const suffix = randomSuffix();
-    return std.fs.path.join(alloc, &.{ parent, try std.fmt.allocPrint(alloc, ".holt-tmp-{s}", .{&suffix}) });
+    return std.Io.Dir.path.join(alloc, &.{ parent, try alloc.print(".holt-tmp-{s}", .{&suffix}) });
 }
 
 /// Test seam: every `createLink` fails with `SymlinkPrivilege`, as on a
@@ -865,7 +865,7 @@ pub fn createLink(target: []const u8, link_path: []const u8, kind: Kind) LinkErr
 pub fn probeLink(alloc: std.mem.Allocator, dir: []const u8, kind: Kind) !void {
     try fsutil.ensureDir(dir);
     const suffix = randomSuffix();
-    const probe = try std.fs.path.join(alloc, &.{ dir, try std.fmt.allocPrint(alloc, ".holt-probe-{s}", .{&suffix}) });
+    const probe = try std.Io.Dir.path.join(alloc, &.{ dir, try alloc.print(".holt-probe-{s}", .{&suffix}) });
     try createLink(dir, probe, kind);
     try fsutil.removePath(probe);
 }
@@ -913,7 +913,7 @@ pub fn findReserved(alloc: std.mem.Allocator, root: []const u8) !?[]const u8 {
     while (try walker.next(io())) |entry| {
         if (!paths.isReserved(entry.basename)) continue;
         const rel = try alloc.dupe(u8, entry.path);
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
         return rel;
     }
     return null;
@@ -943,7 +943,7 @@ pub fn invalidNames(alloc: std.mem.Allocator, root: []const u8) ![]const []const
         for (names.items) |n| if (paths.check(n) == null) try valid.append(alloc, n);
         const colliding = try paths.collisions(alloc, valid.items);
         for (names.items, dirs.items) |n, is_dir| {
-            const rel = if (sub.len == 0) n else try std.fmt.allocPrint(alloc, "{s}/{s}", .{ sub, n });
+            const rel = if (sub.len == 0) n else try alloc.print("{s}/{s}", .{ sub, n });
             if (paths.check(n) != null or paths.contains(colliding, n)) {
                 try out.append(alloc, rel);
             } else if (is_dir) try pending.append(alloc, rel);
@@ -1148,7 +1148,7 @@ test "retargetLink: the link ends pointing at the new target, and a link that ch
     defer f.deinit();
     const a = f.alloc();
     // Windows reads a link's target back with its own separator.
-    const sep = std.fs.path.sep_str;
+    const sep = std.Io.Dir.path.sep_str;
 
     const l = try f.path("l");
     const t = try f.path(".holt-tmp-l");
@@ -1185,7 +1185,7 @@ test "removeLinkIf: removes the link only while it still names the target" {
     defer f.deinit();
     const a = f.alloc();
     // Windows reads a link's target back with its own separator.
-    const sep = std.fs.path.sep_str;
+    const sep = std.Io.Dir.path.sep_str;
     const l = try f.path("l");
     try createLink(sep ++ "one", l, .file);
     try testing.expect(!try removeLinkIf(a, l, sep ++ "two"));

@@ -122,7 +122,7 @@ pub fn describeError(alloc: std.mem.Allocator, err: anyerror) ?[]const u8 {
         error.GitNotFound => "git is not installed or not on your PATH",
         error.TarNotFound => "tar is not installed or not on your PATH",
         error.CurlNotFound => "curl is not installed or not on your PATH",
-        else => std.fmt.allocPrint(alloc, "internal error: {s}", .{@errorName(err)}) catch null,
+        else => alloc.print("internal error: {s}", .{@errorName(err)}) catch null,
     };
 }
 
@@ -398,9 +398,9 @@ test "HoltCli wiring: top-level help renders holt's group headings and footer" {
     const code = try run(testing.allocator, testing.io, &.{"holt"}, &.{smoke_cmd}, &out_w, &err_w);
     try testing.expectEqual(@as(u8, 0), code);
     const out = out_w.buffered();
-    try testing.expect(std.mem.indexOf(u8, out, "\nSystem:\n") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "A <project> is <org>/<name>, or a unique name or abbreviation of one.\n") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Run \"holt init <shell>\" to set up the h/hi shell helpers.\n") != null);
+    try testing.expect(std.mem.find(u8, out, "\nSystem:\n") != null);
+    try testing.expect(std.mem.find(u8, out, "A <project> is <org>/<name>, or a unique name or abbreviation of one.\n") != null);
+    try testing.expect(std.mem.find(u8, out, "Run \"holt init <shell>\" to set up the h/hi shell helpers.\n") != null);
 }
 
 test "renderCommandHelp: a group parent's help lists its subcommands with summaries" {
@@ -436,9 +436,9 @@ test "renderCommandHelp: a group parent's help lists its subcommands with summar
     const code = try run(testing.allocator, testing.io, &.{ "holt", "grp", "--help" }, &.{grp_cmd}, &out_w, &err_w);
     try testing.expectEqual(@as(u8, 0), code);
     const out = out_w.buffered();
-    try testing.expect(std.mem.indexOf(u8, out, "\nCommands:\n") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "  sub         does the sub thing\n") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "  wider-name  does the wider thing\n") != null);
+    try testing.expect(std.mem.find(u8, out, "\nCommands:\n") != null);
+    try testing.expect(std.mem.find(u8, out, "  sub         does the sub thing\n") != null);
+    try testing.expect(std.mem.find(u8, out, "  wider-name  does the wider thing\n") != null);
 }
 
 test "HoltCli wiring: a command-body known error reports its friendly message verbatim" {
@@ -488,7 +488,7 @@ test "HoltCli wiring: __complete resolves a .dynamic key through resolveCompleti
     try testing.expectEqual(@as(u8, 0), code);
     const out = out_w.buffered();
     try testing.expect(std.mem.startsWith(u8, out, "default\n"));
-    try testing.expect(std.mem.indexOf(u8, out, "dropbox") != null);
+    try testing.expect(std.mem.find(u8, out, "dropbox") != null);
 }
 
 /// The first line of `cmd`'s details, or of a subcommand's, longer than

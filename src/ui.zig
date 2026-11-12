@@ -231,7 +231,7 @@ pub var stdin_for_test: ?[]const u8 = null;
 fn takeLine(buf: []u8) !?[]const u8 {
     if (stdin_for_test) |*canned| {
         if (canned.len == 0) return null;
-        const nl = std.mem.indexOfScalar(u8, canned.*, '\n') orelse {
+        const nl = std.mem.findScalar(u8, canned.*, '\n') orelse {
             defer canned.* = canned.*[canned.len..];
             return canned.*;
         };
@@ -459,7 +459,7 @@ test "shellQuote: POSIX sh and fish read a quoted backslash and quote back as th
     const shells = [_][]const []const u8{ &.{ "/bin/sh", "-c" }, &.{ "fish", "--no-config", "-c" } };
     for ([_][]const u8{ "a\\b", "end\\", "it's\\", "\\\\'", "sp ace\\\\x", "app@worktrees/x", "^/w/run/one\\.git$", "a\\'b", "\\\\\\x" }) |arg| {
         for (shells) |sh| {
-            const script = try std.fmt.allocPrint(arena, "printf %s {s}", .{try shellQuote(arena, arg)});
+            const script = try arena.print("printf %s {s}", .{try shellQuote(arena, arg)});
             const argv = try std.mem.concat(arena, []const u8, &.{ sh, &.{script} });
             const res = @import("proc.zig").runEnv(arena, argv, null, null) catch |err| switch (err) {
                 error.FileNotFound => continue,

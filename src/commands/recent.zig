@@ -177,7 +177,7 @@ fn runJson(ctx: *app.Ctx, entries: []const Entry) anyerror!u8 {
 /// extra env vars), pointing GIT_CONFIG_GLOBAL/SYSTEM at /dev/null so the
 /// commit ignores the developer's real gitconfig.
 fn commitAtEpoch(alloc: std.mem.Allocator, cwd: []const u8, epoch_seconds: i64) !void {
-    const date = try std.fmt.allocPrint(alloc, "@{d} +0000", .{epoch_seconds});
+    const date = try alloc.print("@{d} +0000", .{epoch_seconds});
 
     var map = try Env.current().createMap(alloc);
     defer map.deinit();
@@ -218,9 +218,9 @@ test "run: --org restricts the listing to one org" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--org", "acme" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/one") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/two") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "zebra/three") == null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/one") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/two") != null);
+    try testing.expect(std.mem.find(u8, got.out, "zebra/three") == null);
 }
 
 test "run: --json emits objects; a project with no commit has a null timestamp" {
@@ -265,7 +265,7 @@ test "run: -n caps the list and notes the remainder on stderr" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "-n", "1" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "\n"));
-    try testing.expect(std.mem.indexOf(u8, got.err, "and 2 more") != null);
+    try testing.expect(std.mem.find(u8, got.err, "and 2 more") != null);
 }
 
 test "run: orders projects by their most recent planted commit date, newest first" {
@@ -282,21 +282,21 @@ test "run: orders projects by their most recent planted commit date, newest firs
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos_old: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_old: std.array_hash_map.String([]const u8) = .empty;
     try repos_old.put(arena, "old-repo", "https://holt-test.invalid/acme/old-repo");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "older", repos_old, .empty);
 
-    var repos_new: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_new: std.array_hash_map.String([]const u8) = .empty;
     try repos_new.put(arena, "new-repo", "https://holt-test.invalid/acme/new-repo");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "newer", repos_new, .empty);
 
-    const old_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "old-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(old_path).?);
+    const old_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "old-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(old_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_old, old_path });
     try commitAtEpoch(arena, old_path, 1_000_000_000);
 
-    const new_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "new-repo" });
-    try fsutil.ensureDir(std.fs.path.dirname(new_path).?);
+    const new_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "new-repo" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(new_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_new, new_path });
     try commitAtEpoch(arena, new_path, 2_000_000_000);
 
@@ -319,12 +319,12 @@ test "run: a project with no clones present sorts last" {
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "no-clone", .empty, .empty);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "has-clone", "https://holt-test.invalid/acme/has-clone");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "has-clone", repos, .empty);
 
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "has-clone" });
-    try fsutil.ensureDir(std.fs.path.dirname(clone_path).?);
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "has-clone" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(clone_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, clone_path });
     try commitAtEpoch(arena, clone_path, 1_500_000_000);
 
@@ -367,7 +367,7 @@ test "run: an empty workspace prints a helpful hint on stderr, stdout stays clea
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings("", got.out);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no projects with commits yet") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no projects with commits yet") != null);
 }
 
 test "run: -j 1 and -j 8 produce byte-identical ordering across many projects and clones" {
@@ -395,14 +395,14 @@ test "run: -j 1 and -j 8 produce byte-identical ordering across many projects an
     };
 
     for (specs) |spec| {
-        var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        var repos: std.array_hash_map.String([]const u8) = .empty;
         for (spec.epochs, 0..) |epoch, ri| {
-            const repo_name = try std.fmt.allocPrint(arena, "{s}-r{d}", .{ spec.name, ri });
-            const url = try std.fmt.allocPrint(arena, "https://holt-test.invalid/acme/{s}", .{repo_name});
+            const repo_name = try arena.print("{s}-r{d}", .{ spec.name, ri });
+            const url = try arena.print("https://holt-test.invalid/acme/{s}", .{repo_name});
             try repos.put(arena, repo_name, url);
 
-            const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", repo_name });
-            try fsutil.ensureDir(std.fs.path.dirname(path).?);
+            const path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", repo_name });
+            try fsutil.ensureDir(std.Io.Dir.path.dirname(path).?);
             try testutil.runGit(&sb, null, &.{ "clone", bare, path });
             try commitAtEpoch(arena, path, epoch);
         }
@@ -473,7 +473,7 @@ test "cloneTimestamp: null for a clone with a corrupted .git (HEAD overwritten w
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
 
-    const head_path = try std.fs.path.join(arena, &.{ work, ".git", "HEAD" });
+    const head_path = try std.Io.Dir.path.join(arena, &.{ work, ".git", "HEAD" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
 
     try testing.expect(try cloneTimestamp({}, arena, work) == null);
@@ -502,7 +502,7 @@ test "cloneTimestamp: null for a non-repo subdirectory nested inside a parent gi
     try testutil.runGit(&sb, null, &.{ "init", "-q", sb.root });
     try testutil.runGit(&sb, sb.root, &.{ "commit", "--allow-empty", "-m", "parent commit" });
 
-    const sub = try std.fs.path.join(arena, &.{ sb.root, "sub" });
+    const sub = try std.Io.Dir.path.join(arena, &.{ sb.root, "sub" });
     try fsutil.ensureDir(sub);
 
     // Without the ceiling guard this would resolve `sb.root`'s HEAD and
@@ -518,7 +518,7 @@ test "cloneTimestamp: null for a missing path" {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
 
-    const missing = try std.fs.path.join(arena, &.{ sb.root, "does-not-exist" });
+    const missing = try std.Io.Dir.path.join(arena, &.{ sb.root, "does-not-exist" });
     try testing.expect(try cloneTimestamp({}, arena, missing) == null);
 }
 
@@ -531,13 +531,13 @@ test "run: an unusable member is reported and the listing still emits" {
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
     try repos.put(arena, "broken", "not a url");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
+    try testing.expect(std.mem.find(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/proj") != null);
 }

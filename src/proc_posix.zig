@@ -102,11 +102,11 @@ pub fn spawn(alloc: std.mem.Allocator, io: std.Io, argv: []const []const u8, cwd
     const environ = Threaded.global_single_threaded.environ.process_environ;
     const env = if (environ_map) |map| try map.createPosixBlock(a, .{}) else try environ.createPosixBlock(a, .{});
     var paths: std.ArrayList([:0]const u8) = .empty;
-    if (std.mem.indexOfScalar(u8, argv[0], '/') != null) {
+    if (std.mem.findScalar(u8, argv[0], '/') != null) {
         try paths.append(a, try a.dupeSentinel(u8, argv[0], 0));
     } else {
         var it = std.mem.tokenizeScalar(u8, environ.getPosix("PATH") orelse Threaded.default_PATH, ':');
-        while (it.next()) |entry| try paths.append(a, try std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ entry, argv[0] }, 0));
+        while (it.next()) |entry| try paths.append(a, try a.printSentinel("{s}/{s}", .{ entry, argv[0] }, 0));
     }
     const output = try pipe();
     errdefer for (output) |fd| Threaded.closeFd(fd);

@@ -27,7 +27,7 @@ pub const Layout = struct {
     synced_root: []const u8,
 
     pub fn keptDir(self: Layout, alloc: std.mem.Allocator) ![]u8 {
-        return std.fs.path.join(alloc, &.{ self.synced_root, "kept" });
+        return std.Io.Dir.path.join(alloc, &.{ self.synced_root, "kept" });
     }
 
     pub fn keyDir(self: Layout, alloc: std.mem.Allocator, key: []const u8) ![]u8 {
@@ -40,17 +40,17 @@ pub const Layout = struct {
     }
 
     pub fn reserved(self: Layout, alloc: std.mem.Allocator, key: []const u8, name: []const u8) ![]u8 {
-        return std.fs.path.join(alloc, &.{ try self.keyDir(alloc, key), name });
+        return std.Io.Dir.path.join(alloc, &.{ try self.keyDir(alloc, key), name });
     }
 
     pub fn asideDir(self: Layout, alloc: std.mem.Allocator) ![]u8 {
-        return std.fs.path.join(alloc, &.{ try self.keptDir(alloc), ".holt-aside" });
+        return std.Io.Dir.path.join(alloc, &.{ try self.keptDir(alloc), ".holt-aside" });
     }
 
     /// Staging for writes into `key` from `machine_id`.
     pub fn stagingDir(self: Layout, alloc: std.mem.Allocator, machine_id: []const u8, key: []const u8) ![]u8 {
         const kid = paths.id(key);
-        return std.fs.path.join(alloc, &.{ try self.keptDir(alloc), ".holt-tmp", machine_id, &kid });
+        return std.Io.Dir.path.join(alloc, &.{ try self.keptDir(alloc), ".holt-tmp", machine_id, &kid });
     }
 };
 
@@ -59,7 +59,7 @@ pub const Layout = struct {
 pub fn validKey(key: []const u8) bool {
     if (fsutil.SafeRel.parse(key) == null) return false;
     if (paths.check(key) != null) return false;
-    return std.mem.indexOfScalar(u8, key, '/') != null;
+    return std.mem.findScalar(u8, key, '/') != null;
 }
 
 pub fn isLocalKey(key: []const u8) bool {
@@ -85,7 +85,7 @@ fn encode(alloc: std.mem.Allocator, obj: json.ObjectMap) ![]u8 {
 
 /// Writes `data` to `path` only if nothing is there yet, atomically.
 pub fn createExclusive(alloc: std.mem.Allocator, path: []const u8, data: []const u8) !void {
-    if (std.fs.path.dirname(path)) |d| try fsutil.ensureDir(d);
+    if (std.Io.Dir.path.dirname(path)) |d| try fsutil.ensureDir(d);
     const tmp = try content.tempSibling(alloc, path);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = tmp, .data = data });
     content.renameNoReplace(alloc, tmp, path) catch |err| {
@@ -209,7 +209,7 @@ fn sha256Hex(bytes: []const u8) [64]u8 {
 
 fn markerDir(alloc: std.mem.Allocator, layout: Layout, key: []const u8, family: []const u8, s: []const u8) ![]u8 {
     const sid = paths.id(s);
-    return std.fs.path.join(alloc, &.{ try layout.keyDir(alloc, key), family, &sid });
+    return std.Io.Dir.path.join(alloc, &.{ try layout.keyDir(alloc, key), family, &sid });
 }
 
 /// Writes `machine_id`'s fact for `rel`, and, when absent or naming another
@@ -226,7 +226,7 @@ pub fn writeFact(alloc: std.mem.Allocator, layout: Layout, key: []const u8, mach
     try obj.put(alloc, "sha256", .{ .string = sha256 });
     const dir = try markerDir(alloc, layout, key, ".holt-paths", rel);
     try fsutil.ensureDir(dir);
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ dir, machine_id }), try encode(alloc, obj));
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, machine_id }), try encode(alloc, obj));
     var buf: [machine.host_name_max]u8 = undefined;
     const host = machine.hostName(&buf);
     if (!std.mem.eql(u8, (try readHost(alloc, layout, machine_id)) orelse "", host)) try writeHost(alloc, layout, machine_id, host);
@@ -236,7 +236,7 @@ pub fn writeFact(alloc: std.mem.Allocator, layout: Layout, key: []const u8, mach
 /// machine, one file per fact: `host`, the host label it last wrote a fact
 /// from, and `retired`, once it is retired (`writeRetired`).
 pub fn machineDir(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8) ![]u8 {
-    return std.fs.path.join(alloc, &.{ try layout.keptDir(alloc), machines_basename, machine_id });
+    return std.Io.Dir.path.join(alloc, &.{ try layout.keptDir(alloc), machines_basename, machine_id });
 }
 
 pub const machines_basename = ".holt-machines";
@@ -247,12 +247,12 @@ pub fn writeHost(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u
     try obj.put(alloc, "host", .{ .string = host });
     const dir = try machineDir(alloc, layout, machine_id);
     try fsutil.ensureDir(dir);
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ dir, "host" }), try encode(alloc, obj));
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, "host" }), try encode(alloc, obj));
 }
 
 /// The host label recorded for `machine_id`, or null when none is.
 pub fn readHost(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8) !?[]const u8 {
-    const bytes = content.readSmall(alloc, try std.fs.path.join(alloc, &.{ try machineDir(alloc, layout, machine_id), "host" })) catch |err| switch (err) {
+    const bytes = content.readSmall(alloc, try std.Io.Dir.path.join(alloc, &.{ try machineDir(alloc, layout, machine_id), "host" })) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return null,
         else => return err,
     };
@@ -296,7 +296,7 @@ pub fn machineFactFiles(alloc: std.mem.Allocator, layout: Layout, index: *const 
         var it = d.iterate();
         while (try it.next(io())) |idir| {
             if (idir.kind != .directory) continue;
-            const file = try std.fs.path.join(alloc, &.{ root, idir.name, machine_id });
+            const file = try std.Io.Dir.path.join(alloc, &.{ root, idir.name, machine_id });
             const bytes = content.readSmall(alloc, file) catch |err| switch (err) {
                 error.FileNotFound, error.NotDir, error.IsDir => continue,
                 else => return err,
@@ -328,14 +328,14 @@ pub fn writeRetired(alloc: std.mem.Allocator, layout: Layout, index: *const KeyI
     try obj.put(alloc, "facts", .{ .object = covers });
     const dir = try machineDir(alloc, layout, machine_id);
     try fsutil.ensureDir(dir);
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ dir, "retired" }), try encode(alloc, obj));
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, "retired" }), try encode(alloc, obj));
 }
 
 /// Removes `machine_id`'s retirement record: every fact of it stands again.
 /// False when it was not retired.
 pub fn removeRetired(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8) !bool {
     if (!machine.valid(machine_id)) return error.InvalidMachineId;
-    const file = try std.fs.path.join(alloc, &.{ try machineDir(alloc, layout, machine_id), "retired" });
+    const file = try std.Io.Dir.path.join(alloc, &.{ try machineDir(alloc, layout, machine_id), "retired" });
     if (try content.entryAt(file) == .absent) return false;
     try fsutil.removePath(file);
     return true;
@@ -345,7 +345,7 @@ pub fn removeRetired(alloc: std.mem.Allocator, layout: Layout, machine_id: []con
 /// A record that cannot be parsed is dated `?` and covers no fact.
 pub fn readRetired(alloc: std.mem.Allocator, layout: Layout, machine_id: []const u8) !?Retired {
     if (!machine.valid(machine_id)) return null;
-    const bytes = content.readSmall(alloc, try std.fs.path.join(alloc, &.{ try machineDir(alloc, layout, machine_id), "retired" })) catch |err| switch (err) {
+    const bytes = content.readSmall(alloc, try std.Io.Dir.path.join(alloc, &.{ try machineDir(alloc, layout, machine_id), "retired" })) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return null,
         else => return err,
     };
@@ -381,7 +381,7 @@ pub fn utcDate(alloc: std.mem.Allocator, secs: i64) ![]u8 {
     const es = std.time.epoch.EpochSeconds{ .secs = @intCast(std.math.clamp(secs, 0, date_secs_max)) };
     const day = es.getEpochDay().calculateYearDay();
     const md = day.calculateMonthDay();
-    return std.fmt.allocPrint(alloc, "{d:0>4}-{d:0>2}-{d:0>2}", .{ day.year, md.month.numeric(), md.day_index + 1 });
+    return alloc.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ day.year, md.month.numeric(), md.day_index + 1 });
 }
 
 /// Today's UTC date as `YYYY-MM-DD`.
@@ -416,7 +416,7 @@ pub const MachineInfo = struct {
 /// Every machine with a fact in any key of `index`, and every retired one,
 /// sorted by id.
 pub fn machines(alloc: std.mem.Allocator, layout: Layout, index: *const KeyIndex) ![]const MachineInfo {
-    var newest: std.StringArrayHashMapUnmanaged(i128) = .empty;
+    var newest: std.array_hash_map.String(i128) = .empty;
     var unknown: std.StringHashMapUnmanaged(void) = .empty;
     for (index.keys) |key| {
         const root = try layout.reserved(alloc, key, ".holt-paths");
@@ -441,7 +441,7 @@ pub fn machines(alloc: std.mem.Allocator, layout: Layout, index: *const KeyIndex
             }
         }
     }
-    if (std.Io.Dir.cwd().openDir(io(), try std.fs.path.join(alloc, &.{ try layout.keptDir(alloc), machines_basename }), .{ .iterate = true })) |dd| {
+    if (std.Io.Dir.cwd().openDir(io(), try std.Io.Dir.path.join(alloc, &.{ try layout.keptDir(alloc), machines_basename }), .{ .iterate = true })) |dd| {
         var d = dd;
         defer d.close(io());
         var it = d.iterate();
@@ -482,7 +482,7 @@ pub fn replaceFacts(alloc: std.mem.Allocator, layout: Layout, key: []const u8, m
         defer d.close(io());
         var it = d.iterate();
         while (try it.next(io())) |e| {
-            if (!std.mem.eql(u8, e.name, machine_id)) try others.append(alloc, try std.fs.path.join(alloc, &.{ dir, e.name }));
+            if (!std.mem.eql(u8, e.name, machine_id)) try others.append(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, e.name }));
         }
     }
     for (others.items) |o| try std.Io.Dir.cwd().deleteTree(io(), o);
@@ -513,7 +513,7 @@ pub fn readFacts(alloc: std.mem.Allocator, layout: Layout, key: []const u8, bad:
     defer dir.close(io());
     var it = dir.iterate();
     while (try it.next(io())) |idir| {
-        const idir_path = try std.fs.path.join(alloc, &.{ root, idir.name });
+        const idir_path = try std.Io.Dir.path.join(alloc, &.{ root, idir.name });
         if (idir.kind != .directory) {
             try bad.append(alloc, .{ .path = idir_path, .reason = "not a record directory" });
             continue;
@@ -522,7 +522,7 @@ pub fn readFacts(alloc: std.mem.Allocator, layout: Layout, key: []const u8, bad:
         defer sub.close(io());
         var sit = sub.iterate();
         while (try sit.next(io())) |f| {
-            const fpath = try std.fs.path.join(alloc, &.{ idir_path, f.name });
+            const fpath = try std.Io.Dir.path.join(alloc, &.{ idir_path, f.name });
             if (isTemp(f.name)) continue;
             if (!machine.valid(f.name) or f.kind != .file) {
                 try bad.append(alloc, .{ .path = fpath, .reason = "not a record file" });
@@ -564,7 +564,7 @@ fn writeValueMarker(alloc: std.mem.Allocator, dir: []const u8, s: []const u8, fi
     try obj.put(alloc, field, .{ .string = value });
     try fsutil.ensureDir(dir);
     const sid = paths.id(s);
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ dir, &sid }), try encode(alloc, obj));
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, &sid }), try encode(alloc, obj));
 }
 
 /// The values of every `<family>/<id>` marker holding `field`, sorted. A
@@ -579,7 +579,7 @@ fn readValueMarkers(alloc: std.mem.Allocator, dir: []const u8, field: []const u8
     var it = d.iterate();
     while (try it.next(io())) |e| {
         if (isTemp(e.name)) continue;
-        const p = try std.fs.path.join(alloc, &.{ dir, e.name });
+        const p = try std.Io.Dir.path.join(alloc, &.{ dir, e.name });
         const value: ?[]const u8 = if (e.kind == .file)
             (if (parseObject(alloc, try content.readSmall(alloc, p))) |obj| getString(obj, field) else null)
         else
@@ -612,7 +612,7 @@ pub fn writePurged(alloc: std.mem.Allocator, layout: Layout, key: []const u8, ma
     const dir = try layout.reserved(alloc, key, ".holt-released");
     try fsutil.ensureDir(dir);
     const sid = paths.id(mark.rel);
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ dir, &sid }), try encode(alloc, obj));
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, &sid }), try encode(alloc, obj));
 }
 
 /// Every purge mark of `key` (`writePurged`), sorted by path. A marker
@@ -629,7 +629,7 @@ pub fn readPurged(alloc: std.mem.Allocator, layout: Layout, key: []const u8) ![]
     var it = d.iterate();
     while (try it.next(io())) |e| {
         if (isTemp(e.name) or e.kind != .file) continue;
-        const obj = parseObject(alloc, try content.readSmall(alloc, try std.fs.path.join(alloc, &.{ dir, e.name }))) orelse continue;
+        const obj = parseObject(alloc, try content.readSmall(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, e.name }))) orelse continue;
         const rel = getString(obj, "rel") orelse continue;
         if (!std.mem.eql(u8, &paths.id(rel), e.name)) continue;
         const entry = getString(obj, "purged") orelse continue;
@@ -652,30 +652,30 @@ pub const pruned_basename = ".holt-pruned";
 /// so no machine takes the entry for one still arriving.
 pub fn writePruned(alloc: std.mem.Allocator, layout: Layout, entry: []const u8) !void {
     if (!validEntryName(entry)) return error.InvalidEntryName;
-    const dir = try std.fs.path.join(alloc, &.{ try layout.keptDir(alloc), pruned_basename });
+    const dir = try std.Io.Dir.path.join(alloc, &.{ try layout.keptDir(alloc), pruned_basename });
     try fsutil.ensureDir(dir);
     var obj: json.ObjectMap = .empty;
     try obj.put(alloc, "entry", .{ .string = entry });
-    try fsutil.writeFileAtomic(alloc, try std.fs.path.join(alloc, &.{ dir, entry }), try encode(alloc, obj));
+    try fsutil.writeFileAtomic(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, entry }), try encode(alloc, obj));
 }
 
 /// Whether the aside entry `entry` is pruned (`writePruned`).
 pub fn isPruned(alloc: std.mem.Allocator, layout: Layout, entry: []const u8) !bool {
     if (!validEntryName(entry)) return false;
-    return try content.entryAt(try std.fs.path.join(alloc, &.{ try layout.keptDir(alloc), pruned_basename, entry })) != .absent;
+    return try content.entryAt(try std.Io.Dir.path.join(alloc, &.{ try layout.keptDir(alloc), pruned_basename, entry })) != .absent;
 }
 
 /// Whether `name` can name an aside entry: one path component, not
 /// reserved, and a valid kept path.
 pub fn validEntryName(name: []const u8) bool {
     if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
-    if (std.mem.indexOfAny(u8, name, "/\\") != null or paths.isReserved(name)) return false;
+    if (std.mem.findAny(u8, name, "/\\") != null or paths.isReserved(name)) return false;
     return paths.check(name) == null;
 }
 
 pub fn removeReleased(alloc: std.mem.Allocator, layout: Layout, key: []const u8, rel: []const u8) !void {
     const sid = paths.id(rel);
-    try fsutil.removePath(try std.fs.path.join(alloc, &.{ try layout.reserved(alloc, key, ".holt-released"), &sid }));
+    try fsutil.removePath(try std.Io.Dir.path.join(alloc, &.{ try layout.reserved(alloc, key, ".holt-released"), &sid }));
 }
 
 pub fn readReleased(alloc: std.mem.Allocator, layout: Layout, key: []const u8, bad: *std.ArrayList(Bad)) ![]const []const u8 {
@@ -697,9 +697,9 @@ pub const roots_basename = ".holt-roots";
 /// holt makes lies under it, so a link into it stays holt's once the store
 /// is copied to another synced root (`syncedRoots`).
 pub fn recordRoot(alloc: std.mem.Allocator, layout: Layout) !void {
-    const dir = try std.fs.path.join(alloc, &.{ try layout.keptDir(alloc), roots_basename });
+    const dir = try std.Io.Dir.path.join(alloc, &.{ try layout.keptDir(alloc), roots_basename });
     const sid = paths.id(layout.synced_root);
-    if (try content.entryAt(try std.fs.path.join(alloc, &.{ dir, &sid })) != .absent) return;
+    if (try content.entryAt(try std.Io.Dir.path.join(alloc, &.{ dir, &sid })) != .absent) return;
     try writeValueMarker(alloc, dir, layout.synced_root, "root", layout.synced_root);
 }
 
@@ -716,7 +716,7 @@ pub fn recordsRoot(alloc: std.mem.Allocator, root: []const u8) !bool {
 /// one, then every one the store records it has lived at (`recordRoot`).
 pub fn syncedRoots(alloc: std.mem.Allocator, layout: Layout) ![]const []const u8 {
     var bad: std.ArrayList(Bad) = .empty;
-    const recorded = try readValueMarkers(alloc, try std.fs.path.join(alloc, &.{ try layout.keptDir(alloc), roots_basename }), "root", &bad);
+    const recorded = try readValueMarkers(alloc, try std.Io.Dir.path.join(alloc, &.{ try layout.keptDir(alloc), roots_basename }), "root", &bad);
     return std.mem.concat(alloc, []const u8, &.{ &.{layout.synced_root}, recorded });
 }
 
@@ -753,11 +753,11 @@ pub fn loadIndex(alloc: std.mem.Allocator, layout: Layout) !KeyIndex {
             if (entry.kind != .directory) continue;
             if (paths.isReserved(entry.basename)) continue;
             const rel = try alloc.dupe(u8, entry.path);
-            if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+            if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
             for (keys.items, named.items) |k, n| {
                 if (rel.len > k.len and std.mem.startsWith(u8, rel, k) and rel[k.len] == '/' and paths.contains(n, rel[k.len + 1 ..])) continue :next;
             }
-            const rec_path = try std.fs.path.join(alloc, &.{ kept, entry.path, record_basename });
+            const rec_path = try std.Io.Dir.path.join(alloc, &.{ kept, entry.path, record_basename });
             if (try content.entryAt(rec_path) == .file and validKey(rel)) {
                 var ignored: std.ArrayList(Bad) = .empty;
                 const facts = try readFacts(alloc, layout, rel, &ignored);
@@ -940,17 +940,17 @@ pub fn unknownFiles(alloc: std.mem.Allocator, layout: Layout, key: []const u8, n
     while (try walker.next(io())) |entry| {
         if (paths.isReserved(entry.basename) or reservedStandIn(entry.basename) != null) continue;
         const rel = try alloc.dupe(u8, entry.path);
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
         if (paths.contains(named, rel)) continue;
         if (isMetadata(entry.basename) and !isAncestorOfAny(named, rel)) continue;
         if (entry.kind == .directory) {
-            const rec = try std.fs.path.join(alloc, &.{ root, entry.path, record_basename });
+            const rec = try std.Io.Dir.path.join(alloc, &.{ root, entry.path, record_basename });
             if (try content.entryAt(rec) == .file) continue;
             if (isAncestorOfAny(named, rel)) {
                 try walker.enter(io(), entry);
                 continue;
             }
-            if (try holdsNothing(alloc, try std.fs.path.join(alloc, &.{ root, entry.path }))) continue;
+            if (try holdsNothing(alloc, try std.Io.Dir.path.join(alloc, &.{ root, entry.path }))) continue;
         }
         try out.append(alloc, rel);
     }
@@ -1043,9 +1043,9 @@ test "facts: one file per machine, read back sorted, and a misfiled or foreign f
     try writeFact(a, layout, key, "aaaaaaaaaaaaaaaa", ".clasp.json", .file, hex_a);
     try writeFact(a, layout, key, "aaaaaaaaaaaaaaaa", ".superpowers", .dir, hex_a);
     const wrong_id = paths.id("other");
-    _ = try f.write(try std.fmt.allocPrint(a, "kept/{s}/.holt-paths/{s}/aaaaaaaaaaaaaaaa", .{ key, &wrong_id }), "{\"rel\": \".clasp.json\", \"kind\": \"file\", \"sha256\": \"" ++ hex_a ++ "\"}");
+    _ = try f.write(try a.print("kept/{s}/.holt-paths/{s}/aaaaaaaaaaaaaaaa", .{ key, &wrong_id }), "{\"rel\": \".clasp.json\", \"kind\": \"file\", \"sha256\": \"" ++ hex_a ++ "\"}");
     const good_id = paths.id(".clasp.json");
-    _ = try f.write(try std.fmt.allocPrint(a, "kept/{s}/.holt-paths/{s}/conflicted copy", .{ key, &good_id }), "{}");
+    _ = try f.write(try a.print("kept/{s}/.holt-paths/{s}/conflicted copy", .{ key, &good_id }), "{}");
 
     var bad: std.ArrayList(Bad) = .empty;
     const facts = try readFacts(a, layout, key, &bad);
@@ -1210,8 +1210,8 @@ test "unknownFiles: what folders gather on their own, a directory holding only t
     _ = try f.write("kept/github.com/acme/widget/.clasp.json", "{}");
     for ([_][]const u8{ ".DS_Store", "Icon\r", "desktop.ini", "Thumbs.db", ".directory", "@eaDir/x", ".Trash-1000/y", "android/.DS_Store", "..holt-paths.icloud" }) |n| {
         // Windows cannot name a file with a control character.
-        if (builtin.os.tag == .windows and std.mem.indexOfScalar(u8, n, '\r') != null) continue;
-        _ = try f.write(try std.fs.path.join(a, &.{ "kept/github.com/acme/widget", n }), "x");
+        if (builtin.os.tag == .windows and std.mem.findScalar(u8, n, '\r') != null) continue;
+        _ = try f.write(try std.Io.Dir.path.join(a, &.{ "kept/github.com/acme/widget", n }), "x");
     }
     _ = try f.write("kept/github.com/acme/widget/@kept/notes", "n");
     _ = try f.write("kept/github.com/acme/widget/.DS_Store.bak", "x");

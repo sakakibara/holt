@@ -322,17 +322,17 @@ test "run: touches a marker file in each of 2 member clones, exit 0" {
     defer testing.allocator.free(bare_b);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try repos.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_a, path_a });
 
-    const path_b = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_b).?);
+    const path_b = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_b).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_b, path_b });
 
     const override = try installCapture(arena);
@@ -340,11 +340,11 @@ test "run: touches a marker file in each of 2 member clones, exit 0" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--", "touch", "marker-file" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> repo-a") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> repo-b") != null);
+    try testing.expect(std.mem.find(u8, got.out, "==> repo-a") != null);
+    try testing.expect(std.mem.find(u8, got.out, "==> repo-b") != null);
 
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_a, "marker-file" })));
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_b, "marker-file" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_a, "marker-file" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_b, "marker-file" })));
 }
 
 test "run: with HOLT_RUN_CAPTURE set, a child's stdout appears in ctx.out under its repo header" {
@@ -358,12 +358,12 @@ test "run: with HOLT_RUN_CAPTURE set, a child's stdout appears in ctx.out under 
     defer testing.allocator.free(bare_a);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_a, path_a });
 
     const override = try installCapture(arena);
@@ -372,8 +372,8 @@ test "run: with HOLT_RUN_CAPTURE set, a child's stdout appears in ctx.out under 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--", "echo", "hello-from-child" });
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const header_at = std.mem.indexOf(u8, got.out, "==> repo-a") orelse return error.TestExpectedEqual;
-    const child_at = std.mem.indexOf(u8, got.out, "hello-from-child") orelse return error.TestExpectedEqual;
+    const header_at = std.mem.find(u8, got.out, "==> repo-a") orelse return error.TestExpectedEqual;
+    const child_at = std.mem.find(u8, got.out, "hello-from-child") orelse return error.TestExpectedEqual;
     try testing.expect(child_at > header_at);
 }
 
@@ -390,17 +390,17 @@ test "run: a failing command in one repo doesn't stop the other, but the overall
     defer testing.allocator.free(bare_b);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try repos.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_a, path_a });
 
-    const path_b = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_b).?);
+    const path_b = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_b).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_b, path_b });
 
     const override = try installCapture(arena);
@@ -409,8 +409,8 @@ test "run: a failing command in one repo doesn't stop the other, but the overall
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--", "sh", "-c", "touch ran; exit 3" });
     try testing.expectEqual(@as(u8, 1), got.code);
 
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_a, "ran" })));
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_b, "ran" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_a, "ran" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_b, "ran" })));
 }
 
 test "run: --repo limits execution to a single member" {
@@ -426,17 +426,17 @@ test "run: --repo limits execution to a single member" {
     defer testing.allocator.free(bare_b);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try repos.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_a, path_a });
 
-    const path_b = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_b).?);
+    const path_b = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_b).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_b, path_b });
 
     const override = try installCapture(arena);
@@ -444,10 +444,10 @@ test "run: --repo limits execution to a single member" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--repo", "repo-a", "--", "touch", "only-a" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> repo-a") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> repo-b") == null);
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_a, "only-a" })));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ path_b, "only-a" })));
+    try testing.expect(std.mem.find(u8, got.out, "==> repo-a") != null);
+    try testing.expect(std.mem.find(u8, got.out, "==> repo-b") == null);
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_a, "only-a" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_b, "only-a" })));
 }
 
 test "run: a missing clone is reported and skipped, not a crash" {
@@ -461,7 +461,7 @@ test "run: a missing clone is reported and skipped, not a crash" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
@@ -470,8 +470,8 @@ test "run: a missing clone is reported and skipped, not a crash" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> gone") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "missing") != null);
+    try testing.expect(std.mem.find(u8, got.out, "==> gone") != null);
+    try testing.expect(std.mem.find(u8, got.out, "missing") != null);
 }
 
 test "run: missing -- separator is a usage error" {
@@ -502,7 +502,7 @@ test "run: no matching project exits 1 and reports on stderr" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "nope", "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
 }
 
 test "run: a command that doesn't exist is reported by name, not as a raw FileNotFound" {
@@ -516,12 +516,12 @@ test "run: a command that doesn't exist is reported by name, not as a raw FileNo
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, path_a });
 
     const override = try installCapture(arena);
@@ -529,8 +529,8 @@ test "run: a command that doesn't exist is reported by name, not as a raw FileNo
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--", "definitely-not-a-real-command-xyz" });
     try testing.expect(got.code != 0);
-    try testing.expect(std.mem.indexOf(u8, got.err, "command \"definitely-not-a-real-command-xyz\" not found") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "FileNotFound") == null);
+    try testing.expect(std.mem.find(u8, got.err, "command \"definitely-not-a-real-command-xyz\" not found") != null);
+    try testing.expect(std.mem.find(u8, got.err, "FileNotFound") == null);
 }
 
 test "run: a project with no member repos reports so instead of printing nothing, exit 0" {
@@ -549,7 +549,7 @@ test "run: a project with no member repos reports so instead of printing nothing
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "acme/empty-proj", "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings("", got.out);
-    try testing.expect(std.mem.indexOf(u8, got.err, "acme/empty-proj has no member repos") != null);
+    try testing.expect(std.mem.find(u8, got.err, "acme/empty-proj has no member repos") != null);
 }
 
 test "run: --org runs in every member repo of every project in that org" {
@@ -568,28 +568,28 @@ test "run: --org runs in every member repo of every project in that org" {
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos_1: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_1: std.array_hash_map.String([]const u8) = .empty;
     try repos_1.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_1, .empty);
 
-    var repos_2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_2: std.array_hash_map.String([]const u8) = .empty;
     try repos_2.put(arena, "repo-b", "https://holt-test.invalid/acme/repo-b");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", repos_2, .empty);
 
-    var repos_other: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_other: std.array_hash_map.String([]const u8) = .empty;
     try repos_other.put(arena, "repo-c", "https://holt-test.invalid/other/repo-c");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj3", repos_other, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_a, path_a });
 
-    const path_b = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_b).?);
+    const path_b = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-b" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_b).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_b, path_b });
 
-    const path_c = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "other", "repo-c" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_c).?);
+    const path_c = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "other", "repo-c" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_c).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_c, path_c });
 
     const override = try installCapture(arena);
@@ -597,13 +597,13 @@ test "run: --org runs in every member repo of every project in that org" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--org", "acme", "--", "touch", "org-marker" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> holt-test.invalid/acme/repo-a") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> holt-test.invalid/acme/repo-b") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "repo-c") == null);
+    try testing.expect(std.mem.find(u8, got.out, "==> holt-test.invalid/acme/repo-a") != null);
+    try testing.expect(std.mem.find(u8, got.out, "==> holt-test.invalid/acme/repo-b") != null);
+    try testing.expect(std.mem.find(u8, got.out, "repo-c") == null);
 
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_a, "org-marker" })));
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_b, "org-marker" })));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ path_c, "org-marker" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_a, "org-marker" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_b, "org-marker" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_c, "org-marker" })));
 }
 
 test "run: --all spans every project in the workspace" {
@@ -620,20 +620,20 @@ test "run: --all spans every project in the workspace" {
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos_acme: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_acme: std.array_hash_map.String([]const u8) = .empty;
     try repos_acme.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_acme, .empty);
 
-    var repos_other: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_other: std.array_hash_map.String([]const u8) = .empty;
     try repos_other.put(arena, "repo-b", "https://holt-test.invalid/other/repo-b");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "other", "proj2", repos_other, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_a, path_a });
 
-    const path_b = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "other", "repo-b" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_b).?);
+    const path_b = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "other", "repo-b" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_b).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_b, path_b });
 
     const override = try installCapture(arena);
@@ -641,8 +641,8 @@ test "run: --all spans every project in the workspace" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--all", "--", "touch", "all-marker" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_a, "all-marker" })));
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path_b, "all-marker" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_a, "all-marker" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path_b, "all-marker" })));
 }
 
 test "run: --all runs a repo shared by two projects exactly once" {
@@ -657,16 +657,16 @@ test "run: --all runs a repo shared by two projects exactly once" {
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos_1: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_1: std.array_hash_map.String([]const u8) = .empty;
     try repos_1.put(arena, "shared", "https://holt-test.invalid/acme/shared");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_1, .empty);
 
-    var repos_2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_2: std.array_hash_map.String([]const u8) = .empty;
     try repos_2.put(arena, "shared-alias", "https://holt-test.invalid/acme/shared");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", repos_2, .empty);
 
-    const shared_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
-    try fsutil.ensureDir(std.fs.path.dirname(shared_path).?);
+    const shared_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(shared_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_shared, shared_path });
 
     const override = try installCapture(arena);
@@ -677,7 +677,7 @@ test "run: --all runs a repo shared by two projects exactly once" {
 
     // A single "hit" line proves the shared clone ran the command exactly
     // once, not once per project that references it.
-    const counter_path = try std.fs.path.join(arena, &.{ shared_path, "counter" });
+    const counter_path = try std.Io.Dir.path.join(arena, &.{ shared_path, "counter" });
     const contents = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), counter_path, arena, .limited(1 << 10));
     try testing.expectEqualStrings("hit\n", contents);
 }
@@ -695,7 +695,7 @@ test "run: --repo combined with --org is a usage error" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--org", "acme", "--repo", "repo-a", "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "--repo") != null);
+    try testing.expect(std.mem.find(u8, got.err, "--repo") != null);
 }
 
 test "run: no target selector (no project, --org, or --all) is a usage error" {
@@ -711,7 +711,7 @@ test "run: no target selector (no project, --org, or --all) is a usage error" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "exactly one") != null);
+    try testing.expect(std.mem.find(u8, got.err, "exactly one") != null);
 }
 
 test "run: -j 4 runs the command in every repo, one failing child yields aggregate exit 1" {
@@ -725,18 +725,18 @@ test "run: -j 4 runs the command in every repo, one failing child yields aggrega
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     const names = [_][]const u8{ "repo-0", "repo-1", "repo-2", "repo-3", "repo-4" };
     for (names) |name| {
-        const url = try std.fmt.allocPrint(arena, "https://holt-test.invalid/acme/{s}", .{name});
+        const url = try arena.print("https://holt-test.invalid/acme/{s}", .{name});
         try repos.put(arena, name, url);
     }
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     var paths: [names.len][]const u8 = undefined;
     for (names, &paths) |name, *path| {
-        path.* = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", name });
-        try fsutil.ensureDir(std.fs.path.dirname(path.*).?);
+        path.* = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", name });
+        try fsutil.ensureDir(std.Io.Dir.path.dirname(path.*).?);
         try testutil.runGit(&sb, null, &.{ "clone", bare, path.* });
     }
 
@@ -746,11 +746,11 @@ test "run: -j 4 runs the command in every repo, one failing child yields aggrega
     try testing.expectEqual(@as(u8, 1), got.code);
 
     for (names, paths) |name, path| {
-        try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ path, "ran" })));
-        const header = try std.fmt.allocPrint(arena, "==> {s}", .{name});
-        try testing.expect(std.mem.indexOf(u8, got.out, header) != null);
+        try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ path, "ran" })));
+        const header = try arena.print("==> {s}", .{name});
+        try testing.expect(std.mem.find(u8, got.out, header) != null);
     }
-    try testing.expect(std.mem.indexOf(u8, got.out, "exited 5") != null);
+    try testing.expect(std.mem.find(u8, got.out, "exited 5") != null);
 }
 
 test "run: --all -j 4 runs a repo shared by two projects exactly once" {
@@ -765,22 +765,22 @@ test "run: --all -j 4 runs a repo shared by two projects exactly once" {
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos_1: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_1: std.array_hash_map.String([]const u8) = .empty;
     try repos_1.put(arena, "shared", "https://holt-test.invalid/acme/shared");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj1", repos_1, .empty);
 
-    var repos_2: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_2: std.array_hash_map.String([]const u8) = .empty;
     try repos_2.put(arena, "shared-alias", "https://holt-test.invalid/acme/shared");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj2", repos_2, .empty);
 
-    const shared_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
-    try fsutil.ensureDir(std.fs.path.dirname(shared_path).?);
+    const shared_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(shared_path).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare_shared, shared_path });
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--all", "-j", "4", "--", "sh", "-c", "echo hit >> counter" });
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const counter_path = try std.fs.path.join(arena, &.{ shared_path, "counter" });
+    const counter_path = try std.Io.Dir.path.join(arena, &.{ shared_path, "counter" });
     const contents = try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), counter_path, arena, .limited(1 << 10));
     try testing.expectEqualStrings("hit\n", contents);
 }
@@ -796,19 +796,19 @@ test "run: -j 4 with a captured child's stdout appears under its repo header" {
     defer testing.allocator.free(bare);
 
     const ws = try testutil.testWorkspace(arena, sb.root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "repo-a", "https://holt-test.invalid/acme/repo-a");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const path_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
-    try fsutil.ensureDir(std.fs.path.dirname(path_a).?);
+    const path_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repo-a" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path_a).?);
     try testutil.runGit(&sb, null, &.{ "clone", bare, path_a });
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "-j", "2", "--", "echo", "hello-from-child" });
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const header_at = std.mem.indexOf(u8, got.out, "==> repo-a") orelse return error.TestExpectedEqual;
-    const child_at = std.mem.indexOf(u8, got.out, "hello-from-child") orelse return error.TestExpectedEqual;
+    const header_at = std.mem.find(u8, got.out, "==> repo-a") orelse return error.TestExpectedEqual;
+    const child_at = std.mem.find(u8, got.out, "hello-from-child") orelse return error.TestExpectedEqual;
     try testing.expect(child_at > header_at);
 }
 
@@ -823,7 +823,7 @@ test "run: a member whose marker value never parsed is reported and skipped" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
     try repos.put(arena, "broken", "not a url");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
@@ -833,8 +833,8 @@ test "run: a member whose marker value never parsed is reported and skipped" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "==> good") != null);
+    try testing.expect(std.mem.find(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.find(u8, got.out, "==> good") != null);
 }
 
 test "run: across projects, an unusable member is reported and the sweep continues" {
@@ -848,7 +848,7 @@ test "run: across projects, an unusable member is reported and the sweep continu
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
     try repos.put(arena, "broken", "not a url");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
@@ -858,6 +858,6 @@ test "run: across projects, an unusable member is reported and the sweep continu
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--all", "--", "echo", "hi" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "cannot resolve repo broken") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "good") != null);
+    try testing.expect(std.mem.find(u8, got.err, "cannot resolve repo broken") != null);
+    try testing.expect(std.mem.find(u8, got.out, "good") != null);
 }

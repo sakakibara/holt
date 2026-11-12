@@ -292,94 +292,94 @@ test "parse: recognizes every supported shell name, rejects anything else" {
 test "snippet: every shell defines h and hi and calls holt path" {
     inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
         const s = snippet(sh);
-        try testing.expect(std.mem.indexOf(u8, s, "function h ") != null or std.mem.indexOf(u8, s, "function h\n") != null or std.mem.indexOf(u8, s, "h() {") != null);
-        try testing.expect(std.mem.indexOf(u8, s, "function hi ") != null or std.mem.indexOf(u8, s, "function hi\n") != null or std.mem.indexOf(u8, s, "hi() {") != null);
-        try testing.expect(std.mem.indexOf(u8, s, "holt path") != null);
-        try testing.expect(std.mem.indexOf(u8, s, "holt list") != null);
-        try testing.expect(std.mem.indexOf(u8, s, "fzf") != null);
+        try testing.expect(std.mem.find(u8, s, "function h ") != null or std.mem.find(u8, s, "function h\n") != null or std.mem.find(u8, s, "h() {") != null);
+        try testing.expect(std.mem.find(u8, s, "function hi ") != null or std.mem.find(u8, s, "function hi\n") != null or std.mem.find(u8, s, "hi() {") != null);
+        try testing.expect(std.mem.find(u8, s, "holt path") != null);
+        try testing.expect(std.mem.find(u8, s, "holt list") != null);
+        try testing.expect(std.mem.find(u8, s, "fzf") != null);
     }
 }
 
 test "snippet: every shell wires holt __complete for tab completion" {
     inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt __complete") != null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "holt __complete") != null);
     }
 }
 
 test "snippet: fish uses function/end, bash and zsh use POSIX name(), powershell uses function{}" {
-    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "function h\n") != null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "\nend") != null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.bash), "h() {") != null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.zsh), "h() {") != null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "function h {") != null);
+    try testing.expect(std.mem.find(u8, snippet(.fish), "function h\n") != null);
+    try testing.expect(std.mem.find(u8, snippet(.fish), "\nend") != null);
+    try testing.expect(std.mem.find(u8, snippet(.bash), "h() {") != null);
+    try testing.expect(std.mem.find(u8, snippet(.zsh), "h() {") != null);
+    try testing.expect(std.mem.find(u8, snippet(.powershell), "function h {") != null);
 }
 
 test "snippet: powershell registers a completer for h, not just holt" {
-    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "-CommandName h -ParameterName Query") != null);
+    try testing.expect(std.mem.find(u8, snippet(.powershell), "-CommandName h -ParameterName Query") != null);
 }
 
 test "snippet: powershell splits the description off the tab for both completers" {
     const s = snippet(.powershell);
-    try testing.expect(std.mem.indexOf(u8, s, "-split \"`t\"") != null);
-    try testing.expect(std.mem.indexOf(u8, s, "'ParameterValue', $desc") != null);
+    try testing.expect(std.mem.find(u8, s, "-split \"`t\"") != null);
+    try testing.expect(std.mem.find(u8, s, "'ParameterValue', $desc") != null);
 }
 
 test "snippet: zsh renders candidate descriptions via compadd -d" {
-    try testing.expect(std.mem.indexOf(u8, snippet(.zsh), "compadd -d") != null);
+    try testing.expect(std.mem.find(u8, snippet(.zsh), "compadd -d") != null);
 }
 
 test "snippet: bash strips the description at the tab and quotes the value" {
     const s = snippet(.bash);
-    try testing.expect(std.mem.indexOf(u8, s, "%%$'\\t'") != null);
-    try testing.expect(std.mem.indexOf(u8, s, "printf '%q'") != null);
+    try testing.expect(std.mem.find(u8, s, "%%$'\\t'") != null);
+    try testing.expect(std.mem.find(u8, s, "printf '%q'") != null);
 }
 
 test "snippet: every shell defines hir wired to `holt list --repos` and fzf" {
     inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
         const s = snippet(sh);
-        try testing.expect(std.mem.indexOf(u8, s, "hir") != null);
-        try testing.expect(std.mem.indexOf(u8, s, "holt list --repos") != null);
+        try testing.expect(std.mem.find(u8, s, "hir") != null);
+        try testing.expect(std.mem.find(u8, s, "holt list --repos") != null);
     }
 }
 
 test "snippet: hir joins its relative key onto code_root from the path accessor, not a parsed report" {
     inline for (.{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell }) |sh| {
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt path --root code") != null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "holt path --root code") != null);
         // Parsing `holt config` would tie navigation to a human-facing
         // report's wording and to its paths staying uncontracted.
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt config") == null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "holt config") == null);
     }
 }
 
 test "snippet: hir is argless and gets no completion registration" {
     // Only `h` is registered for completion; hir/hi are fzf-driven.
-    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "complete -c hir") == null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.bash), "complete -F _hir") == null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.zsh), "compdef _hir") == null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "-CommandName hir") == null);
+    try testing.expect(std.mem.find(u8, snippet(.fish), "complete -c hir") == null);
+    try testing.expect(std.mem.find(u8, snippet(.bash), "complete -F _hir") == null);
+    try testing.expect(std.mem.find(u8, snippet(.zsh), "compdef _hir") == null);
+    try testing.expect(std.mem.find(u8, snippet(.powershell), "-CommandName hir") == null);
 }
 
 const all_shells = .{ Shell.fish, Shell.zsh, Shell.bash, Shell.powershell };
 
 test "snippet: hi and hir read holt's list whole before fzf starts, and return holt's failure" {
-    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "    set -l projs (holt list)\n    or return\n") != null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.fish), "    set -l keys (holt list --repos)\n    or return\n") != null);
+    try testing.expect(std.mem.find(u8, snippet(.fish), "    set -l projs (holt list)\n    or return\n") != null);
+    try testing.expect(std.mem.find(u8, snippet(.fish), "    set -l keys (holt list --repos)\n    or return\n") != null);
     inline for (.{ Shell.zsh, Shell.bash }) |sh| {
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "    projs=\"$(holt list)\" || return\n") != null);
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "    keys=\"$(holt list --repos)\" || return\n") != null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "    projs=\"$(holt list)\" || return\n") != null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "    keys=\"$(holt list --repos)\" || return\n") != null);
     }
-    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "    $projs = @(holt list)\n    if ($LASTEXITCODE -ne 0) {\n") != null);
-    try testing.expect(std.mem.indexOf(u8, snippet(.powershell), "    $keys = @(holt list --repos)\n    if ($LASTEXITCODE -ne 0) {\n") != null);
+    try testing.expect(std.mem.find(u8, snippet(.powershell), "    $projs = @(holt list)\n    if ($LASTEXITCODE -ne 0) {\n") != null);
+    try testing.expect(std.mem.find(u8, snippet(.powershell), "    $keys = @(holt list --repos)\n    if ($LASTEXITCODE -ne 0) {\n") != null);
     inline for (all_shells) |sh| {
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt list | fzf") == null);
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "holt list --repos | fzf") == null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "holt list | fzf") == null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "holt list --repos | fzf") == null);
     }
 }
 
 test "snippet: hi and hir say why on stderr when there is nothing to pick" {
     inline for (all_shells) |sh| {
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "hi: no projects to pick from") != null);
-        try testing.expect(std.mem.indexOf(u8, snippet(sh), "hir: no clones to pick from") != null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "hi: no projects to pick from") != null);
+        try testing.expect(std.mem.find(u8, snippet(sh), "hir: no clones to pick from") != null);
     }
     try testing.expect(std.mem.count(u8, snippet(.fish), "to pick from\" >&2\n        return 1\n") == 2);
     try testing.expect(std.mem.count(u8, snippet(.bash), "to pick from\" >&2\n        return 1\n") == 2);
@@ -390,24 +390,24 @@ test "snippet: fzf opens below the prompt with zoxide's look and keys, matching 
     const opts = [_][]const u8{ "--height=45%", "--layout=reverse", "--border=sharp", "--info=inline", "--cycle", "--keep-right", "--tabstop=1", "--bind=ctrl-z:ignore,btab:up,tab:down", "--preview-window=down,30%,sharp" };
     inline for (all_shells) |sh| {
         const s = snippet(sh);
-        for (opts) |o| if (std.mem.indexOf(u8, s, o) == null) {
+        for (opts) |o| if (std.mem.find(u8, s, o) == null) {
             std.debug.print("{t} is missing {s}\n", .{ sh, o });
             return error.TestUnexpectedResult;
         };
-        try testing.expect(std.mem.indexOf(u8, s, "--exact") == null);
-        try testing.expect(std.mem.indexOf(u8, s, "--no-sort") == null);
+        try testing.expect(std.mem.find(u8, s, "--exact") == null);
+        try testing.expect(std.mem.find(u8, s, "--no-sort") == null);
     }
 }
 
 test "snippet: the preview lists the directory a line names, in a shell each snippet picks" {
     inline for (.{ Shell.fish, Shell.zsh, Shell.bash }) |sh| {
         const s = snippet(sh);
-        try testing.expect(std.mem.indexOf(u8, s, "SHELL=sh fzf ") != null);
-        try testing.expect(std.mem.indexOf(u8, s, "'ls -Cp \"$(holt path {})\"'") != null);
-        try testing.expect(std.mem.indexOf(u8, s, "'ls -Cp \"$(holt path --root code)\"/{}'") != null);
+        try testing.expect(std.mem.find(u8, s, "SHELL=sh fzf ") != null);
+        try testing.expect(std.mem.find(u8, s, "'ls -Cp \"$(holt path {})\"'") != null);
+        try testing.expect(std.mem.find(u8, s, "'ls -Cp \"$(holt path --root code)\"/{}'") != null);
     }
     const ps = snippet(.powershell);
-    try testing.expect(std.mem.indexOf(u8, ps, "--with-shell=") != null);
-    try testing.expect(std.mem.indexOf(u8, ps, "'Get-ChildItem -Name -LiteralPath (holt path {})'") != null);
-    try testing.expect(std.mem.indexOf(u8, ps, "'Get-ChildItem -Name -LiteralPath (Join-Path (holt path --root code) {})'") != null);
+    try testing.expect(std.mem.find(u8, ps, "--with-shell=") != null);
+    try testing.expect(std.mem.find(u8, ps, "'Get-ChildItem -Name -LiteralPath (holt path {})'") != null);
+    try testing.expect(std.mem.find(u8, ps, "'Get-ChildItem -Name -LiteralPath (Join-Path (holt path --root code) {})'") != null);
 }

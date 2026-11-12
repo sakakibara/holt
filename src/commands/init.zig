@@ -43,8 +43,8 @@ test "run: each shell name prints its own snippet with h, hi, and holt path" {
     for ([_][]const u8{ "fish", "zsh", "bash", "powershell" }) |name| {
         const got = try testutil.runCmd(arena, command.run, null, &.{name});
         try testing.expectEqual(@as(u8, 0), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.out, "holt path") != null);
-        try testing.expect(std.mem.indexOf(u8, got.out, "holt list") != null);
+        try testing.expect(std.mem.find(u8, got.out, "holt path") != null);
+        try testing.expect(std.mem.find(u8, got.out, "holt list") != null);
     }
 }
 
@@ -64,5 +64,5 @@ test "run: unknown shell name is a usage error naming the bad shell" {
 
     const got = try testutil.runCmd(arena, command.run, null, &.{"csh"});
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "csh") != null);
+    try testing.expect(std.mem.find(u8, got.err, "csh") != null);
 }

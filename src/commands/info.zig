@@ -152,12 +152,12 @@ test "run: golden output over a project with one present clone and one missing c
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "absent", "https://github.com/acme/absent");
     try repos.put(arena, "present", "https://github.com/acme/present");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const present_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
+    const present_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
     try fsutil.ensureDir(present_path);
     const init_res = try git.run(arena, &.{ "git", "init", "-q", "-b", "main", present_path }, null);
     try testing.expectEqual(@as(u8, 0), init_res.status);
@@ -166,11 +166,11 @@ test "run: golden output over a project with one present clone and one missing c
     try testing.expectEqual(@as(u8, 0), got.code);
 
     // info renders paths for humans, so each is tilde-abbreviated on display.
-    const content_path = try fsutil.contractTilde(arena, app.envOf_current(), try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" }));
-    const hub_path = try fsutil.contractTilde(arena, app.envOf_current(), try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" }));
-    const absent_clone = try fsutil.contractTilde(arena, app.envOf_current(), try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "absent" }));
-    const present_clone = try fsutil.contractTilde(arena, app.envOf_current(), try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" }));
-    const want = try std.fmt.allocPrint(arena,
+    const content_path = try fsutil.contractTilde(arena, app.envOf_current(), try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" }));
+    const hub_path = try fsutil.contractTilde(arena, app.envOf_current(), try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" }));
+    const absent_clone = try fsutil.contractTilde(arena, app.envOf_current(), try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "absent" }));
+    const present_clone = try fsutil.contractTilde(arena, app.envOf_current(), try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" }));
+    const want = try arena.print(
         \\acme/proj
         \\content: {s}
         \\hub: {s}
@@ -192,19 +192,19 @@ test "run: --json emits a parseable object with per-repo identity, path, and sta
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "absent", "https://github.com/acme/absent");
     try repos.put(arena, "present", "https://github.com/acme/present");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const present_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
+    const present_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "present" });
     try fsutil.ensureDir(present_path);
     const init_res = try git.run(arena, &.{ "git", "init", "-q", "-b", "main", present_path }, null);
     try testing.expectEqual(@as(u8, 0), init_res.status);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--json" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "\x1b[") == null);
+    try testing.expect(std.mem.find(u8, got.out, "\x1b[") == null);
 
     const Kept = struct { rel: []const u8, kind: []const u8, state: []const u8 };
     const Repo = struct { name: []const u8, identity: []const u8, clone_path: []const u8, state: []const u8, kept: []Kept };
@@ -234,17 +234,17 @@ test "run: a clone that exists but is not a readable git repo is reported as suc
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "broken", "https://github.com/acme/broken");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // A plain directory, no .git at all: exists on disk but isn't a repo.
-    const broken_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "broken" });
+    const broken_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "broken" });
     try fsutil.ensureDir(broken_path);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "[cloned, unreadable]") != null);
+    try testing.expect(std.mem.find(u8, got.out, "[cloned, unreadable]") != null);
 }
 
 test "run: no matching project exits 1 and reports on stderr" {
@@ -260,7 +260,7 @@ test "run: no matching project exits 1 and reports on stderr" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
 }
 
 test "run: a corrupt marker reports a malformed-marker hint, not \"no project matches\"" {
@@ -274,16 +274,16 @@ test "run: a corrupt marker reports a malformed-marker hint, not \"no project ma
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    const broken_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "broken" });
+    const broken_dir = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
-    const broken_marker = try std.fs.path.join(arena, &.{ broken_dir, marker.marker_basename });
+    const broken_marker = try std.Io.Dir.path.join(arena, &.{ broken_dir, marker.marker_basename });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = broken_marker, .data = "not json" });
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/broken"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "has a malformed marker") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "holt doctor") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no project matches") == null);
+    try testing.expect(std.mem.find(u8, got.err, "has a malformed marker") != null);
+    try testing.expect(std.mem.find(u8, got.err, "holt doctor") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no project matches") == null);
 }
 
 test "run: an unusable member prints its own state and the others still render" {
@@ -295,15 +295,15 @@ test "run: an unusable member prints its own state and the others still render" 
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
     try repos.put(arena, "broken", "not a url");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "unusable marker value") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "good:") != null);
+    try testing.expect(std.mem.find(u8, got.out, "unusable marker value") != null);
+    try testing.expect(std.mem.find(u8, got.out, "good:") != null);
 }
 
 test "run: --json marks an unusable member and keeps the rest" {
@@ -315,15 +315,15 @@ test "run: --json marks an unusable member and keeps the rest" {
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "good", "https://holt-test.invalid/acme/good");
     try repos.put(arena, "broken", "not a url");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "proj", "--json" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "unusable") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "good") != null);
+    try testing.expect(std.mem.find(u8, got.out, "unusable") != null);
+    try testing.expect(std.mem.find(u8, got.out, "good") != null);
 }
 
 test "run: each member repo lists its kept paths with their state, and --json adds them as kept" {
@@ -345,17 +345,17 @@ test "run: each member repo lists its kept paths with their state, and --json ad
     try bed.write(gone, "a.txt", "a");
     try bed.keep(gone, "a.txt");
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), gone);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
     try repos.put(arena, "gone", "https://holt-test.invalid/acme/gone");
     try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
-    const before = try kept_hooks.snapshot(arena, c, try std.fs.path.join(arena, &.{ c, ".git" }));
+    const before = try kept_hooks.snapshot(arena, c, try std.Io.Dir.path.join(arena, &.{ c, ".git" }));
 
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "    kept: .superpowers (dir) [linked]\n    kept: notes.txt (file) [not linked]\n") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "    kept: a.txt (file) [not cloned]\n") != null);
-    try testing.expectEqualStrings(before, try kept_hooks.snapshot(arena, c, try std.fs.path.join(arena, &.{ c, ".git" })));
+    try testing.expect(std.mem.find(u8, got.out, "    kept: .superpowers (dir) [linked]\n    kept: notes.txt (file) [not linked]\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "    kept: a.txt (file) [not cloned]\n") != null);
+    try testing.expectEqualStrings(before, try kept_hooks.snapshot(arena, c, try std.Io.Dir.path.join(arena, &.{ c, ".git" })));
 
     const js = try testutil.runCmd(arena, command.run, bed.ws, &.{ "proj", "--json" });
     try testing.expectEqual(@as(u8, 0), js.code);
@@ -389,7 +389,7 @@ test "run: kept paths are shown while a kept-file writer holds the clone's and t
     const c = try bed.clone("holt-test.invalid/acme/widget");
     try bed.write(c, "notes.txt", "notes");
     try bed.keep(c, "notes.txt");
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
     try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
     const kept = @import("../kept.zig");
@@ -405,5 +405,5 @@ test "run: kept paths are shown while a kept-file writer holds the clone's and t
 
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "    kept: notes.txt (file) [linked]\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "    kept: notes.txt (file) [linked]\n") != null);
 }

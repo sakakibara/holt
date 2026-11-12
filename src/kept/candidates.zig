@@ -611,7 +611,7 @@ fn autoUnits(ctx: Ctx, tree: []const u8, ignore_case: bool, auto_text: []const u
         if (u.whole) w += 1;
         if (apart) {
             for (ms.items) |i| {
-                const k = std.mem.indexOfScalar(usize, at, i).?;
+                const k = std.mem.findScalar(usize, at, i).?;
                 grouped[k] = false;
             }
             continue;
@@ -799,7 +799,7 @@ fn autoRefusal(ctx: Ctx, scope: sweep.Scope, tree: []const u8, rel: []const u8, 
         var end: usize = rel.len;
         while (true) {
             if (ks.isReleased(rel[0..end])) return .{ .pattern = pattern, .why = .released };
-            end = std.mem.lastIndexOfScalar(u8, rel[0..end], '/') orelse break;
+            end = std.mem.findScalarLast(u8, rel[0..end], '/') orelse break;
         }
     }
     if (try sizeOver(ctx.alloc, try fsutil.joinSlashy(ctx.alloc, tree, rel), auto_max_bytes)) return .{ .pattern = pattern, .why = .too_large };
@@ -846,7 +846,7 @@ fn statusWith(alloc: std.mem.Allocator, tree: []const u8, pass: Pass, dirs: []co
     });
     if (pass != .first) try args.appendSlice(alloc, dirs);
     const res = try git.runInRepoScopedWith(alloc, args.items, tree, .{ .set = &.{ .{ "LC_ALL", "C" }, .{ "LANGUAGE", "C" } } });
-    if (res.status != 0 or std.mem.indexOf(u8, res.stderr, "could not open directory") != null) return null;
+    if (res.status != 0 or std.mem.find(u8, res.stderr, "could not open directory") != null) return null;
     var out: std.ArrayList(Listed) = .empty;
     var it = std.mem.splitScalar(u8, res.stdout, 0);
     while (it.next()) |rec| {
@@ -943,7 +943,7 @@ fn submodules(alloc: std.mem.Allocator, root: []const u8, prefix: []const u8) !s
         var it = std.mem.splitScalar(u8, res.stdout, 0);
         while (it.next()) |rec| {
             if (!std.mem.startsWith(u8, rec, "160000 ")) continue;
-            const tab = std.mem.indexOfScalar(u8, rec, '\t') orelse continue;
+            const tab = std.mem.findScalar(u8, rec, '\t') orelse continue;
             const sub = rec[tab + 1 ..];
             const rel = if (here.len == 0) sub else try std.mem.concat(alloc, u8, &.{ here, "/", sub });
             if (paths.contains(ok.items, rel)) continue;
@@ -1048,7 +1048,7 @@ fn trackedEdits(a: std.mem.Allocator, tree: []const u8, dirs: []const []const u8
     var it = std.mem.splitScalar(u8, res.stdout, 0);
     while (it.next()) |rec| {
         if (rec.len < 2 or rec[1] != ' ' or !(rec[0] == 'S' or std.ascii.isLower(rec[0]))) continue;
-        const tab = std.mem.indexOfScalar(u8, rec, '\t') orelse continue;
+        const tab = std.mem.findScalar(u8, rec, '\t') orelse continue;
         var fields = std.mem.tokenizeScalar(u8, rec[2..tab], ' ');
         const mode = fields.next() orelse continue;
         const hash = fields.next() orelse continue;
@@ -1230,14 +1230,14 @@ fn walkNested(a: std.mem.Allocator, tree: []const u8, ignore_case: bool, subs: [
             const dot_git = !mounts_only and paths.isWalkDotGit(e.name, ic);
             if (dot_git and !(top and try isOwnDotGit(a, dir_path, e.name))) hit = true;
             var kind = if (e.kind == .unknown) (d.statFile(io(), e.name, .{ .follow_symlinks = false }) catch continue).kind else e.kind;
-            if (kind == .sym_link and try content.isPlainReparseDir(a, try std.fs.path.join(a, &.{ dir_path, e.name }))) kind = .directory;
+            if (kind == .sym_link and try content.isPlainReparseDir(a, try std.Io.Dir.path.join(a, &.{ dir_path, e.name }))) kind = .directory;
             if (kind != .directory) continue;
             const child = if (here.len == 0) try a.dupe(u8, e.name) else try std.mem.concat(a, u8, &.{ here, "/", e.name });
             if (mounts_only or dot_git) {
                 try children.append(a, .{ .rel = child, .mounts_only = true });
                 continue;
             }
-            const is_dot_git = resolves and (content.knownSameFile(a, try std.fs.path.join(a, &.{ dir_path, e.name }), try std.fs.path.join(a, &.{ dir_path, ".git" })) catch |err| switch (err) {
+            const is_dot_git = resolves and (content.knownSameFile(a, try std.Io.Dir.path.join(a, &.{ dir_path, e.name }), try std.Io.Dir.path.join(a, &.{ dir_path, ".git" })) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => false,
             });
@@ -1291,7 +1291,7 @@ fn otherFilesystem(a: std.mem.Allocator, tree: []const u8, rel: []const u8, top_
 /// `.git` there.
 fn isOwnDotGit(a: std.mem.Allocator, dir: []const u8, name: []const u8) !bool {
     if (std.mem.eql(u8, name, ".git")) return true;
-    return content.sameFile(a, try std.fs.path.join(a, &.{ dir, name }), try std.fs.path.join(a, &.{ dir, ".git" })) catch |err| switch (err) {
+    return content.sameFile(a, try std.Io.Dir.path.join(a, &.{ dir, name }), try std.Io.Dir.path.join(a, &.{ dir, ".git" })) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => false,
     };
@@ -1370,7 +1370,7 @@ fn sizeOver(alloc: std.mem.Allocator, path: []const u8, limit: u64) !bool {
         defer d.close(io());
         var it = d.iterate();
         while (try it.next(io())) |e| switch (e.kind) {
-            .directory => try pending.append(alloc, try std.fs.path.join(alloc, &.{ here, e.name })),
+            .directory => try pending.append(alloc, try std.Io.Dir.path.join(alloc, &.{ here, e.name })),
             .file => {
                 total += (try d.statFile(io(), e.name, .{ .follow_symlinks = false })).size;
                 if (total > limit) return true;
@@ -1399,7 +1399,7 @@ fn holdsNothing(alloc: std.mem.Allocator, path: []const u8) !bool {
             if (here.depth >= depth_max) return false;
             const kind = if (e.kind == .unknown) (d.statFile(io(), e.name, .{ .follow_symlinks = false }) catch return false).kind else e.kind;
             if (kind != .directory) return false;
-            try pending.append(alloc, .{ .path = try std.fs.path.join(alloc, &.{ here.path, e.name }), .depth = here.depth + 1 });
+            try pending.append(alloc, .{ .path = try std.Io.Dir.path.join(alloc, &.{ here.path, e.name }), .depth = here.depth + 1 });
         }
     }
     return true;
@@ -1431,10 +1431,10 @@ const Machine = harness.Machine;
 /// whose ignore file holds `ignore`, so no developer's configuration
 /// changes what git lists.
 fn globalIgnore(a: std.mem.Allocator, sb: *testutil.Sandbox, ignore: []const u8) !testutil.EnvOverride {
-    const file = try std.fs.path.join(a, &.{ sb.root, "global.ignore" });
+    const file = try std.Io.Dir.path.join(a, &.{ sb.root, "global.ignore" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = file, .data = ignore });
-    const cfg = try std.fs.path.join(a, &.{ sb.root, "global.gitconfig" });
-    const text = try std.fmt.allocPrint(a, "[core]\n\texcludesFile = {s}\n", .{try fsutil.forwardSlashed(a, file)});
+    const cfg = try std.Io.Dir.path.join(a, &.{ sb.root, "global.gitconfig" });
+    const text = try a.print("[core]\n\texcludesFile = {s}\n", .{try fsutil.forwardSlashed(a, file)});
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = cfg, .data = text });
     return testutil.EnvOverride.install(a, "GIT_CONFIG_GLOBAL", cfg);
 }
@@ -1462,7 +1462,7 @@ fn expectRels(l: Listing, want: []const []const u8) !void {
 
 fn writeKept(m: *const Machine, rel: []const u8, data: []const u8) !void {
     const p = try fsutil.joinSlashy(m.ctx.alloc, try m.ctx.layout.keptDir(m.ctx.alloc), rel);
-    try fsutil.ensureDir(std.fs.path.dirname(p).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(p).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
 }
 
@@ -2190,14 +2190,14 @@ test "listAll: every working tree of the clone is listed, and one whose record c
     defer env.restore();
     _ = try patterns.createStore(a, m.ctx.layout);
 
-    const base = std.fs.path.dirname(m.clone).?;
-    const feature = try std.fs.path.join(a, &.{ base, "widget@feature" });
-    const gone = try std.fs.path.join(a, &.{ base, "widget@gone" });
+    const base = std.Io.Dir.path.dirname(m.clone).?;
+    const feature = try std.Io.Dir.path.join(a, &.{ base, "widget@feature" });
+    const gone = try std.Io.Dir.path.join(a, &.{ base, "widget@gone" });
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "feature", feature });
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "gone", gone });
     try std.Io.Dir.cwd().deleteTree(io(), gone);
     try m.write("main.local", "main");
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ feature, "feature.local" }), .data = "feature" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ feature, "feature.local" }), .data = "feature" });
 
     const index = try store.loadIndex(a, m.ctx.layout);
     const all = try listAll(m.ctx, &index, try clone.inspect(a, m.clone, m.ctx.code_root), .{});
@@ -2372,9 +2372,9 @@ test "list: flagged files are hashed without running a clean filter, whatever th
     try m.git(&sb, &.{ "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tracked" });
     try m.git(&sb, &.{ "update-index", "--skip-worktree", "--", names[0], names[1], names[2], names[3] });
     for (names[0..3]) |rel| try m.write(rel, "edited, only here");
-    const marker = try std.fs.path.join(a, &.{ sb.root, "filter-ran" });
+    const marker = try std.Io.Dir.path.join(a, &.{ sb.root, "filter-ran" });
     try m.write(".gitattributes", "*.cfg filter=mark\n");
-    try m.git(&sb, &.{ "config", "filter.mark.clean", try std.fmt.allocPrint(a, "touch '{s}'; cat", .{marker}) });
+    try m.git(&sb, &.{ "config", "filter.mark.clean", try a.print("touch '{s}'; cat", .{marker}) });
 
     try expectRels(try listOf(m, .{ .tracked_edits = true }), &.{ "\"quoted.cfg", "back\\slash.cfg", "new\nline.cfg" });
     try testing.expectEqual(content.Entry.absent, try content.entryAt(marker));
@@ -2412,7 +2412,7 @@ test "isRepo: a repository git refuses to open for its owner is a repository" {
     const a = arena_state.allocator();
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
-    const repo = try std.fs.path.join(a, &.{ sb.root, "repo" });
+    const repo = try std.Io.Dir.path.join(a, &.{ sb.root, "repo" });
     try testutil.runGit(&sb, null, &.{ "init", "-q", repo });
     const env = try testutil.EnvOverride.install(a, "GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
     defer env.restore();
@@ -2459,8 +2459,8 @@ test "holdsNothing: empty directories down to the depth bound hold nothing, and 
     try tmp.dir.createDirPath(testing.io, "past/a/b/c");
     walk_depth_for_test = 2;
     defer walk_depth_for_test = null;
-    try testing.expect(try holdsNothing(arena, try std.fs.path.join(arena, &.{ root, "within" })));
-    try testing.expect(!try holdsNothing(arena, try std.fs.path.join(arena, &.{ root, "past" })));
+    try testing.expect(try holdsNothing(arena, try std.Io.Dir.path.join(arena, &.{ root, "within" })));
+    try testing.expect(!try holdsNothing(arena, try std.Io.Dir.path.join(arena, &.{ root, "past" })));
 }
 
 test "auto-keep: a directory pattern keeps file by file a directory holding a nested repository, a reserved name, or a name a kept path may not hold" {

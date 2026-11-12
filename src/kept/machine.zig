@@ -44,7 +44,7 @@ pub fn load(alloc: std.mem.Allocator, env: Env) ![]const u8 {
 /// regenerates the id whenever the other host last wrote it, and each
 /// regeneration makes this machine look new to the kept store.
 pub fn loadIn(alloc: std.mem.Allocator, state_dir: []const u8, fingerprint: []const u8) ![]const u8 {
-    const path = try std.fs.path.join(alloc, &.{ state_dir, file_name });
+    const path = try std.Io.Dir.path.join(alloc, &.{ state_dir, file_name });
     const host = try hostDigest(alloc, fingerprint);
     if (try readRecorded(alloc, path)) |rec| {
         if (fingerprint.len == 0 or std.mem.eql(u8, rec.host, host)) return rec.id;
@@ -64,7 +64,7 @@ pub fn peek(alloc: std.mem.Allocator, env: Env) !?[]const u8 {
 /// writing one: null when none is recorded or the recorded one belongs to
 /// another fingerprint.
 pub fn peekIn(alloc: std.mem.Allocator, state_dir: []const u8, fingerprint: []const u8) !?[]const u8 {
-    const rec = (try readRecorded(alloc, try std.fs.path.join(alloc, &.{ state_dir, file_name }))) orelse return null;
+    const rec = (try readRecorded(alloc, try std.Io.Dir.path.join(alloc, &.{ state_dir, file_name }))) orelse return null;
     if (fingerprint.len == 0 or std.mem.eql(u8, rec.host, try hostDigest(alloc, fingerprint))) return rec.id;
     return null;
 }
@@ -96,7 +96,7 @@ fn write(alloc: std.mem.Allocator, path: []const u8, host: []const u8, mode: enu
     try json.encode(&aw.writer, .{ .object = obj }, .{ .indent = 2, .sort_keys = true });
     try aw.writer.writeByte('\n');
 
-    if (std.fs.path.dirname(path)) |d| try fsutil.ensureDir(d);
+    if (std.Io.Dir.path.dirname(path)) |d| try fsutil.ensureDir(d);
     switch (mode) {
         .replace => try fsutil.writeFileAtomic(alloc, path, aw.written()),
         .create => {
@@ -262,7 +262,7 @@ test "loadIn: the id persists for one fingerprint and is replaced for another" {
     defer f.deinit();
     const a = f.alloc();
     const root = f.root;
-    const state = try std.fs.path.join(a, &.{ root, "state", "holt" });
+    const state = try std.Io.Dir.path.join(a, &.{ root, "state", "holt" });
 
     const first = try loadIn(a, state, "host-a");
     try testing.expect(valid(first));
@@ -279,7 +279,7 @@ test "peekIn: the recorded id for this fingerprint, never writing one" {
     var f = try Fixture.init();
     defer f.deinit();
     const a = f.alloc();
-    const state = try std.fs.path.join(a, &.{ f.root, "state", "holt" });
+    const state = try std.Io.Dir.path.join(a, &.{ f.root, "state", "holt" });
 
     try testing.expect(try peekIn(a, state, "host-a") == null);
     try testing.expectEqual(content.Entry.absent, try content.entryAt(state));
@@ -315,7 +315,7 @@ test "hostName: stable, and shaped to stand between dashes in a file name" {
     var two: [host_name_max]u8 = undefined;
     const got = hostName(&one);
     try testing.expect(validHost(got));
-    try testing.expect(std.mem.indexOfScalar(u8, got, '-') == null);
+    try testing.expect(std.mem.findScalar(u8, got, '-') == null);
     try testing.expectEqualStrings(got, hostName(&two));
     try testing.expect(!validHost("a-b"));
     try testing.expect(!validHost(""));

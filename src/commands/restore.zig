@@ -252,15 +252,15 @@ test "run: with no project argument, clones every missing member repo from its b
     const url_a = "https://holt-test.invalid/acme/repoa";
     const url_b = "https://holt-test.invalid/acme/repob";
 
-    var repos_first: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_first: std.array_hash_map.String([]const u8) = .empty;
     try repos_first.put(arena, "repoa", url_a);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_first, .empty);
 
-    var repos_second: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_second: std.array_hash_map.String([]const u8) = .empty;
     try repos_second.put(arena, "repob", url_b);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_second, .empty);
 
-    const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
+    const gitconfig_path = try std.Io.Dir.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{
         .{ .url = url_a, .bare = bare_a },
         .{ .url = url_b, .bare = bare_b },
@@ -269,22 +269,22 @@ test "run: with no project argument, clones every missing member repo from its b
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "cloned repoa") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "cloned repob") != null);
+    try testing.expect(std.mem.find(u8, got.out, "cloned repoa") != null);
+    try testing.expect(std.mem.find(u8, got.out, "cloned repob") != null);
 
-    const clone_a = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repoa" });
+    const clone_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repoa" });
     const branch_a = try git.currentBranch(arena, clone_a);
     try testing.expect(branch_a != null);
-    const clone_b = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repob" });
+    const clone_b = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repob" });
     const branch_b = try git.currentBranch(arena, clone_b);
     try testing.expect(branch_b != null);
 
-    const hub_link_a = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "first", "code", "repoa" });
+    const hub_link_a = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "first", "code", "repoa" });
     switch (try fsutil.linkState(arena, hub_link_a)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
     }
-    const hub_link_b = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "second", "code", "repob" });
+    const hub_link_b = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "second", "code", "repob" });
     switch (try fsutil.linkState(arena, hub_link_b)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
@@ -305,41 +305,41 @@ test "run: with no project argument, reports and continues past an unreachable r
     const url_good = "https://holt-test.invalid/acme/repogood";
     const url_bad = "https://holt-test.invalid/acme/repobad";
 
-    var repos_bad: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_bad: std.array_hash_map.String([]const u8) = .empty;
     try repos_bad.put(arena, "repobad", url_bad);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "bad", repos_bad, .empty);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "bad", "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "bad", "docs" }));
 
-    var repos_good: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_good: std.array_hash_map.String([]const u8) = .empty;
     try repos_good.put(arena, "repogood", url_good);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", repos_good, .empty);
 
-    const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
+    const gitconfig_path = try std.Io.Dir.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{
         .{ .url = url_good, .bare = bare_good },
-        .{ .url = url_bad, .bare = try std.fs.path.join(arena, &.{ sb.root, "absent.git" }) },
+        .{ .url = url_bad, .bare = try std.Io.Dir.path.join(arena, &.{ sb.root, "absent.git" }) },
     });
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "cloned repogood") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "failed to clone") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, url_bad) != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "acme/bad") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "repobad") != null);
+    try testing.expect(std.mem.find(u8, got.out, "cloned repogood") != null);
+    try testing.expect(std.mem.find(u8, got.err, "failed to clone") != null);
+    try testing.expect(std.mem.find(u8, got.err, url_bad) != null);
+    try testing.expect(std.mem.find(u8, got.err, "acme/bad") != null);
+    try testing.expect(std.mem.find(u8, got.err, "repobad") != null);
 
-    const clone_good = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repogood" });
+    const clone_good = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "repogood" });
     const branch_good = try git.currentBranch(arena, clone_good);
     try testing.expect(branch_good != null);
 
-    const hub_link_good = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "good", "code", "repogood" });
+    const hub_link_good = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "good", "code", "repogood" });
     switch (try fsutil.linkState(arena, hub_link_good)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
     }
 
-    const docs_link_bad = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "bad", "docs" });
+    const docs_link_bad = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "bad", "docs" });
     switch (try fsutil.linkState(arena, docs_link_bad)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
@@ -357,18 +357,18 @@ test "run: with no project argument, warns when a local repo's clone is missing 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "proj", "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "proj", "docs" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "acme/proj") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "scratch") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "re-adopt") != null);
+    try testing.expect(std.mem.find(u8, got.err, "acme/proj") != null);
+    try testing.expect(std.mem.find(u8, got.err, "scratch") != null);
+    try testing.expect(std.mem.find(u8, got.err, "re-adopt") != null);
 
-    const docs_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "docs" });
+    const docs_link = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj", "docs" });
     switch (try fsutil.linkState(arena, docs_link)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
@@ -387,13 +387,13 @@ test "run: with no project argument, an already-complete project just rebuilds i
     const ws = try testutil.testWorkspace(arena, root);
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "empty", "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "empty", "docs" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no missing clones") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no missing clones") != null);
 
-    const docs_link = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty", "docs" });
+    const docs_link = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty", "docs" });
     switch (try fsutil.linkState(arena, docs_link)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
@@ -415,15 +415,15 @@ test "run: with no project argument, clones a repo shared by two projects exactl
 
     // Both projects name the same repo - the shared-clone case that would race
     // two workers onto one directory without dedup.
-    var repos_first: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_first: std.array_hash_map.String([]const u8) = .empty;
     try repos_first.put(arena, "lib", url);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "first", repos_first, .empty);
 
-    var repos_second: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_second: std.array_hash_map.String([]const u8) = .empty;
     try repos_second.put(arena, "lib", url);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "second", repos_second, .empty);
 
-    const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
+    const gitconfig_path = try std.Io.Dir.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{.{ .url = url, .bare = bare }});
     defer override.restore();
 
@@ -432,17 +432,17 @@ test "run: with no project argument, clones a repo shared by two projects exactl
     // Cloned exactly once despite two referencing markers.
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, "cloned lib"));
 
-    const clone = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
+    const clone = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "shared" });
     try testing.expect((try git.currentBranch(arena, clone)) != null);
 
     // The hub link is named for the repo's identity ("shared"), not the
     // marker's short key ("lib"); both projects link the one shared clone.
-    const hub_first = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "first", "code", "shared" });
+    const hub_first = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "first", "code", "shared" });
     switch (try fsutil.linkState(arena, hub_first)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
     }
-    const hub_second = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "second", "code", "shared" });
+    const hub_second = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "second", "code", "shared" });
     switch (try fsutil.linkState(arena, hub_second)) {
         .symlink => {},
         else => return error.TestUnexpectedResult,
@@ -467,9 +467,9 @@ fn restoreGated(arena: std.mem.Allocator, args: []const []const u8, extra_config
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
-    const log = try std.fs.path.join(arena, &.{ sb.root, "attempts.log" });
-    const gate = try std.fs.path.join(arena, &.{ sb.root, "gate.sh" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gate, .data = try std.fmt.allocPrint(arena,
+    const log = try std.Io.Dir.path.join(arena, &.{ sb.root, "attempts.log" });
+    const gate = try std.Io.Dir.path.join(arena, &.{ sb.root, "gate.sh" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = gate, .data = try arena.print(
         \\printf '%s|%s\n' "${{GIT_TERMINAL_PROMPT-unset}}" "${{GIT_SSH_COMMAND-unset}}" >> '{s}'
         \\[ "$GIT_TERMINAL_PROMPT" = 0 ] && exit 128
         \\exec "$1" "$2"
@@ -479,16 +479,16 @@ fn restoreGated(arena: std.mem.Allocator, args: []const []const u8, extra_config
     var config: std.ArrayList(u8) = .empty;
     try config.appendSlice(arena, "[protocol \"ext\"]\n\tallow = always\n");
     try config.appendSlice(arena, extra_config);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     for ([_][]const u8{ "repoa", "repob" }) |name| {
-        const bare = try testutil.makeBareRepo(&sb, try std.fmt.allocPrint(arena, "{s}.git", .{name}));
+        const bare = try testutil.makeBareRepo(&sb, try arena.print("{s}.git", .{name}));
         defer testing.allocator.free(bare);
-        const url = try std.fmt.allocPrint(arena, "https://holt-test.invalid/acme/{s}", .{name});
+        const url = try arena.print("https://holt-test.invalid/acme/{s}", .{name});
         try repos.put(arena, name, url);
-        try config.appendSlice(arena, try std.fmt.allocPrint(arena, "[url \"ext::sh {s} %S {s}\"]\n\tinsteadOf = {s}\n", .{ gate, bare, url }));
+        try config.appendSlice(arena, try arena.print("[url \"ext::sh {s} %S {s}\"]\n\tinsteadOf = {s}\n", .{ gate, bare, url }));
     }
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "gated", repos, .empty);
-    const config_path = try std.fs.path.join(arena, &.{ sb.root, "gated.gitconfig" });
+    const config_path = try std.Io.Dir.path.join(arena, &.{ sb.root, "gated.gitconfig" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = config_path, .data = config.items });
     const override = try testutil.EnvOverride.install(arena, "GIT_CONFIG_GLOBAL", config_path);
     defer override.restore();
@@ -508,9 +508,9 @@ test "run: parallel clones let neither git nor ssh prompt, and a clone that fail
     try testing.expectEqual(@as(u8, 0), r.got.code);
     const batch = "0|ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no\n";
     try testing.expectEqualStrings(batch ++ batch ++ "unset|unset\nunset|unset\n", r.attempts);
-    try testing.expect(std.mem.indexOf(u8, r.got.err, "retrying 2 clones one at a time") != null);
-    try testing.expect(std.mem.indexOf(u8, r.got.out, "cloned repoa") != null);
-    try testing.expect(std.mem.indexOf(u8, r.got.out, "cloned repob") != null);
+    try testing.expect(std.mem.find(u8, r.got.err, "retrying 2 clones one at a time") != null);
+    try testing.expect(std.mem.find(u8, r.got.out, "cloned repoa") != null);
+    try testing.expect(std.mem.find(u8, r.got.out, "cloned repob") != null);
 }
 
 test "run: parallel clones leave an ssh command the user names as it is" {
@@ -533,7 +533,7 @@ test "run: -j 1 lets git prompt from the first attempt, and retries nothing" {
     const r = try restoreGated(arena, &.{ "-j", "1" }, "");
     try testing.expectEqual(@as(u8, 0), r.got.code);
     try testing.expectEqualStrings("unset|unset\nunset|unset\n", r.attempts);
-    try testing.expect(std.mem.indexOf(u8, r.got.err, "retrying") == null);
+    try testing.expect(std.mem.find(u8, r.got.err, "retrying") == null);
 }
 
 test "run: with no project argument, reports a repo whose marker url cannot resolve and exits nonzero" {
@@ -549,14 +549,14 @@ test "run: with no project argument, reports a repo whose marker url cannot reso
 
     // A bare host is not a resolvable remote; it must be reported, not silently
     // skipped, and it must flip the exit code.
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "bad", "github.com");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "acme/proj") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "malformed marker url") != null);
+    try testing.expect(std.mem.find(u8, got.err, "acme/proj") != null);
+    try testing.expect(std.mem.find(u8, got.err, "malformed marker url") != null);
 }
 
 test "run: a marker url that git would read as an option is refused, and nothing is spawned or created for it" {
@@ -572,14 +572,14 @@ test "run: a marker url that git would read as an option is refused, and nothing
 
     // `--upload-pack=<cmd>` names a command git runs. The marker is synced
     // data, so the value must not reach git's option parser at all.
-    const artifact = try std.fs.path.join(arena, &.{ root, "pwned" });
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try repos.put(arena, "widget", try std.fmt.allocPrint(arena, "--upload-pack=touch {s}", .{artifact}));
+    const artifact = try std.Io.Dir.path.join(arena, &.{ root, "pwned" });
+    var repos: std.array_hash_map.String([]const u8) = .empty;
+    try repos.put(arena, "widget", try arena.print("--upload-pack=touch {s}", .{artifact}));
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/proj"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "malformed marker url") != null);
+    try testing.expect(std.mem.find(u8, got.err, "malformed marker url") != null);
     try testing.expect(!fsutil.exists(artifact));
 
     // The value never became a clone path either, so code_root stays untouched.
@@ -604,7 +604,7 @@ test "run: a project argument matching no project exits 1 and reports on stderr"
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
 }
 
 test "run: a bare project argument re-clones that project only, it does not unarchive" {
@@ -621,9 +621,9 @@ test "run: a bare project argument re-clones that project only, it does not unar
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"acme/proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/proj") != null);
     // The archive path is `project unarchive`'s job now.
-    try testing.expect(std.mem.indexOf(u8, got.err, "no archived project") == null);
+    try testing.expect(std.mem.find(u8, got.err, "no archived project") == null);
 }
 
 const kept_test = @import("kept_hooks.zig");
@@ -655,7 +655,7 @@ test "run: bare restore links every clone's kept files and names each kept repo 
     const archived = try bed.clone("holt-test.invalid/acme/old");
     try bed.write(archived, "c.txt", "c");
     try bed.keep(archived, "c.txt");
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "old", "https://holt-test.invalid/acme/old");
     try testutil.writeMarker(arena, try bed.ws.archiveRoot(arena), "acme", "past", repos, .empty);
     for ([_][]const u8{ gone, scratch, archived }) |p| try std.Io.Dir.cwd().deleteTree(fsutil.io(), p);
@@ -663,11 +663,11 @@ test "run: bare restore links every clone's kept files and names each kept repo 
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(try bed.linked(widget, key, "notes.txt"));
-    try testing.expect(std.mem.indexOf(u8, got.out, "linked 1 kept file in 1 repo\n") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "kept/holt-test.invalid/acme/gone has no clone here - run: holt repo get 'https://holt-test.invalid/acme/gone'\n  or, if the repo is no longer wanted, run: holt unkeep --repo holt-test.invalid/acme/gone\n") != null);
-    const dest = try bed.shown(try std.fs.path.join(arena, &.{ bed.ws.cfg.code_root, "local", "scratch" }));
-    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "kept/local/scratch has no clone here and no remote: copy the clone to {s}, then run: holt repo adopt {s}\n  or, if the repo is no longer wanted, run: holt unkeep --repo local/scratch\n", .{ dest, dest })) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/old") == null);
+    try testing.expect(std.mem.find(u8, got.out, "linked 1 kept file in 1 repo\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "kept/holt-test.invalid/acme/gone has no clone here - run: holt repo get 'https://holt-test.invalid/acme/gone'\n  or, if the repo is no longer wanted, run: holt unkeep --repo holt-test.invalid/acme/gone\n") != null);
+    const dest = try bed.shown(try std.Io.Dir.path.join(arena, &.{ bed.ws.cfg.code_root, "local", "scratch" }));
+    try testing.expect(std.mem.find(u8, got.out, try arena.print("kept/local/scratch has no clone here and no remote: copy the clone to {s}, then run: holt repo adopt {s}\n  or, if the repo is no longer wanted, run: holt unkeep --repo local/scratch\n", .{ dest, dest })) != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/old") == null);
 }
 
 test "run: restore <project> links the kept files of its member clones, including ones already there" {
@@ -687,22 +687,22 @@ test "run: restore <project> links the kept files of its member clones, includin
         try bed.keep(c, "notes.txt");
         try bed.remove(c, "notes.txt");
     }
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "widget", "https://holt-test.invalid/acme/widget");
     try testutil.writeMarker(arena, try bed.ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "linked 1 kept file in 1 repo\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "linked 1 kept file in 1 repo\n") != null);
     try testing.expect(try bed.linked(widget, key, "notes.txt"));
     try testing.expect(!try bed.linked(other, "holt-test.invalid/acme/other", "notes.txt"));
-    try testing.expect(std.mem.indexOf(u8, got.out, "has no clone here") == null);
+    try testing.expect(std.mem.find(u8, got.out, "has no clone here") == null);
 
     try bed.remove(widget, "notes.txt");
     try bed.write(widget, "notes.txt", "edited");
     const differs = try testutil.runCmd(arena, command.run, bed.ws, &.{"proj"});
     try testing.expectEqual(@as(u8, 1), differs.code);
-    try testing.expect(std.mem.indexOf(u8, differs.out, "local copy differs") != null);
+    try testing.expect(std.mem.find(u8, differs.out, "local copy differs") != null);
     try testing.expectEqualStrings("edited", try bed.read(widget, "notes.txt"));
 }
 
@@ -721,9 +721,9 @@ test "run: restore without kept/ in a synced folder holding projects says kept/ 
 
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no kept/ here yet: if another machine keeps files, wait for your cloud client to download it, then run holt sync; otherwise run holt keep --review --all\n") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, kept_test.not_set_up) == null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "linked 0 kept files") == null);
+    try testing.expect(std.mem.find(u8, got.out, "no kept/ here yet: if another machine keeps files, wait for your cloud client to download it, then run holt sync; otherwise run holt keep --review --all\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, kept_test.not_set_up) == null);
+    try testing.expect(std.mem.find(u8, got.out, "linked 0 kept files") == null);
 }
 
 test "run: restore without kept/ prints the first-use line only while a clone holds a file not kept, and links nothing" {
@@ -738,15 +738,15 @@ test "run: restore without kept/ prints the first-use line only while a clone ho
 
     const none = try testutil.runCmd(arena, command.run, bed.ws, &.{});
     try testing.expectEqual(@as(u8, 0), none.code);
-    try testing.expect(std.mem.indexOf(u8, none.out, kept_test.not_set_up) == null);
+    try testing.expect(std.mem.find(u8, none.out, kept_test.not_set_up) == null);
 
     try bed.write(widget, ".git/info/exclude", "/secret.txt\n");
     try bed.write(widget, "secret.txt", "only here");
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, kept_test.not_set_up) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "linked 0 kept files in 0 repos\n") != null);
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept" })));
+    try testing.expect(std.mem.find(u8, got.out, kept_test.not_set_up) != null);
+    try testing.expect(std.mem.find(u8, got.out, "linked 0 kept files in 0 repos\n") != null);
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept" })));
 }
 
 test "run: a clone whose kept files cannot be linked is reported, never named as a kept repo with no clone here" {
@@ -766,7 +766,7 @@ test "run: a clone whose kept files cannot be linked is reported, never named as
 
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "not linked: {s}: ", .{try bed.shown(broken)})) != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "has no clone here") == null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "linked 0 kept files in 0 repos\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, try arena.print("not linked: {s}: ", .{try bed.shown(broken)})) != null);
+    try testing.expect(std.mem.find(u8, got.out, "has no clone here") == null);
+    try testing.expect(std.mem.find(u8, got.out, "linked 0 kept files in 0 repos\n") != null);
 }

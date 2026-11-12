@@ -62,15 +62,15 @@ pub const Workspace = struct {
     env: Env,
 
     pub fn projectsRoot(self: Workspace, alloc: std.mem.Allocator) ![]u8 {
-        return std.fs.path.join(alloc, &.{ self.cfg.synced_root, "projects" });
+        return std.Io.Dir.path.join(alloc, &.{ self.cfg.synced_root, "projects" });
     }
 
     pub fn archiveRoot(self: Workspace, alloc: std.mem.Allocator) ![]u8 {
-        return std.fs.path.join(alloc, &.{ self.cfg.synced_root, "archive" });
+        return std.Io.Dir.path.join(alloc, &.{ self.cfg.synced_root, "archive" });
     }
 
     pub fn backupsRoot(self: Workspace, alloc: std.mem.Allocator) ![]u8 {
-        return std.fs.path.join(alloc, &.{ self.cfg.synced_root, "backups" });
+        return std.Io.Dir.path.join(alloc, &.{ self.cfg.synced_root, "backups" });
     }
 
     /// Scans `<synced>/projects/<org>/<name>/.holt.json`. A marker that
@@ -116,7 +116,7 @@ pub const Workspace = struct {
             if (std.mem.endsWith(u8, entry.basename, "@worktrees")) continue;
             if (std.mem.endsWith(u8, entry.basename, ".holt-tmp")) continue;
 
-            const abs = try std.fs.path.join(alloc, &.{ code_root, entry.path });
+            const abs = try std.Io.Dir.path.join(alloc, &.{ code_root, entry.path });
             if (try hasGitDir(alloc, abs)) {
                 // A clone: emit and do not recurse into it.
                 try out.append(alloc, abs);
@@ -171,7 +171,7 @@ pub const Workspace = struct {
             // real org; skip it and its children rather than adopt a phantom.
             if (isConflictCopyName(org_entry.name)) continue;
             const org = try alloc.dupe(u8, org_entry.name);
-            const org_path = try std.fs.path.join(alloc, &.{ root, org });
+            const org_path = try std.Io.Dir.path.join(alloc, &.{ root, org });
 
             var org_dir = try root_dir.openDir(fsutil.io(), org_entry.name, .{ .iterate = true });
             defer org_dir.close(fsutil.io());
@@ -181,8 +181,8 @@ pub const Workspace = struct {
                 if (proj_entry.kind != .directory) continue;
                 if (isConflictCopyName(proj_entry.name)) continue;
                 const name = try alloc.dupe(u8, proj_entry.name);
-                const content_path = try std.fs.path.join(alloc, &.{ org_path, name });
-                const marker_path = try std.fs.path.join(alloc, &.{ content_path, marker.marker_basename });
+                const content_path = try std.Io.Dir.path.join(alloc, &.{ org_path, name });
+                const marker_path = try std.Io.Dir.path.join(alloc, &.{ content_path, marker.marker_basename });
                 if (!fsutil.exists(marker_path)) {
                     // No marker on disk: a project whose marker iCloud evicted
                     // is still real (surfaced as degraded), a bare dir is not.
@@ -201,7 +201,7 @@ pub const Workspace = struct {
                     continue;
                 };
 
-                const hub_path = try std.fs.path.join(alloc, &.{ self.cfg.hub_root, org, name });
+                const hub_path = try std.Io.Dir.path.join(alloc, &.{ self.cfg.hub_root, org, name });
 
                 try entries.append(alloc, .{ .ok = .{
                     .org = org,
@@ -264,7 +264,7 @@ pub const Workspace = struct {
     /// fails to parse - the project directory is real, just corrupt, as
     /// opposed to no such project existing at all.
     pub fn hasMalformedMarker(self: Workspace, alloc: std.mem.Allocator, org: []const u8, name: []const u8) !bool {
-        const marker_path = try std.fs.path.join(alloc, &.{ try self.projectsRoot(alloc), org, name, marker.marker_basename });
+        const marker_path = try std.Io.Dir.path.join(alloc, &.{ try self.projectsRoot(alloc), org, name, marker.marker_basename });
         if (!fsutil.exists(marker_path)) return false;
         _ = marker.load(alloc, marker_path, null) catch return !fsutil.isOnlineOnly(alloc, marker_path);
         return false;
@@ -305,7 +305,7 @@ fn lessThanPath(_: void, a: []const u8, b: []const u8) bool {
 /// True iff `dir/.git` exists AND is a directory (a clone), false for a
 /// missing `.git` or a `.git` file (a linked worktree/submodule).
 fn hasGitDir(alloc: std.mem.Allocator, dir: []const u8) !bool {
-    const git = try std.fs.path.join(alloc, &.{ dir, ".git" });
+    const git = try std.Io.Dir.path.join(alloc, &.{ dir, ".git" });
     var d = std.Io.Dir.openDirAbsolute(fsutil.io(), git, .{}) catch return false;
     d.close(fsutil.io());
     return true;
@@ -343,7 +343,7 @@ fn startsWithMaybe(hay: []const u8, prefix: []const u8, sensitive: bool) bool {
 }
 
 fn containsMaybe(hay: []const u8, needle: []const u8, sensitive: bool) bool {
-    return if (sensitive) std.mem.indexOf(u8, hay, needle) != null else containsIgnoreCase(hay, needle);
+    return if (sensitive) std.mem.find(u8, hay, needle) != null else containsIgnoreCase(hay, needle);
 }
 
 fn tierMatchOne(tier: MatchTier, needle: []const u8, hay: []const u8, sensitive: bool) bool {
@@ -405,11 +405,11 @@ fn testConfig(alloc: std.mem.Allocator, synced_root: []const u8) !config.Config 
         .presets = &.{},
         .synced_root = try alloc.dupe(u8, synced_root),
         .code_root = try alloc.dupe(u8, ""),
-        .hub_root = try std.fs.path.join(alloc, &.{ synced_root, "hub" }),
+        .hub_root = try std.Io.Dir.path.join(alloc, &.{ synced_root, "hub" }),
     };
 }
 
-fn emptyRepos() std.StringArrayHashMapUnmanaged([]const u8) {
+fn emptyRepos() std.array_hash_map.String([]const u8) {
     return .empty;
 }
 
@@ -464,9 +464,9 @@ test "scanProjects: a dir whose marker is evicted becomes an evicted entry, not 
 
     // A project dir with only the iCloud eviction placeholder where the marker
     // should be - real project, marker not downloaded.
-    const evicted_dir = try std.fs.path.join(arena, &.{ proot, "acme", "gone" });
+    const evicted_dir = try std.Io.Dir.path.join(arena, &.{ proot, "acme", "gone" });
     try fsutil.ensureDir(evicted_dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ evicted_dir, marker.evicted_marker_basename }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ evicted_dir, marker.evicted_marker_basename }), .data = "" });
 
     const entries = try ws.scanProjects(arena);
     var ok_count: usize = 0;
@@ -497,9 +497,9 @@ test "scanProjects: a marker that is a cloud placeholder holt cannot read is evi
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
-    const dir = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "remote" });
+    const dir = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "remote" });
     try fsutil.ensureDir(dir);
-    const marker_path = try std.fs.path.join(arena, &.{ dir, marker.marker_basename });
+    const marker_path = try std.Io.Dir.path.join(arena, &.{ dir, marker.marker_basename });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = marker_path, .data = "{" });
 
     const unread = try ws.scanProjects(arena);
@@ -528,9 +528,9 @@ test "markerEvicted: a cloud placeholder marker that reads fine is not evicted" 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
-    const dir = try std.fs.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
+    const dir = try std.Io.Dir.path.join(arena, &.{ try ws.projectsRoot(arena), "acme", "widget" });
 
-    fsutil.online_only_for_test = try std.fs.path.join(arena, &.{ dir, marker.marker_basename });
+    fsutil.online_only_for_test = try std.Io.Dir.path.join(arena, &.{ dir, marker.marker_basename });
     defer fsutil.online_only_for_test = null;
     try testing.expect(!marker.markerEvicted(arena, dir));
     try testing.expectEqual(@as(usize, 1), (try ws.list(arena)).len);
@@ -575,12 +575,12 @@ test "list: a broken marker warns and is skipped, others still listed" {
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", emptyRepos(), .empty);
 
-    const broken_dir = try std.fs.path.join(arena, &.{ root, "projects", "acme", "broken" });
+    const broken_dir = try std.Io.Dir.path.join(arena, &.{ root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
-    const broken_marker = try std.fs.path.join(arena, &.{ broken_dir, marker.marker_basename });
+    const broken_marker = try std.Io.Dir.path.join(arena, &.{ broken_dir, marker.marker_basename });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = broken_marker, .data = "not json" });
 
-    const stderr_path = try std.fs.path.join(arena, &.{ root, "stderr" });
+    const stderr_path = try std.Io.Dir.path.join(arena, &.{ root, "stderr" });
     const cap: ?testutil.StderrCapture = if (builtin.os.tag != .windows) try testutil.StderrCapture.begin(stderr_path) else null;
     var warned: std.Io.Writer.Allocating = .init(arena);
     warnings_for_test = &warned.writer;
@@ -591,7 +591,7 @@ test "list: a broken marker warns and is skipped, others still listed" {
     try testing.expectEqual(@as(usize, 1), (try got).len);
     try testing.expectEqualStrings("good", (try got)[0].name);
     if (cap != null) try testing.expectEqualStrings("", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), stderr_path, arena, .limited(1 << 16)));
-    try testing.expect(std.mem.indexOf(u8, warned.written(), "warning: skipping unparseable marker at ") != null);
+    try testing.expect(std.mem.find(u8, warned.written(), "warning: skipping unparseable marker at ") != null);
 }
 
 test "find: exact org/name match" {
@@ -754,9 +754,9 @@ test "hasMalformedMarker: true for a corrupt marker, false for no such dir and f
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", emptyRepos(), .empty);
 
-    const broken_dir = try std.fs.path.join(arena, &.{ root, "projects", "acme", "broken" });
+    const broken_dir = try std.Io.Dir.path.join(arena, &.{ root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
-    const broken_marker = try std.fs.path.join(arena, &.{ broken_dir, marker.marker_basename });
+    const broken_marker = try std.Io.Dir.path.join(arena, &.{ broken_dir, marker.marker_basename });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = broken_marker, .data = "not json" });
 
     try testing.expect(try ws.hasMalformedMarker(arena, "acme", "broken"));
@@ -776,11 +776,11 @@ test "projectsUsing: returns both projects sharing one identity" {
 
     const ws: Workspace = .{ .cfg = try testConfig(arena, root), .env = Env.current() };
 
-    var repos_a: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_a: std.array_hash_map.String([]const u8) = .empty;
     try repos_a.put(arena, "shared", "https://github.com/acme/shared");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "fe", repos_a, .empty);
 
-    var repos_b: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_b: std.array_hash_map.String([]const u8) = .empty;
     try repos_b.put(arena, "shared", "git@github.com:acme/shared.git");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dotfiles", repos_b, .empty);
 
@@ -804,19 +804,19 @@ test "listClones: returns every clone dir under code_root, sorted, excluding wor
     const code = ws.cfg.code_root;
 
     // A remote clone and a local clone: each a dir with a `.git` DIRECTORY.
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend", ".git" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ code, "local", "mox", ".git" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ code, "example.com", "acme", "backend", ".git" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ code, "local", "mox", ".git" }));
     // A worktree: `.git` is a FILE, under a sibling `<repo>@worktrees` dir.
-    const wt = try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend@worktrees", "feat" });
+    const wt = try std.Io.Dir.path.join(arena, &.{ code, "example.com", "acme", "backend@worktrees", "feat" });
     try fsutil.ensureDir(wt);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ wt, ".git" }), .data = "gitdir: x\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ wt, ".git" }), .data = "gitdir: x\n" });
     // A clone-staging temp dir: skipped.
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend.holt-tmp", ".git" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ code, "example.com", "acme", "backend.holt-tmp", ".git" }));
 
     const clones = try ws.listClones(arena);
     try testing.expectEqual(@as(usize, 2), clones.len);
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ code, "example.com", "acme", "backend" }), clones[0]);
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ code, "local", "mox" }), clones[1]);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ code, "example.com", "acme", "backend" }), clones[0]);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ code, "local", "mox" }), clones[1]);
 }
 
 test "listClones: a missing code_root yields an empty list" {

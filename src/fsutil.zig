@@ -98,7 +98,7 @@ pub fn writeFileAtomic(alloc: std.mem.Allocator, path: []const u8, data: []const
     var suffix_buf: [16]u8 = undefined;
     const suffix = std.base64.url_safe_no_pad.Encoder.encode(&suffix_buf, &random_bytes);
 
-    const tmp_path = try std.fmt.allocPrint(alloc, "{s}.{s}.tmp", .{ path, suffix });
+    const tmp_path = try alloc.print("{s}.{s}.tmp", .{ path, suffix });
     const cwd = std.Io.Dir.cwd();
     try cwd.writeFile(io(), .{ .sub_path = tmp_path, .data = data });
     try cwd.rename(tmp_path, cwd, path, io());
@@ -137,12 +137,12 @@ fn windowsNameable(path: []const u8) bool {
 /// components without touching the filesystem, so it works even when `path`
 /// doesn't exist yet. Caller owns the returned memory.
 pub fn toAbsolute(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) {
-        return std.fs.path.resolve(alloc, &.{path});
+    if (std.Io.Dir.path.isAbsolute(path)) {
+        return std.Io.Dir.path.resolveAlloc(alloc, &.{path});
     }
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = try std.process.currentPath(io(), &buf);
-    return std.fs.path.resolve(alloc, &.{ buf[0..n], path });
+    return std.Io.Dir.path.resolveAlloc(alloc, &.{ buf[0..n], path });
 }
 
 /// A single path segment safe to join under a holt-managed root without
@@ -194,7 +194,7 @@ pub const SafeRel = struct {
 pub fn pathIsInside(child: []const u8, parent: []const u8) bool {
     if (std.mem.eql(u8, child, parent)) return true;
     if (!std.mem.startsWith(u8, child, parent)) return false;
-    return child[parent.len] == std.fs.path.sep;
+    return child[parent.len] == std.Io.Dir.path.sep;
 }
 
 /// True when `path` is present only as a cloud placeholder whose content is
@@ -227,10 +227,10 @@ pub fn isOnlineOnly(alloc: std.mem.Allocator, path: []const u8) bool {
 /// stands beside it.
 pub fn hasIcloudPlaceholder(alloc: std.mem.Allocator, path: []const u8) bool {
     if ((kindAt(path) catch return false) != null) return false;
-    const parent = std.fs.path.dirname(path) orelse return false;
-    const base = std.fs.path.basename(path);
-    const ph_name = std.fmt.allocPrint(alloc, ".{s}.icloud", .{base}) catch return false;
-    const ph = std.fs.path.join(alloc, &.{ parent, ph_name }) catch return false;
+    const parent = std.Io.Dir.path.dirname(path) orelse return false;
+    const base = std.Io.Dir.path.basename(path);
+    const ph_name = alloc.print(".{s}.icloud", .{base}) catch return false;
+    const ph = std.Io.Dir.path.join(alloc, &.{ parent, ph_name }) catch return false;
     return (kindAt(ph) catch return false) == .file;
 }
 
@@ -284,10 +284,10 @@ pub fn realPathOrSelf(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
                 defer alloc.free(raw_target);
                 const target = try normalizeTarget(alloc, raw_target);
                 defer if (builtin.os.tag == .windows) alloc.free(target);
-                const resolved = if (std.fs.path.isAbsolute(target))
+                const resolved = if (std.Io.Dir.path.isAbsolute(target))
                     try alloc.dupe(u8, target)
                 else
-                    try std.fs.path.join(alloc, &.{ std.fs.path.dirname(path) orelse path, target });
+                    try std.Io.Dir.path.join(alloc, &.{ std.Io.Dir.path.dirname(path) orelse path, target });
                 defer alloc.free(resolved);
                 return realPathOrSelf(alloc, resolved);
             },
@@ -445,7 +445,7 @@ fn createJunction(target: []const u8, sym_link_path: []const u8) !void {
 
     var result: w.HANDLE = undefined;
     const attr: w.OBJECT.ATTRIBUTES = .{
-        .RootDirectory = if (std.fs.path.isAbsoluteWindowsWtf16(sym_link_path_w.span())) null else cwd.handle,
+        .RootDirectory = if (std.Io.Dir.path.isAbsoluteWindowsWtf16(sym_link_path_w.span())) null else cwd.handle,
         .ObjectName = @constCast(&w.UNICODE_STRING.init(sym_link_path_w.span())),
     };
     var open_iosb: w.IO_STATUS_BLOCK = undefined;
@@ -568,8 +568,8 @@ fn createJunction(target: []const u8, sym_link_path: []const u8) !void {
 /// than surfaced, since this is always cleanup after the operation that
 /// actually mattered has already succeeded.
 pub fn rmdirIfEmpty(path: []const u8) void {
-    const parent = std.fs.path.dirname(path) orelse return;
-    const base = std.fs.path.basename(path);
+    const parent = std.Io.Dir.path.dirname(path) orelse return;
+    const base = std.Io.Dir.path.basename(path);
     var parent_dir = std.Io.Dir.openDirAbsolute(io(), parent, .{}) catch return;
     defer parent_dir.close(io());
     parent_dir.deleteDir(io(), base) catch |err| switch (err) {
@@ -595,7 +595,7 @@ test "tempDir honors the platform temp env var" {
 /// spelled `/home/me` would silently be measured against the runner's own
 /// home rather than the one it declares.
 const test_home = if (builtin.os.tag == .windows) "C:\\home\\me" else "/home/me";
-const sep = std.fs.path.sep_str;
+const sep = std.Io.Dir.path.sep_str;
 
 test "expandTilde: ~ and ~/x expand via $HOME, other paths pass through" {
     var arena_home = std.heap.ArenaAllocator.init(testing.allocator);
@@ -612,7 +612,7 @@ test "expandTilde: ~ and ~/x expand via $HOME, other paths pass through" {
     {
         const got = try expandTilde(testing.allocator, env, "~/x");
         defer testing.allocator.free(got);
-        const want = try std.fs.path.join(testing.allocator, &.{ home, "x" });
+        const want = try std.Io.Dir.path.join(testing.allocator, &.{ home, "x" });
         defer testing.allocator.free(want);
         try testing.expectEqualStrings(want, got);
     }
@@ -670,7 +670,7 @@ test "toAbsolute: absolute input passes through, relative input joins the cwd" {
 
     {
         const abs_input = if (builtin.os.tag == .windows) "C:\\abs\\path" else "/abs/path";
-        const want = try std.fs.path.resolve(testing.allocator, &.{abs_input});
+        const want = try std.Io.Dir.path.resolveAlloc(testing.allocator, &.{abs_input});
         defer testing.allocator.free(want);
         const got = try toAbsolute(testing.allocator, abs_input);
         defer testing.allocator.free(got);
@@ -679,7 +679,7 @@ test "toAbsolute: absolute input passes through, relative input joins the cwd" {
     {
         const got = try toAbsolute(testing.allocator, "relative/path");
         defer testing.allocator.free(got);
-        const want = try std.fs.path.join(testing.allocator, &.{ cwd_path, "relative", "path" });
+        const want = try std.Io.Dir.path.join(testing.allocator, &.{ cwd_path, "relative", "path" });
         defer testing.allocator.free(want);
         try testing.expectEqualStrings(want, got);
     }
@@ -691,18 +691,18 @@ test "toAbsolute: absolute input passes through, relative input joins the cwd" {
     {
         const got = try toAbsolute(testing.allocator, "a/../b");
         defer testing.allocator.free(got);
-        const want = try std.fs.path.join(testing.allocator, &.{ cwd_path, "b" });
+        const want = try std.Io.Dir.path.join(testing.allocator, &.{ cwd_path, "b" });
         defer testing.allocator.free(want);
         try testing.expectEqualStrings(want, got);
     }
 }
 
 test "pathIsInside: lexical containment on resolved absolute paths" {
-    const a_b = try std.fs.path.join(testing.allocator, &.{ "a", "b" });
+    const a_b = try std.Io.Dir.path.join(testing.allocator, &.{ "a", "b" });
     defer testing.allocator.free(a_b);
-    const a_b_c = try std.fs.path.join(testing.allocator, &.{ "a", "b", "c" });
+    const a_b_c = try std.Io.Dir.path.join(testing.allocator, &.{ "a", "b", "c" });
     defer testing.allocator.free(a_b_c);
-    const a_bc = try std.fs.path.join(testing.allocator, &.{ "a", "bc" });
+    const a_bc = try std.Io.Dir.path.join(testing.allocator, &.{ "a", "bc" });
     defer testing.allocator.free(a_bc);
 
     try testing.expect(pathIsInside(a_b_c, a_b));
@@ -750,11 +750,11 @@ test "exists: true for a present path, false for a missing one" {
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "present.txt", .data = "x" });
-    const present = try std.fs.path.join(testing.allocator, &.{ root, "present.txt" });
+    const present = try std.Io.Dir.path.join(testing.allocator, &.{ root, "present.txt" });
     defer testing.allocator.free(present);
     try testing.expect(exists(present));
 
-    const missing = try std.fs.path.join(testing.allocator, &.{ root, "missing.txt" });
+    const missing = try std.Io.Dir.path.join(testing.allocator, &.{ root, "missing.txt" });
     defer testing.allocator.free(missing);
     try testing.expect(!exists(missing));
 }
@@ -769,7 +769,7 @@ test "writeFileAtomic: writes the data and leaves no temp file behind" {
 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const path = try std.fs.path.join(arena, &.{ root, "out.txt" });
+    const path = try std.Io.Dir.path.join(arena, &.{ root, "out.txt" });
 
     try writeFileAtomic(arena, path, "hello\n");
 
@@ -792,7 +792,7 @@ test "ensureDir: mkpath, ok if already exists" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const nested = try std.fs.path.join(testing.allocator, &.{ root, "a", "b" });
+    const nested = try std.Io.Dir.path.join(testing.allocator, &.{ root, "a", "b" });
     defer testing.allocator.free(nested);
 
     try ensureDir(nested);
@@ -809,16 +809,16 @@ test "linkState: missing, regular file, symlink" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const missing_path = try std.fs.path.join(testing.allocator, &.{ root, "missing" });
+    const missing_path = try std.Io.Dir.path.join(testing.allocator, &.{ root, "missing" });
     defer testing.allocator.free(missing_path);
     try testing.expectEqual(LinkState.missing, try linkState(testing.allocator, missing_path));
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "regular.txt", .data = "x" });
-    const regular_path = try std.fs.path.join(testing.allocator, &.{ root, "regular.txt" });
+    const regular_path = try std.Io.Dir.path.join(testing.allocator, &.{ root, "regular.txt" });
     defer testing.allocator.free(regular_path);
     try testing.expectEqual(LinkState.other, try linkState(testing.allocator, regular_path));
 
-    const link_path = try std.fs.path.join(testing.allocator, &.{ root, "link" });
+    const link_path = try std.Io.Dir.path.join(testing.allocator, &.{ root, "link" });
     defer testing.allocator.free(link_path);
     try replaceSymlink("some-target", link_path);
     const state = try linkState(testing.allocator, link_path);
@@ -838,11 +838,11 @@ test "realPathOrSelf: resolves a symlink to its physical target, passes through 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const target_dir = try std.fs.path.join(testing.allocator, &.{ root, "target" });
+    const target_dir = try std.Io.Dir.path.join(testing.allocator, &.{ root, "target" });
     defer testing.allocator.free(target_dir);
     try ensureDir(target_dir);
 
-    const link_path = try std.fs.path.join(testing.allocator, &.{ root, "link" });
+    const link_path = try std.Io.Dir.path.join(testing.allocator, &.{ root, "link" });
     defer testing.allocator.free(link_path);
     try replaceSymlink(target_dir, link_path);
 
@@ -850,14 +850,14 @@ test "realPathOrSelf: resolves a symlink to its physical target, passes through 
     defer testing.allocator.free(resolved);
     try testing.expectEqualStrings(target_dir, resolved);
 
-    const missing = try std.fs.path.join(testing.allocator, &.{ root, "does-not-exist" });
+    const missing = try std.Io.Dir.path.join(testing.allocator, &.{ root, "does-not-exist" });
     defer testing.allocator.free(missing);
     const fallback = try realPathOrSelf(testing.allocator, missing);
     defer testing.allocator.free(fallback);
     try testing.expectEqualStrings(missing, fallback);
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "file", .data = "x" });
-    const under = try std.fs.path.join(testing.allocator, &.{ root, "file", "below" });
+    const under = try std.Io.Dir.path.join(testing.allocator, &.{ root, "file", "below" });
     defer testing.allocator.free(under);
     const kept_as_is = try realPathOrSelf(testing.allocator, under);
     defer testing.allocator.free(kept_as_is);
@@ -871,21 +871,21 @@ test "rmdirIfEmpty: removes an empty dir, leaves a non-empty one, no-ops on a mi
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const empty_dir = try std.fs.path.join(testing.allocator, &.{ root, "empty" });
+    const empty_dir = try std.Io.Dir.path.join(testing.allocator, &.{ root, "empty" });
     defer testing.allocator.free(empty_dir);
     try ensureDir(empty_dir);
     rmdirIfEmpty(empty_dir);
     try testing.expect(!exists(empty_dir));
 
-    const nonempty_dir = try std.fs.path.join(testing.allocator, &.{ root, "nonempty" });
+    const nonempty_dir = try std.Io.Dir.path.join(testing.allocator, &.{ root, "nonempty" });
     defer testing.allocator.free(nonempty_dir);
-    const child = try std.fs.path.join(testing.allocator, &.{ nonempty_dir, "child" });
+    const child = try std.Io.Dir.path.join(testing.allocator, &.{ nonempty_dir, "child" });
     defer testing.allocator.free(child);
     try ensureDir(child);
     rmdirIfEmpty(nonempty_dir);
     try testing.expect(exists(nonempty_dir));
 
-    const missing_dir = try std.fs.path.join(testing.allocator, &.{ root, "does-not-exist" });
+    const missing_dir = try std.Io.Dir.path.join(testing.allocator, &.{ root, "does-not-exist" });
     defer testing.allocator.free(missing_dir);
     rmdirIfEmpty(missing_dir);
 }
@@ -912,8 +912,8 @@ pub fn copyTree(alloc: std.mem.Allocator, from: []const u8, to: []const u8) !voi
         defer dir.close(io());
         var it = dir.iterate();
         while (try it.next(io())) |entry| {
-            const child_from = try std.fs.path.join(alloc, &.{ from, entry.name });
-            const child_to = try std.fs.path.join(alloc, &.{ to, entry.name });
+            const child_from = try std.Io.Dir.path.join(alloc, &.{ from, entry.name });
+            const child_to = try std.Io.Dir.path.join(alloc, &.{ to, entry.name });
             try copyTree(alloc, child_from, child_to);
         }
         return;
@@ -926,7 +926,7 @@ pub fn copyTree(alloc: std.mem.Allocator, from: []const u8, to: []const u8) !voi
 /// on different filesystems (the hub is local disk, content is a cloud
 /// mount, so a plain rename(2) across them fails with `error.CrossDevice`).
 pub fn moveTree(alloc: std.mem.Allocator, from: []const u8, to: []const u8) !void {
-    if (std.fs.path.dirname(to)) |parent| try ensureDir(parent);
+    if (std.Io.Dir.path.dirname(to)) |parent| try ensureDir(parent);
     std.Io.Dir.renameAbsolute(from, to, io()) catch |err| switch (err) {
         error.CrossDevice => {
             try copyTree(alloc, from, to);
@@ -947,20 +947,20 @@ test "copyTree: copies a file and a nested directory tree" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     // Source: a dir with a file and a subdir with a file.
-    const src = try std.fs.path.join(arena, &.{ root, "src" });
-    try ensureDir(try std.fs.path.join(arena, &.{ src, "sub" }));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "a.txt" }), .data = "a\n" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ src, "sub", "b.txt" }), .data = "b\n" });
+    const src = try std.Io.Dir.path.join(arena, &.{ root, "src" });
+    try ensureDir(try std.Io.Dir.path.join(arena, &.{ src, "sub" }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ src, "a.txt" }), .data = "a\n" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ src, "sub", "b.txt" }), .data = "b\n" });
 
-    const dst = try std.fs.path.join(arena, &.{ root, "dst" });
+    const dst = try std.Io.Dir.path.join(arena, &.{ root, "dst" });
     try copyTree(arena, src, dst);
 
-    const got_a = try std.Io.Dir.cwd().readFileAlloc(io(), try std.fs.path.join(arena, &.{ dst, "a.txt" }), arena, .limited(1 << 20));
+    const got_a = try std.Io.Dir.cwd().readFileAlloc(io(), try std.Io.Dir.path.join(arena, &.{ dst, "a.txt" }), arena, .limited(1 << 20));
     try testing.expectEqualStrings("a\n", got_a);
-    const got_b = try std.Io.Dir.cwd().readFileAlloc(io(), try std.fs.path.join(arena, &.{ dst, "sub", "b.txt" }), arena, .limited(1 << 20));
+    const got_b = try std.Io.Dir.cwd().readFileAlloc(io(), try std.Io.Dir.path.join(arena, &.{ dst, "sub", "b.txt" }), arena, .limited(1 << 20));
     try testing.expectEqualStrings("b\n", got_b);
     // Original still there (copy, not move).
-    try testing.expect(exists(try std.fs.path.join(arena, &.{ src, "a.txt" })));
+    try testing.expect(exists(try std.Io.Dir.path.join(arena, &.{ src, "a.txt" })));
 }
 
 test "copyTree: refuses a destination that already exists" {
@@ -973,20 +973,20 @@ test "copyTree: refuses a destination that already exists" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const src_file = try std.fs.path.join(arena, &.{ root, "src.txt" });
+    const src_file = try std.Io.Dir.path.join(arena, &.{ root, "src.txt" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = src_file, .data = "src\n" });
 
     // Existing dest file: must not be silently overwritten.
-    const dst_file = try std.fs.path.join(arena, &.{ root, "dst-file.txt" });
+    const dst_file = try std.Io.Dir.path.join(arena, &.{ root, "dst-file.txt" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = dst_file, .data = "pre-existing\n" });
     try testing.expectError(error.PathAlreadyExists, copyTree(arena, src_file, dst_file));
     const dst_file_contents = try std.Io.Dir.cwd().readFileAlloc(io(), dst_file, arena, .limited(1 << 20));
     try testing.expectEqualStrings("pre-existing\n", dst_file_contents);
 
     // Existing dest dir: must not be silently merged into.
-    const src_dir = try std.fs.path.join(arena, &.{ root, "src-dir" });
+    const src_dir = try std.Io.Dir.path.join(arena, &.{ root, "src-dir" });
     try ensureDir(src_dir);
-    const dst_dir = try std.fs.path.join(arena, &.{ root, "dst-dir" });
+    const dst_dir = try std.Io.Dir.path.join(arena, &.{ root, "dst-dir" });
     try ensureDir(dst_dir);
     try testing.expectError(error.PathAlreadyExists, copyTree(arena, src_dir, dst_dir));
 }
@@ -1001,13 +1001,13 @@ test "copyTree: recreates a symlink rather than following it" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const target_dir = try std.fs.path.join(arena, &.{ root, "target-dir" });
+    const target_dir = try std.Io.Dir.path.join(arena, &.{ root, "target-dir" });
     try ensureDir(target_dir);
 
-    const link_path = try std.fs.path.join(arena, &.{ root, "link" });
+    const link_path = try std.Io.Dir.path.join(arena, &.{ root, "link" });
     try std.Io.Dir.cwd().symLink(io(), "target-dir", link_path, .{});
 
-    const copy_path = try std.fs.path.join(arena, &.{ root, "link-copy" });
+    const copy_path = try std.Io.Dir.path.join(arena, &.{ root, "link-copy" });
     try copyTree(arena, link_path, copy_path);
 
     const orig_state = try linkState(arena, link_path);
@@ -1031,9 +1031,9 @@ test "moveTree: same-filesystem move removes the source" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const src = try std.fs.path.join(arena, &.{ root, "f.txt" });
+    const src = try std.Io.Dir.path.join(arena, &.{ root, "f.txt" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = src, .data = "hi\n" });
-    const dst = try std.fs.path.join(arena, &.{ root, "moved.txt" });
+    const dst = try std.Io.Dir.path.join(arena, &.{ root, "moved.txt" });
 
     try moveTree(arena, src, dst);
     try testing.expect(exists(dst));
@@ -1047,7 +1047,7 @@ test "replaceSymlink: overwrites an existing link pointing elsewhere" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const link_path = try std.fs.path.join(testing.allocator, &.{ root, "link" });
+    const link_path = try std.Io.Dir.path.join(testing.allocator, &.{ root, "link" });
     defer testing.allocator.free(link_path);
 
     try replaceSymlink("wrong-target", link_path);
@@ -1074,13 +1074,13 @@ test "replaceLink: creates a working dir link and a working file link, returns .
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     // A real directory target and a real file target.
-    const dir_target = try std.fs.path.join(arena, &.{ root, "d" });
+    const dir_target = try std.Io.Dir.path.join(arena, &.{ root, "d" });
     try std.Io.Dir.cwd().createDirPath(io(), dir_target);
-    const file_target = try std.fs.path.join(arena, &.{ root, "f" });
+    const file_target = try std.Io.Dir.path.join(arena, &.{ root, "f" });
     try writeFileAtomic(arena, file_target, "x");
 
-    const dir_link = try std.fs.path.join(arena, &.{ root, "d-link" });
-    const file_link = try std.fs.path.join(arena, &.{ root, "f-link" });
+    const dir_link = try std.Io.Dir.path.join(arena, &.{ root, "d-link" });
+    const file_link = try std.Io.Dir.path.join(arena, &.{ root, "f-link" });
 
     try testing.expectEqual(LinkResult.created, try replaceLink(dir_target, dir_link, true));
     try testing.expectEqual(LinkResult.created, try replaceLink(file_target, file_link, false));
@@ -1097,7 +1097,7 @@ test "replaceLink: overwrites an existing dir link pointing elsewhere" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const link_path = try std.fs.path.join(testing.allocator, &.{ root, "link" });
+    const link_path = try std.Io.Dir.path.join(testing.allocator, &.{ root, "link" });
     defer testing.allocator.free(link_path);
 
     // On POSIX both calls take the symlink branch, so the second call
@@ -1126,17 +1126,17 @@ test "isDirFollowing: a directory or a link to one is, a file or nothing is not"
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    const dir = try std.fs.path.join(arena, &.{ root, "dir" });
+    const dir = try std.Io.Dir.path.join(arena, &.{ root, "dir" });
     try ensureDir(dir);
-    const link = try std.fs.path.join(arena, &.{ root, "link" });
+    const link = try std.Io.Dir.path.join(arena, &.{ root, "link" });
     try replaceSymlink(dir, link);
-    const file = try std.fs.path.join(arena, &.{ root, "file" });
+    const file = try std.Io.Dir.path.join(arena, &.{ root, "file" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = file, .data = "" });
 
     try testing.expect(try isDirFollowing(arena, dir));
     try testing.expect(try isDirFollowing(arena, link));
     try testing.expect(!try isDirFollowing(arena, file));
-    try testing.expect(!try isDirFollowing(arena, try std.fs.path.join(arena, &.{ root, "absent" })));
+    try testing.expect(!try isDirFollowing(arena, try std.Io.Dir.path.join(arena, &.{ root, "absent" })));
 }
 
 test "isOnlineOnly: an iCloud stand-in beside an absent path is, a plain file or nothing is not" {
@@ -1147,11 +1147,11 @@ test "isOnlineOnly: an iCloud stand-in beside an absent path is, a plain file or
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ root, "..clasp.json.icloud" }), .data = "" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(arena, &.{ root, "plain" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ root, "..clasp.json.icloud" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ root, "plain" }), .data = "" });
 
-    try testing.expect(isOnlineOnly(arena, try std.fs.path.join(arena, &.{ root, ".clasp.json" })));
-    try testing.expect(hasIcloudPlaceholder(arena, try std.fs.path.join(arena, &.{ root, ".clasp.json" })));
-    try testing.expect(!isOnlineOnly(arena, try std.fs.path.join(arena, &.{ root, "plain" })));
-    try testing.expect(!isOnlineOnly(arena, try std.fs.path.join(arena, &.{ root, "absent" })));
+    try testing.expect(isOnlineOnly(arena, try std.Io.Dir.path.join(arena, &.{ root, ".clasp.json" })));
+    try testing.expect(hasIcloudPlaceholder(arena, try std.Io.Dir.path.join(arena, &.{ root, ".clasp.json" })));
+    try testing.expect(!isOnlineOnly(arena, try std.Io.Dir.path.join(arena, &.{ root, "plain" })));
+    try testing.expect(!isOnlineOnly(arena, try std.Io.Dir.path.join(arena, &.{ root, "absent" })));
 }

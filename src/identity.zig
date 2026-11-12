@@ -23,8 +23,8 @@ pub const Identity = struct {
     /// logical key, always `/`-joined regardless of platform - never an
     /// on-disk path. Caller owns the returned memory.
     pub fn relPath(self: Identity, alloc: std.mem.Allocator) ![]u8 {
-        if (self.isLocal()) return std.fmt.allocPrint(alloc, "local/{s}", .{self.repo});
-        return std.fmt.allocPrint(alloc, "{s}/{s}/{s}", .{ self.host, self.owner, self.repo });
+        if (self.isLocal()) return alloc.print("local/{s}", .{self.repo});
+        return alloc.print("{s}/{s}/{s}", .{ self.host, self.owner, self.repo });
     }
 
     /// `code_root` joined with the native on-disk clone location. `relPath`
@@ -78,26 +78,26 @@ fn stripScheme(url: []const u8) ?[]const u8 {
 
 /// Drops "[user@]" and a trailing ":port" from a URL authority.
 fn authorityHost(authority: []const u8) []const u8 {
-    const after_user = if (std.mem.lastIndexOfScalar(u8, authority, '@')) |i| authority[i + 1 ..] else authority;
-    const host_end = std.mem.indexOfScalar(u8, after_user, ':') orelse after_user.len;
+    const after_user = if (std.mem.findScalarLast(u8, authority, '@')) |i| authority[i + 1 ..] else authority;
+    const host_end = std.mem.findScalar(u8, after_user, ':') orelse after_user.len;
     return after_user[0..host_end];
 }
 
 fn parseUrl(url: []const u8) error{UnrecognizedUrl}!Parsed {
     if (stripScheme(url)) |rest| {
-        const slash = std.mem.indexOfScalar(u8, rest, '/') orelse return error.UnrecognizedUrl;
+        const slash = std.mem.findScalar(u8, rest, '/') orelse return error.UnrecognizedUrl;
         return .{ .host = authorityHost(rest[0..slash]), .path = rest[slash + 1 ..] };
     }
-    if (std.mem.indexOf(u8, url, "://") != null) return error.UnrecognizedUrl;
+    if (std.mem.find(u8, url, "://") != null) return error.UnrecognizedUrl;
 
     // scp-like "[user@]host:path" - only when the colon precedes any slash,
     // so an unrecognized "scheme://..." isn't misread as one.
-    const colon = std.mem.indexOfScalar(u8, url, ':');
-    const first_slash = std.mem.indexOfScalar(u8, url, '/');
+    const colon = std.mem.findScalar(u8, url, ':');
+    const first_slash = std.mem.findScalar(u8, url, '/');
     if (colon != null and (first_slash == null or colon.? < first_slash.?)) {
         const c = colon.?;
         const authority = url[0..c];
-        const host = if (std.mem.lastIndexOfScalar(u8, authority, '@')) |i| authority[i + 1 ..] else authority;
+        const host = if (std.mem.findScalarLast(u8, authority, '@')) |i| authority[i + 1 ..] else authority;
         return .{ .host = host, .path = url[c + 1 ..] };
     }
 
@@ -109,9 +109,9 @@ fn parseUrl(url: []const u8) error{UnrecognizedUrl}!Parsed {
 /// explicitly. Fewer than two segments is not a repo reference.
 fn parseShorthand(url: []const u8) error{UnrecognizedUrl}!Parsed {
     const trimmed = trimTrailingSlashes(url);
-    const first_slash = std.mem.indexOfScalar(u8, trimmed, '/') orelse return error.UnrecognizedUrl;
+    const first_slash = std.mem.findScalar(u8, trimmed, '/') orelse return error.UnrecognizedUrl;
     const rest = trimmed[first_slash + 1 ..];
-    if (std.mem.indexOfScalar(u8, rest, '/') != null) {
+    if (std.mem.findScalar(u8, rest, '/') != null) {
         // host/owner/repo: the first segment is the host.
         return .{ .host = trimmed[0..first_slash], .path = rest };
     }
@@ -145,7 +145,7 @@ pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl
     // A `.`/`..` host or one carrying a backslash would land in the same
     // clone-path segment as owner/repo segments below; guard it identically.
     if (std.mem.eql(u8, host, ".") or std.mem.eql(u8, host, "..")) return error.UnrecognizedUrl;
-    if (std.mem.indexOfScalar(u8, host, '\\') != null) return error.UnrecognizedUrl;
+    if (std.mem.findScalar(u8, host, '\\') != null) return error.UnrecognizedUrl;
 
     var path = trimTrailingSlashes(parsed.path);
     path = trimTrailingSlashes(stripDotGit(path));
@@ -155,11 +155,11 @@ pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl
     var it = std.mem.splitScalar(u8, path, '/');
     while (it.next()) |seg| {
         if (seg.len == 0) return error.UnrecognizedUrl;
-        // `.`/`..` are not normalized by std.fs.path.join, and a smuggled
+        // `.`/`..` are not normalized by std.Io.Dir.path.join, and a smuggled
         // backslash becomes a path separator on Windows - either would let
         // the derived clone path escape code_root (code_root/x/../y).
         if (std.mem.eql(u8, seg, ".") or std.mem.eql(u8, seg, "..")) return error.UnrecognizedUrl;
-        if (std.mem.indexOfScalar(u8, seg, '\\') != null) return error.UnrecognizedUrl;
+        if (std.mem.findScalar(u8, seg, '\\') != null) return error.UnrecognizedUrl;
         try segments.append(alloc, seg);
     }
     if (segments.items.len < 2) return error.UnrecognizedUrl;
@@ -180,15 +180,15 @@ pub fn fromUrl(alloc: std.mem.Allocator, url: []const u8) error{ UnrecognizedUrl
 pub fn expand(alloc: std.mem.Allocator, input: []const u8) error{ UnrecognizedUrl, OutOfMemory }![]u8 {
     if (optionShaped(input)) return error.UnrecognizedUrl;
     if (stripScheme(input) != null) return alloc.dupe(u8, input);
-    const colon = std.mem.indexOfScalar(u8, input, ':');
-    const slash = std.mem.indexOfScalar(u8, input, '/');
+    const colon = std.mem.findScalar(u8, input, ':');
+    const slash = std.mem.findScalar(u8, input, '/');
     if (colon != null and (slash == null or colon.? < slash.?)) return alloc.dupe(u8, input);
 
     const id = try fromUrl(alloc, input);
     defer alloc.free(id.host);
     defer alloc.free(id.owner);
     defer alloc.free(id.repo);
-    return std.fmt.allocPrint(alloc, "https://{s}/{s}/{s}", .{ id.host, id.owner, id.repo });
+    return alloc.print("https://{s}/{s}/{s}", .{ id.host, id.owner, id.repo });
 }
 
 test "expand: shorthand becomes a canonical https url, a full url passes through" {
@@ -346,7 +346,7 @@ test "relPath and clonePath join host/owner/repo, including subgroup owners" {
 
     const clone = try id.clonePath(testing.allocator, "/code");
     defer testing.allocator.free(clone);
-    const want_clone = try std.fs.path.join(testing.allocator, &.{ "/code", "gitlab.com", "a", "b", "c" });
+    const want_clone = try std.Io.Dir.path.join(testing.allocator, &.{ "/code", "gitlab.com", "a", "b", "c" });
     defer testing.allocator.free(want_clone);
     try testing.expectEqualStrings(want_clone, clone);
 }
@@ -361,7 +361,7 @@ test "local: isLocal, relPath, and clonePath" {
 
     const clone = try id.clonePath(testing.allocator, "/code");
     defer testing.allocator.free(clone);
-    const want_clone = try std.fs.path.join(testing.allocator, &.{ "/code", "local", "scratch" });
+    const want_clone = try std.Io.Dir.path.join(testing.allocator, &.{ "/code", "local", "scratch" });
     defer testing.allocator.free(want_clone);
     try testing.expectEqualStrings(want_clone, clone);
 }

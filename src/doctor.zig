@@ -237,11 +237,11 @@ fn scanNoFollow(alloc: std.mem.Allocator, root_path: []const u8, offenders: *std
 
     while (try walker.next(fsutil.io())) |entry| {
         if (entry.kind == .sym_link) {
-            try offenders.append(alloc, try std.fs.path.join(alloc, &.{ root_path, entry.path }));
+            try offenders.append(alloc, try std.Io.Dir.path.join(alloc, &.{ root_path, entry.path }));
             continue;
         }
         if (entry.kind == .directory) {
-            if (progress) |p| p.enter(try std.fs.path.join(alloc, &.{ root_path, entry.path }));
+            if (progress) |p| p.enter(try std.Io.Dir.path.join(alloc, &.{ root_path, entry.path }));
             try walker.enter(fsutil.io(), entry);
         }
     }
@@ -256,7 +256,7 @@ pub fn checkD1(alloc: std.mem.Allocator, ws: *const Workspace, full: bool, progr
     } else {
         try scanNoFollow(alloc, try ws.projectsRoot(alloc), &offenders, progress);
         try scanNoFollow(alloc, try ws.archiveRoot(alloc), &offenders, progress);
-        try scanNoFollow(alloc, try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "kept" }), &offenders, progress);
+        try scanNoFollow(alloc, try std.Io.Dir.path.join(alloc, &.{ ws.cfg.synced_root, "kept" }), &offenders, progress);
     }
     if (progress) |p| p.endWalk();
     return offenders.toOwnedSlice(alloc);
@@ -326,8 +326,8 @@ fn findOrphans(alloc: std.mem.Allocator, ws: *const Workspace) ![]Orphan {
         var proj_it = org_dir.iterate();
         while (try proj_it.next(fsutil.io())) |proj_entry| {
             if (proj_entry.kind != .directory) continue;
-            const content_dir = try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "projects", org_entry.name, proj_entry.name });
-            const marker_path = try std.fs.path.join(alloc, &.{ content_dir, marker.marker_basename });
+            const content_dir = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.synced_root, "projects", org_entry.name, proj_entry.name });
+            const marker_path = try std.Io.Dir.path.join(alloc, &.{ content_dir, marker.marker_basename });
             // A present marker, or one merely evicted from local storage, both
             // mean the project still exists - not a hub left behind.
             if (fsutil.exists(marker_path) or marker.markerEvicted(alloc, content_dir)) continue;
@@ -366,13 +366,13 @@ fn collectDanglingUnder(
 
     while (try walker.next(fsutil.io())) |entry| {
         if (entry.kind == .sym_link) {
-            const link_path = try std.fs.path.join(alloc, &.{ root_path, entry.path });
+            const link_path = try std.Io.Dir.path.join(alloc, &.{ root_path, entry.path });
             switch (try fsutil.linkState(alloc, link_path)) {
                 .symlink => |target| {
-                    const resolved = if (std.fs.path.isAbsolute(target))
+                    const resolved = if (std.Io.Dir.path.isAbsolute(target))
                         target
                     else
-                        try std.fs.path.join(alloc, &.{ std.fs.path.dirname(link_path).?, target });
+                        try std.Io.Dir.path.join(alloc, &.{ std.Io.Dir.path.dirname(link_path).?, target });
                     if (!fsutil.exists(resolved)) try out.append(alloc, .{
                         .project = project,
                         .link_path = link_path,
@@ -390,9 +390,9 @@ fn collectDanglingUnder(
 
 fn findDanglingLinks(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) ![]DanglingLink {
     var out: std.ArrayList(DanglingLink) = .empty;
-    const local_root = try std.fs.path.join(alloc, &.{ ws.cfg.code_root, "local" });
+    const local_root = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.code_root, "local" });
     for (projects) |p| {
-        const code_root = try std.fs.path.join(alloc, &.{ p.hub_path, "code" });
+        const code_root = try std.Io.Dir.path.join(alloc, &.{ p.hub_path, "code" });
         try collectDanglingUnder(alloc, code_root, try p.qualified(alloc), local_root, &out);
     }
     return out.toOwnedSlice(alloc);
@@ -423,8 +423,8 @@ fn scanNameDirs(alloc: std.mem.Allocator, root_path: []const u8) ![]NameDir {
         var name_it = org_dir.iterate();
         while (try name_it.next(fsutil.io())) |name_entry| {
             if (name_entry.kind != .directory) continue;
-            const path = try std.fs.path.join(alloc, &.{ root_path, org_entry.name, name_entry.name });
-            const marker_path = try std.fs.path.join(alloc, &.{ path, marker.marker_basename });
+            const path = try std.Io.Dir.path.join(alloc, &.{ root_path, org_entry.name, name_entry.name });
+            const marker_path = try std.Io.Dir.path.join(alloc, &.{ path, marker.marker_basename });
             try out.append(alloc, .{
                 .org = try alloc.dupe(u8, org_entry.name),
                 .name = try alloc.dupe(u8, name_entry.name),
@@ -503,7 +503,7 @@ fn collectConflictCopies(alloc: std.mem.Allocator, root_path: []const u8, out: *
     while (try org_it.next(fsutil.io())) |org_entry| {
         if (org_entry.kind != .directory) continue;
         if (workspace.isConflictCopyName(org_entry.name)) {
-            try out.append(alloc, .{ .path = try std.fs.path.join(alloc, &.{ root_path, org_entry.name }) });
+            try out.append(alloc, .{ .path = try std.Io.Dir.path.join(alloc, &.{ root_path, org_entry.name }) });
             continue;
         }
         var org_dir = try root_dir.openDir(fsutil.io(), org_entry.name, .{ .iterate = true });
@@ -513,7 +513,7 @@ fn collectConflictCopies(alloc: std.mem.Allocator, root_path: []const u8, out: *
         while (try name_it.next(fsutil.io())) |name_entry| {
             if (name_entry.kind != .directory) continue;
             if (workspace.isConflictCopyName(name_entry.name))
-                try out.append(alloc, .{ .path = try std.fs.path.join(alloc, &.{ root_path, org_entry.name, name_entry.name }) });
+                try out.append(alloc, .{ .path = try std.Io.Dir.path.join(alloc, &.{ root_path, org_entry.name, name_entry.name }) });
         }
     }
 }
@@ -568,7 +568,7 @@ const LocalScan = struct { with_origin: []LocalWithOrigin, remoteless: []Remotel
 fn scanLocalClones(alloc: std.mem.Allocator, ws: *const Workspace, projects: []const Project) !LocalScan {
     var with_origin: std.ArrayList(LocalWithOrigin) = .empty;
     var remoteless: std.ArrayList(Remoteless) = .empty;
-    const local_root = try std.fs.path.join(alloc, &.{ ws.cfg.code_root, "local" });
+    const local_root = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.code_root, "local" });
 
     var dir = std.Io.Dir.openDirAbsolute(fsutil.io(), local_root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return .{ .with_origin = &.{}, .remoteless = &.{} },
@@ -580,8 +580,8 @@ fn scanLocalClones(alloc: std.mem.Allocator, ws: *const Workspace, projects: []c
     while (try it.next(fsutil.io())) |entry| {
         if (entry.kind != .directory) continue;
         if (fsutil.SafeSegment.parse(entry.name) == null) continue;
-        const path = try std.fs.path.join(alloc, &.{ local_root, entry.name });
-        if (!fsutil.exists(try std.fs.path.join(alloc, &.{ path, ".git" }))) continue;
+        const path = try std.Io.Dir.path.join(alloc, &.{ local_root, entry.name });
+        if (!fsutil.exists(try std.Io.Dir.path.join(alloc, &.{ path, ".git" }))) continue;
         const name = try alloc.dupe(u8, entry.name);
         const claimant = try localClaimant(alloc, projects, name);
 
@@ -618,7 +618,7 @@ fn findUnsurfacedFiles(alloc: std.mem.Allocator, ws: *const Workspace, projects:
             const links = (try hub.desiredLinks(alloc, ws, &p)).links;
             for (links) |l| {
                 if (l.kind != .file) continue;
-                const link_path = try std.fs.path.join(alloc, &.{ p.hub_path, l.rel });
+                const link_path = try std.Io.Dir.path.join(alloc, &.{ p.hub_path, l.rel });
                 switch (try fsutil.linkState(alloc, link_path)) {
                     .missing => try out.append(alloc, .{ .project = try p.qualified(alloc), .rel = try alloc.dupe(u8, l.rel) }),
                     else => {},
@@ -745,9 +745,9 @@ fn findCloneTemps(alloc: std.mem.Allocator, ws: *const Workspace, fix: bool) ![]
 
     while (try walker.next(fsutil.io())) |entry| {
         if (entry.kind != .directory) continue;
-        const full = try std.fs.path.join(alloc, &.{ ws.cfg.code_root, entry.path });
+        const full = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.code_root, entry.path });
 
-        if (std.mem.endsWith(u8, std.fs.path.basename(entry.path), ".holt-tmp")) {
+        if (std.mem.endsWith(u8, std.Io.Dir.path.basename(entry.path), ".holt-tmp")) {
             var removed = false;
             if (fix) {
                 std.Io.Dir.cwd().deleteTree(fsutil.io(), full) catch {};
@@ -758,10 +758,10 @@ fn findCloneTemps(alloc: std.mem.Allocator, ws: *const Workspace, fix: bool) ![]
         }
 
         // A repo's sibling worktrees dir is git's to manage; never walk into it.
-        if (std.mem.endsWith(u8, std.fs.path.basename(entry.path), "@worktrees")) continue;
+        if (std.mem.endsWith(u8, std.Io.Dir.path.basename(entry.path), "@worktrees")) continue;
 
         // Descend only into skeleton dirs, never into a real clone's tree.
-        const dotgit = try std.fs.path.join(alloc, &.{ full, ".git" });
+        const dotgit = try std.Io.Dir.path.join(alloc, &.{ full, ".git" });
         if (!fsutil.exists(dotgit)) try walker.enter(fsutil.io(), entry);
     }
 
@@ -785,12 +785,12 @@ test "checkD1: a planted symlink under projects is caught, one under archive too
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", .empty, .empty);
 
-    const projects_link = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "evil" });
+    const projects_link = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", "evil" });
     try fsutil.replaceSymlink("/nonexistent-huge-tree", projects_link);
 
-    const archive_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "archive", "acme", "old" });
+    const archive_dir = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "archive", "acme", "old" });
     try fsutil.ensureDir(archive_dir);
-    const archive_link = try std.fs.path.join(arena, &.{ archive_dir, "evil2" });
+    const archive_link = try std.Io.Dir.path.join(arena, &.{ archive_dir, "evil2" });
     try fsutil.replaceSymlink("/nonexistent-huge-tree-2", archive_link);
 
     const offenders = try checkD1(arena, &ws, false, null);
@@ -807,9 +807,9 @@ test "checkD1: the default scope covers kept/" {
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    const key_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "kept", "github.com", "acme", "w" });
+    const key_dir = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "kept", "github.com", "acme", "w" });
     try fsutil.ensureDir(key_dir);
-    try fsutil.replaceSymlink("/nonexistent", try std.fs.path.join(arena, &.{ key_dir, ".clasp.json" }));
+    try fsutil.replaceSymlink("/nonexistent", try std.Io.Dir.path.join(arena, &.{ key_dir, ".clasp.json" }));
 
     const offenders = try checkD1(arena, &ws, false, null);
     try testing.expectEqual(@as(usize, 1), offenders.len);
@@ -826,8 +826,8 @@ test "checkD1: default scope misses a symlink outside projects/archive/kept, --f
     const ws = try testutil.testWorkspace(arena, root);
 
     try fsutil.ensureDir(ws.cfg.synced_root);
-    const stray_link = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "backups", "evil" });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "backups" }));
+    const stray_link = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "backups", "evil" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "backups" }));
     try fsutil.replaceSymlink("/nonexistent", stray_link);
 
     const narrow = try checkD1(arena, &ws, false, null);
@@ -847,7 +847,7 @@ test "checkD1: counts each folder it lists into the progress, and names none onc
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    const deepest = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
+    const deepest = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj" });
     try fsutil.ensureDir(deepest);
 
     var progress: Progress = .{};
@@ -881,10 +881,10 @@ test "checkD2: passes by default, fails when code_root is synced or a .git dir l
     try testing.expect(try checkD2(arena, &ws));
 
     var synced_code_ws = ws;
-    synced_code_ws.cfg.code_root = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "code" });
+    synced_code_ws.cfg.code_root = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "code" });
     try testing.expect(!try checkD2(arena, &synced_code_ws));
 
-    const git_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", ".git" });
+    const git_dir = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "proj", ".git" });
     try fsutil.ensureDir(git_dir);
     try testing.expect(!try checkD2(arena, &ws));
 }
@@ -899,20 +899,20 @@ test "checkD2: a code_root symlink whose physical target lies inside synced_root
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    const inner = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "inner-code" });
+    const inner = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "inner-code" });
     try fsutil.ensureDir(inner);
 
     var symlinked_ws = ws;
-    symlinked_ws.cfg.code_root = try std.fs.path.join(arena, &.{ root, "code-link" });
+    symlinked_ws.cfg.code_root = try std.Io.Dir.path.join(arena, &.{ root, "code-link" });
     try fsutil.replaceSymlink(inner, symlinked_ws.cfg.code_root);
 
     try testing.expect(!try checkD2(arena, &symlinked_ws));
 
     // A code_root genuinely outside synced_root, symlink or not, still passes.
-    const outer = try std.fs.path.join(arena, &.{ root, "outer-code" });
+    const outer = try std.Io.Dir.path.join(arena, &.{ root, "outer-code" });
     try fsutil.ensureDir(outer);
     var outer_ws = ws;
-    outer_ws.cfg.code_root = try std.fs.path.join(arena, &.{ root, "outer-link" });
+    outer_ws.cfg.code_root = try std.Io.Dir.path.join(arena, &.{ root, "outer-link" });
     try fsutil.replaceSymlink(outer, outer_ws.cfg.code_root);
     try testing.expect(try checkD2(arena, &outer_ws));
 }
@@ -930,7 +930,7 @@ test "checkD3: passes by default, fails when hub_root is inside synced_root" {
     try testing.expect(try checkD3(arena, &ws));
 
     var synced_hub_ws = ws;
-    synced_hub_ws.cfg.hub_root = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "hub" });
+    synced_hub_ws.cfg.hub_root = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "hub" });
     try testing.expect(!try checkD3(arena, &synced_hub_ws));
 }
 
@@ -944,7 +944,7 @@ test "run: an orphaned hub entry with no marker is reported" {
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "gone" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "gone" }));
 
     const report = try run(arena, &ws, .{});
     try testing.expectEqual(@as(usize, 1), report.orphans.len);
@@ -968,10 +968,10 @@ test "run: an evicted marker is reported as evicted and suppresses its hub-orpha
 
     // An evicted project: only the placeholder on disk, plus a leftover hub
     // dir that would read as a hub orphan if eviction were not recognized.
-    const evicted_content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "gone" });
+    const evicted_content = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "gone" });
     try fsutil.ensureDir(evicted_content);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ evicted_content, marker.evicted_marker_basename }), .data = "" });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "gone" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ evicted_content, marker.evicted_marker_basename }), .data = "" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "gone" }));
 
     const report = try run(arena, &ws, .{});
     try testing.expectEqual(@as(usize, 1), report.evicted_markers.len);
@@ -993,14 +993,14 @@ test "run: a corrupted marker is reported as a failure, not fatal to the whole r
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", .empty, .empty);
 
-    const broken_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "broken" });
+    const broken_dir = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
-    const broken_marker = try std.fs.path.join(arena, &.{ broken_dir, marker.marker_basename });
+    const broken_marker = try std.Io.Dir.path.join(arena, &.{ broken_dir, marker.marker_basename });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = broken_marker, .data = "not json" });
 
     const report = try run(arena, &ws, .{});
     try testing.expectEqual(@as(usize, 1), report.marker_failures.len);
-    try testing.expect(std.mem.indexOf(u8, report.marker_failures[0].path, "broken") != null);
+    try testing.expect(std.mem.find(u8, report.marker_failures[0].path, "broken") != null);
     try testing.expect(!report.ok());
 }
 
@@ -1014,7 +1014,7 @@ test "run: a missing clone is reported with its would-be path" {
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
@@ -1034,13 +1034,13 @@ test "run: a member clone present but incomplete is reported under broken clones
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // Plant a half-finished clone at the member's identity path: a `.git`
     // with no commits (existence checks pass, HEAD does not resolve).
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" });
     try fsutil.ensureDir(clone_path);
     try testutil.runGit(&sb, clone_path, &.{ "init", "-q" });
 
@@ -1061,14 +1061,14 @@ test "run: --fix repairs a stale hub link but leaves a still-missing clone repor
     const root = try tmpRoot(arena, &tmp);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     const scan = try scanMarkers(arena, &ws);
     _ = try hub.reconcile(arena, &ws, &scan.ok[0], false);
 
-    const stale_link = try std.fs.path.join(arena, &.{ scan.ok[0].hub_path, "code", "gone" });
+    const stale_link = try std.Io.Dir.path.join(arena, &.{ scan.ok[0].hub_path, "code", "gone" });
     try fsutil.replaceSymlink("/nowhere", stale_link);
 
     const before = try run(arena, &ws, .{});

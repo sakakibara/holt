@@ -102,21 +102,21 @@ pub fn environNamesSsh(environ: *const std.process.Environ.Map) bool {
 /// without it a value starting with `-` is read by git as an option
 /// (`--upload-pack=<cmd>` names a command git runs) rather than a repository.
 pub fn clone(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, prompt: Prompt, diag: ?*diagnostic.Diagnostic) !void {
-    if (std.fs.path.dirname(dest)) |parent| try fsutil.ensureDir(parent);
+    if (std.Io.Dir.path.dirname(dest)) |parent| try fsutil.ensureDir(parent);
 
     var env: ?std.process.Environ.Map = null;
     defer if (env) |*m| m.deinit();
     if (prompt == .forbid) {
         env = try std.process.Environ.createMap(std.Io.Threaded.global_single_threaded.environ.process_environ, alloc);
         try env.?.put("GIT_TERMINAL_PROMPT", "0");
-        if (!environNamesSsh(&env.?) and !try configNamesSsh(alloc, std.fs.path.dirname(dest))) try env.?.put("GIT_SSH_COMMAND", batch_ssh);
+        if (!environNamesSsh(&env.?) and !try configNamesSsh(alloc, std.Io.Dir.path.dirname(dest))) try env.?.put("GIT_SSH_COMMAND", batch_ssh);
     }
 
     var random_bytes: [8]u8 = undefined;
     fsutil.io().random(&random_bytes);
     var suffix_buf: [16]u8 = undefined;
     const suffix = std.base64.url_safe_no_pad.Encoder.encode(&suffix_buf, &random_bytes);
-    const tmp = try std.fmt.allocPrint(alloc, "{s}.{s}.holt-tmp", .{ dest, suffix });
+    const tmp = try alloc.print("{s}.{s}.holt-tmp", .{ dest, suffix });
     defer alloc.free(tmp);
     defer std.Io.Dir.cwd().deleteTree(fsutil.io(), tmp) catch {};
 
@@ -157,7 +157,7 @@ fn configNamesSsh(alloc: std.mem.Allocator, dir: ?[]const u8) !bool {
 /// a branch starting with `-` is read by git as an option (`--detach` would
 /// silently make a detached worktree instead of failing on a bad ref).
 pub fn worktreeAdd(alloc: std.mem.Allocator, repo: []const u8, path: []const u8, branch: []const u8, diag: ?*diagnostic.Diagnostic) !void {
-    if (std.fs.path.dirname(path)) |parent| try fsutil.ensureDir(parent);
+    if (std.Io.Dir.path.dirname(path)) |parent| try fsutil.ensureDir(parent);
     // git's worktree admin links are recorded and matched on '/' even on
     // Windows; a native `\`-path here can fail to match on a later
     // `worktree remove`, so forward-slash it before handing it off.
@@ -268,7 +268,7 @@ fn ceilingEnviron(alloc: std.mem.Allocator, repo: []const u8) !std.process.Envir
     const real_env = std.Io.Threaded.global_single_threaded.environ.process_environ;
     var map = try std.process.Environ.createMap(real_env, alloc);
     errdefer map.deinit();
-    try map.put("GIT_CEILING_DIRECTORIES", std.fs.path.dirname(repo) orelse repo);
+    try map.put("GIT_CEILING_DIRECTORIES", std.Io.Dir.path.dirname(repo) orelse repo);
     try map.put("GIT_OPTIONAL_LOCKS", "0");
     try map.put("GIT_NO_LAZY_FETCH", "1");
     try map.put("GIT_NO_REPLACE_OBJECTS", "1");
@@ -587,7 +587,7 @@ fn parseStatusV2(alloc: std.mem.Allocator, out: []const u8) !RepoStatus {
             if (!std.mem.eql(u8, name, "(detached)")) branch = try alloc.dupe(u8, name);
         } else if (std.mem.startsWith(u8, line, "# branch.ab ")) {
             const rest = line["# branch.ab ".len..];
-            const ahead_str = rest[1 .. std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len];
+            const ahead_str = rest[1 .. std.mem.findScalar(u8, rest, ' ') orelse rest.len];
             const ahead = std.fmt.parseInt(u64, ahead_str, 10) catch 0;
             unpushed_state = if (ahead > 0) .ahead else .clean;
         } else if (!std.mem.startsWith(u8, line, "# ") and line.len > 0 and line[0] != '!') {
@@ -625,7 +625,7 @@ test "clone: populates dest from a makeBareRepo bare, checked out on main" {
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
 
-    const dest = try std.fs.path.join(testing.allocator, &.{ sb.root, "cloned" });
+    const dest = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "cloned" });
     defer testing.allocator.free(dest);
 
     try clone(testing.allocator, bare, dest, .allow, null);
@@ -640,7 +640,7 @@ test "clone: on failure, sets the diagnostic to a message containing the url" {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
 
-    const dest = try std.fs.path.join(testing.allocator, &.{ sb.root, "cloned" });
+    const dest = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "cloned" });
     defer testing.allocator.free(dest);
 
     var cd: diagnostic.Diagnostic = .{};
@@ -651,7 +651,7 @@ test "clone: on failure, sets the diagnostic to a message containing the url" {
     defer override.restore();
     try testing.expectError(error.GitCloneFailed, clone(testing.allocator, url, dest, .allow, &cd));
     defer testing.allocator.free(cd.message);
-    try testing.expect(std.mem.indexOf(u8, cd.message, url) != null);
+    try testing.expect(std.mem.find(u8, cd.message, url) != null);
 }
 
 test "clone: a url beginning with `-` is the repository git clones, not an option it parses" {
@@ -669,11 +669,11 @@ test "clone: a url beginning with `-` is the repository git clones, not an optio
     // fake url carries a scheme separator behind its leading `-`. Read as an
     // option instead, it is an unknown switch and the clone cannot happen.
     const url = "-dashy://holt-test.invalid/acme/widget";
-    const gitconfig_path = try std.fs.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
+    const gitconfig_path = try std.Io.Dir.path.join(arena, &.{ sb.root, "insteadof.gitconfig" });
     const override = try testutil.gitInsteadOf(arena, gitconfig_path, &.{.{ .url = url, .bare = bare }});
     defer override.restore();
 
-    const dest = try std.fs.path.join(arena, &.{ sb.root, "cloned" });
+    const dest = try std.Io.Dir.path.join(arena, &.{ sb.root, "cloned" });
     try clone(arena, url, dest, .allow, null);
 
     const branch = try currentBranch(arena, dest);
@@ -690,7 +690,7 @@ test "worktreeAdd: a branch beginning with `-` is a ref git rejects, not an opti
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
 
-    const wt_path = try std.fs.path.join(testing.allocator, &.{ sb.root, "wt" });
+    const wt_path = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "wt" });
     defer testing.allocator.free(wt_path);
 
     // Read as an option, "--detach" would quietly produce a detached worktree.
@@ -715,7 +715,7 @@ test "worktreeAdd: a backslashed path is slashed for git without leaking the cop
     // A `\` in the path makes forwardSlashed copy on every platform, so the
     // testing allocator bounds the copy's lifetime here, not only in Windows
     // CI where every absolute path carries one.
-    const wt_path = try std.fs.path.join(testing.allocator, &.{ sb.root, "wt\\sub" });
+    const wt_path = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "wt\\sub" });
     defer testing.allocator.free(wt_path);
 
     var d: diagnostic.Diagnostic = .{};
@@ -737,12 +737,12 @@ test "inspectable: true for a real repo, false for a plain directory and a nonex
 
     try testing.expect(try inspectable(testing.allocator, work));
 
-    const plain_dir = try std.fs.path.join(testing.allocator, &.{ sb.root, "plain" });
+    const plain_dir = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "plain" });
     defer testing.allocator.free(plain_dir);
     try fsutil.ensureDir(plain_dir);
     try testing.expect(!try inspectable(testing.allocator, plain_dir));
 
-    const missing = try std.fs.path.join(testing.allocator, &.{ sb.root, "does-not-exist" });
+    const missing = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "does-not-exist" });
     defer testing.allocator.free(missing);
     try testing.expect(!try inspectable(testing.allocator, missing));
 }
@@ -777,7 +777,7 @@ test "runInRepo: never resolves a parent repo above a non-repo subdirectory" {
     try testutil.runGit(&sb, null, &.{ "init", "-q", sb.root });
     try testutil.runGit(&sb, sb.root, &.{ "commit", "--allow-empty", "-m", "parent commit" });
 
-    const sub = try std.fs.path.join(testing.allocator, &.{ sb.root, "sub" });
+    const sub = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "sub" });
     defer testing.allocator.free(sub);
     try fsutil.ensureDir(sub);
 
@@ -799,14 +799,14 @@ test "isCompleteClone: true for a checked-out clone, false for an empty git init
 
     // An interrupted `git clone` leaves a `.git` with no commits; `git init`
     // reproduces exactly that state - inspectable, but not a complete clone.
-    const empty = try std.fs.path.join(testing.allocator, &.{ sb.root, "empty" });
+    const empty = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "empty" });
     defer testing.allocator.free(empty);
     try fsutil.ensureDir(empty);
     try testutil.runGit(&sb, empty, &.{ "init", "-q" });
     try testing.expect(try inspectable(testing.allocator, empty));
     try testing.expect(!try isCompleteClone(testing.allocator, empty));
 
-    const plain = try std.fs.path.join(testing.allocator, &.{ sb.root, "plain" });
+    const plain = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "plain" });
     defer testing.allocator.free(plain);
     try fsutil.ensureDir(plain);
     try testing.expect(!try isCompleteClone(testing.allocator, plain));
@@ -888,7 +888,7 @@ test "worktreeLocked: true only for the working tree git records as locked" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const wt = try std.fs.path.join(arena, &.{ sb.root, "wt" });
+    const wt = try std.Io.Dir.path.join(arena, &.{ sb.root, "wt" });
     const git_wt = try fsutil.forwardSlashed(arena, wt);
     try testutil.runGit(&sb, work, &.{ "worktree", "add", "-q", "-b", "feature", git_wt });
 
@@ -1059,11 +1059,11 @@ test "repoStatus: matches currentBranch (both null) on an unborn HEAD (empty clo
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
 
-    const bare = try std.fs.path.join(testing.allocator, &.{ sb.root, "empty-origin.git" });
+    const bare = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "empty-origin.git" });
     defer testing.allocator.free(bare);
     try testutil.runGit(&sb, null, &.{ "init", "--bare", bare });
 
-    const work = try std.fs.path.join(testing.allocator, &.{ sb.root, "unborn-clone" });
+    const work = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "unborn-clone" });
     defer testing.allocator.free(work);
     try testutil.runGit(&sb, null, &.{ "clone", bare, work });
 
@@ -1083,7 +1083,7 @@ test "repoStatus: errors on a corrupted .git, so the caller can map it to unread
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
 
-    const head_path = try std.fs.path.join(testing.allocator, &.{ work, ".git", "HEAD" });
+    const head_path = try std.Io.Dir.path.join(testing.allocator, &.{ work, ".git", "HEAD" });
     defer testing.allocator.free(head_path);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = head_path, .data = "garbage, not a ref\n" });
 
@@ -1131,7 +1131,7 @@ test "runInRepoScoped: git sees no variable that points it at another repository
     while (it.next()) |line| {
         for (set) |p| {
             if (std.mem.eql(u8, p[0], "GIT_CONFIG_PARAMETERS")) {
-                if (std.mem.startsWith(u8, line, "GIT_CONFIG_PARAMETERS=")) try testing.expect(std.mem.indexOf(u8, line, "elsewhere") == null);
+                if (std.mem.startsWith(u8, line, "GIT_CONFIG_PARAMETERS=")) try testing.expect(std.mem.find(u8, line, "elsewhere") == null);
                 continue;
             }
             try testing.expect(!(std.mem.startsWith(u8, line, p[0]) and line.len > p[0].len and line[p[0].len] == '='));
@@ -1159,7 +1159,7 @@ test "the git commands holt runs only to read never fetch a missing object, read
     for (runs) |res| {
         try testing.expectEqual(@as(u8, 0), res.status);
         for ([_][]const u8{ "GIT_NO_LAZY_FETCH=1\n", "GIT_NO_REPLACE_OBJECTS=1\n", "GIT_TERMINAL_PROMPT=0\n" }) |line| {
-            try testing.expect(std.mem.indexOf(u8, res.stdout, try std.mem.concat(a, u8, &.{ "\n", line })) != null or std.mem.startsWith(u8, res.stdout, line));
+            try testing.expect(std.mem.find(u8, res.stdout, try std.mem.concat(a, u8, &.{ "\n", line })) != null or std.mem.startsWith(u8, res.stdout, line));
         }
     }
 }

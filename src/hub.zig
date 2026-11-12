@@ -87,7 +87,7 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
             if (std.mem.eql(u8, entry.name, "code")) continue;
             try links.append(alloc, .{
                 .rel = try alloc.dupe(u8, entry.name),
-                .target = try std.fs.path.join(alloc, &.{ p.content_path, entry.name }),
+                .target = try std.Io.Dir.path.join(alloc, &.{ p.content_path, entry.name }),
                 .kind = try contentEntryKind(alloc, p.content_path, entry),
             });
         }
@@ -141,14 +141,14 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
             }
             if (collisions > 1) {
                 const owner_flat = if (id.isLocal()) try alloc.dupe(u8, "local") else try flattenOwner(alloc, id.owner);
-                break :blk try std.fmt.allocPrint(alloc, "{s}-{s}", .{ owner_flat, id.repo });
+                break :blk try alloc.print("{s}-{s}", .{ owner_flat, id.repo });
             }
             break :blk try alloc.dupe(u8, id.repo);
         };
 
         const clone_path = try id.clonePath(alloc, ws.cfg.code_root);
         try links.append(alloc, .{
-            .rel = try std.fmt.allocPrint(alloc, "code/{s}", .{code_name}),
+            .rel = try alloc.print("code/{s}", .{code_name}),
             .target = clone_path,
             .kind = .dir,
         });
@@ -158,10 +158,10 @@ pub fn desiredLinks(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Pr
         // slashy) branch tree inside it, so holt never names a branch. Linked
         // only when a real worktree is present, so an empty leftover dir (from
         // a raw `git worktree remove`) doesn't leave a link to nothing.
-        const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
+        const worktrees_dir = try alloc.print("{s}@worktrees", .{clone_path});
         if (try worktreesPresent(alloc, worktrees_dir)) {
             try links.append(alloc, .{
-                .rel = try std.fmt.allocPrint(alloc, "code/{s}@worktrees", .{code_name}),
+                .rel = try alloc.print("code/{s}@worktrees", .{code_name}),
                 .target = worktrees_dir,
                 .kind = .dir,
             });
@@ -184,7 +184,7 @@ fn contentEntryKind(alloc: std.mem.Allocator, content_path: []const u8, entry: s
     switch (entry.kind) {
         .directory => return .dir,
         .unknown => {
-            const full = try std.fs.path.join(alloc, &.{ content_path, entry.name });
+            const full = try std.Io.Dir.path.join(alloc, &.{ content_path, entry.name });
             const st = std.Io.Dir.cwd().statFile(fsutil.io(), full, .{ .follow_symlinks = false }) catch return .file;
             return if (st.kind == .directory) .dir else .file;
         },
@@ -203,8 +203,8 @@ fn worktreesPresent(alloc: std.mem.Allocator, dir_path: []const u8) !bool {
     defer walker.deinit();
     while (try walker.next(fsutil.io())) |entry| {
         if (entry.kind != .directory) continue;
-        const full = try std.fs.path.join(alloc, &.{ dir_path, entry.path });
-        if (fsutil.exists(try std.fs.path.join(alloc, &.{ full, ".git" }))) return true;
+        const full = try std.Io.Dir.path.join(alloc, &.{ dir_path, entry.path });
+        if (fsutil.exists(try std.Io.Dir.path.join(alloc, &.{ full, ".git" }))) return true;
         try walker.enter(fsutil.io(), entry);
     }
     return false;
@@ -250,10 +250,10 @@ fn sweepDir(
         // its contents are swept separately via the code/ subdir pass.
         if (prefix.len == 0 and entry.kind == .directory and std.mem.eql(u8, entry.name, "code")) continue;
 
-        const rel = try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, entry.name });
+        const rel = try alloc.print("{s}{s}", .{ prefix, entry.name });
         if (isDesired(links, rel)) continue;
 
-        const full_path = try std.fs.path.join(alloc, &.{ dir_path, entry.name });
+        const full_path = try std.Io.Dir.path.join(alloc, &.{ dir_path, entry.name });
         switch (entry.kind) {
             .sym_link => {
                 // At the hub root only prune links holt owns (targets under
@@ -318,7 +318,7 @@ pub fn reconcile(alloc: std.mem.Allocator, ws: *const Workspace, p: *const Proje
     const desired = try desiredLinks(alloc, ws, p);
     const links = desired.links;
     const want_code_dir = hasCodeLink(links);
-    const code_dir_path = try std.fs.path.join(alloc, &.{ p.hub_path, "code" });
+    const code_dir_path = try std.Io.Dir.path.join(alloc, &.{ p.hub_path, "code" });
 
     if (!dry_run) {
         try fsutil.ensureDir(p.hub_path);
@@ -412,12 +412,12 @@ pub fn removeHub(p: *const Project) !void {
     hub_dir.close(fsutil.io());
 
     fsutil.rmdirIfEmpty(p.hub_path);
-    if (std.fs.path.dirname(p.hub_path)) |org_hub_path| fsutil.rmdirIfEmpty(org_hub_path);
+    if (std.Io.Dir.path.dirname(p.hub_path)) |org_hub_path| fsutil.rmdirIfEmpty(org_hub_path);
 }
 
-fn testProject(alloc: std.mem.Allocator, ws: *const Workspace, org: []const u8, name: []const u8, repos: std.StringArrayHashMapUnmanaged([]const u8), aliases: std.StringArrayHashMapUnmanaged([]const u8)) !Project {
-    const content_path = try std.fs.path.join(alloc, &.{ ws.cfg.synced_root, "projects", org, name });
-    const hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, org, name });
+fn testProject(alloc: std.mem.Allocator, ws: *const Workspace, org: []const u8, name: []const u8, repos: std.array_hash_map.String([]const u8), aliases: std.array_hash_map.String([]const u8)) !Project {
+    const content_path = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.synced_root, "projects", org, name });
+    const hub_path = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.hub_root, org, name });
     var m: marker.Marker = .init(org, name);
     var rit = repos.iterator();
     while (rit.next()) |kv| try m.upsert(alloc, kv.key_ptr.*, kv.value_ptr.*);
@@ -437,8 +437,8 @@ fn tmpRoot(alloc: std.mem.Allocator, tmp: *testing.TmpDir) ![]u8 {
     return alloc.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 }
 
-fn oneRepo(alloc: std.mem.Allocator, name: []const u8, url: []const u8) !std.StringArrayHashMapUnmanaged([]const u8) {
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+fn oneRepo(alloc: std.mem.Allocator, name: []const u8, url: []const u8) !std.array_hash_map.String([]const u8) {
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(alloc, name, url);
     return repos;
 }
@@ -475,25 +475,25 @@ test "desiredLinks: content links plus one flat code link per repo, absolute tar
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "links" }));
 
     const links = (try desiredLinks(arena, &ws, &p)).links;
     try testing.expectEqual(@as(usize, 4), links.len);
 
     const docs = findRel(links, "docs") orelse return error.TestUnexpectedResult;
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ p.content_path, "docs" }), docs.target);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }), docs.target);
     try testing.expect(hasRel(links, "assets"));
     try testing.expect(hasRel(links, "links"));
 
     const code_holt = findRel(links, "code/holt") orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings(
-        try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" }),
+        try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" }),
         code_holt.target,
     );
 }
@@ -512,15 +512,15 @@ test "desiredLinks: mirrors every content entry except the marker and code" {
     const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
     // Create real content entries on disk, plus the marker and a stray "code".
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "notes" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "notes" }));
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
-        .sub_path = try std.fs.path.join(arena, &.{ p.content_path, "plan.md" }),
+        .sub_path = try std.Io.Dir.path.join(arena, &.{ p.content_path, "plan.md" }),
         .data = "x\n",
     });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
-        .sub_path = try std.fs.path.join(arena, &.{ p.content_path, marker.marker_basename }),
+        .sub_path = try std.Io.Dir.path.join(arena, &.{ p.content_path, marker.marker_basename }),
         .data = "{}\n",
     });
 
@@ -549,9 +549,9 @@ test "desiredLinks: tags a content directory .dir and a content file .file" {
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "acme", "widget", repos, .empty);
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{
-        .sub_path = try std.fs.path.join(arena, &.{ p.content_path, "notes.md" }),
+        .sub_path = try std.Io.Dir.path.join(arena, &.{ p.content_path, "notes.md" }),
         .data = "hi",
     });
 
@@ -576,7 +576,7 @@ test "desiredLinks: colliding short names go owner-qualified, others stay flat" 
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
@@ -609,7 +609,7 @@ test "desiredLinks: colliding local repo qualifies as local-<name>" {
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "scratch", "local:scratch");
     try repos.put(arena, "scratch2", "https://github.com/acme/scratch");
     const p = try testProject(arena, &ws, "org", "proj", repos, .empty);
@@ -633,9 +633,9 @@ test "desiredLinks: an aliased repo links as code/<alias> at its real clone path
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var aliases: std.array_hash_map.String([]const u8) = .empty;
     try aliases.put(arena, "holt", "gadget");
     const p = try testProject(arena, &ws, "acme", "proj", repos, aliases);
 
@@ -646,7 +646,7 @@ test "desiredLinks: an aliased repo links as code/<alias> at its real clone path
         if (std.mem.eql(u8, l.rel, "code/gadget")) {
             saw_alias = true;
             try testing.expectEqualStrings(
-                try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" }),
+                try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" }),
                 l.target,
             );
         }
@@ -665,10 +665,10 @@ test "desiredLinks: aliasing one of two colliding members frees the other to sta
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var aliases: std.array_hash_map.String([]const u8) = .empty;
     try aliases.put(arena, "docs-a", "mydocs");
     const p = try testProject(arena, &ws, "org", "proj", repos, aliases);
 
@@ -794,7 +794,7 @@ test "reconcile: an ignored alias links the member under its own name, nothing o
     // replaceLink would otherwise remove it before writing its own. The
     // target is relative and separator-free because Windows rewrites `/` in
     // a target, and the read-back below compares it byte for byte.
-    const planted = try std.fs.path.join(arena, &.{ root, "planted" });
+    const planted = try std.Io.Dir.path.join(arena, &.{ root, "planted" });
     try fsutil.replaceSymlink("planted-target", planted);
 
     const report = try reconcile(arena, &ws, &p, false);
@@ -802,7 +802,7 @@ test "reconcile: an ignored alias links the member under its own name, nothing o
     try testing.expectEqual(@as(usize, 1), report.ignored_aliases.len);
     try testing.expectEqualStrings("holt", report.ignored_aliases[0]);
     try testing.expectEqual(@as(u32, 1), report.created);
-    try testing.expect(try symlinkExists(arena, try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" })));
+    try testing.expect(try symlinkExists(arena, try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "holt" })));
     switch (try fsutil.linkState(arena, planted)) {
         .symlink => |t| try testing.expectEqualStrings("planted-target", t),
         else => return error.TestUnexpectedResult,
@@ -861,7 +861,7 @@ test "reconcile: an unresolvable member costs only its own link" {
         \\}
     );
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
 
     const report = try reconcile(arena, &ws, &p, false);
 
@@ -869,10 +869,10 @@ test "reconcile: an unresolvable member costs only its own link" {
     try testing.expectEqualStrings("evil", report.unresolved_members[0]);
     // docs plus code/holt: the sound member and the content mirror are linked.
     try testing.expectEqual(@as(u32, 2), report.created);
-    try testing.expect(try symlinkExists(arena, try std.fs.path.join(arena, &.{ p.hub_path, "docs" })));
-    try testing.expect(try symlinkExists(arena, try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" })));
+    try testing.expect(try symlinkExists(arena, try std.Io.Dir.path.join(arena, &.{ p.hub_path, "docs" })));
+    try testing.expect(try symlinkExists(arena, try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "holt" })));
     // Nothing is created for the bad member, above all not outside the hub.
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ root, "evil" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ root, "evil" })));
 }
 
 test "reconcile: a project whose every member is unresolvable grows no code dir" {
@@ -897,7 +897,7 @@ test "reconcile: a project whose every member is unresolvable grows no code dir"
     const report = try reconcile(arena, &ws, &p, false);
 
     try testing.expectEqual(@as(usize, 1), report.unresolved_members.len);
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ p.hub_path, "code" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code" })));
 }
 
 test "reconcile: code dir exists only when the project has repos" {
@@ -912,17 +912,17 @@ test "reconcile: code dir exists only when the project has repos" {
     const ws = try testutil.testWorkspace(arena, root);
 
     // Repo-less project: no code/ dir after reconcile.
-    const empty_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    const empty_repos: std.array_hash_map.String([]const u8) = .empty;
     const p0 = try testProject(arena, &ws, "acme", "docsonly", empty_repos, .empty);
     _ = try reconcile(arena, &ws, &p0, false);
-    const code0 = try std.fs.path.join(arena, &.{ p0.hub_path, "code" });
+    const code0 = try std.Io.Dir.path.join(arena, &.{ p0.hub_path, "code" });
     try testing.expect(!fsutil.exists(code0));
 
     // Project with a repo: code/ dir present.
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
     const p1 = try testProject(arena, &ws, "acme", "withcode", repos, .empty);
     _ = try reconcile(arena, &ws, &p1, false);
-    const code1 = try std.fs.path.join(arena, &.{ p1.hub_path, "code" });
+    const code1 = try std.Io.Dir.path.join(arena, &.{ p1.hub_path, "code" });
     try testing.expect(fsutil.exists(code1));
 }
 
@@ -940,7 +940,7 @@ test "reconcile: an emptied code dir is pruned when the last repo is removed" {
     var p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
-    const code_dir = try std.fs.path.join(arena, &.{ p.hub_path, "code" });
+    const code_dir = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code" });
     try testing.expect(fsutil.exists(code_dir));
 
     _ = p.marker.remove("holt");
@@ -962,9 +962,9 @@ test "reconcile: fresh build creates all links with correct targets" {
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "links" }));
 
     const report = try reconcile(arena, &ws, &p, false);
     try testing.expectEqual(@as(u32, 4), report.created);
@@ -972,18 +972,18 @@ test "reconcile: fresh build creates all links with correct targets" {
     try testing.expectEqual(@as(u32, 0), report.removed);
     try testing.expectEqual(@as(usize, 0), report.conflicts.len);
 
-    const docs_link = try std.fs.path.join(arena, &.{ p.hub_path, "docs" });
+    const docs_link = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "docs" });
     const state = try fsutil.linkState(arena, docs_link);
     switch (state) {
-        .symlink => |t| try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ p.content_path, "docs" }), t),
+        .symlink => |t| try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }), t),
         else => return error.TestUnexpectedResult,
     }
 
-    const code_link = try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" });
+    const code_link = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "holt" });
     const code_state = try fsutil.linkState(arena, code_link);
     switch (code_state) {
         .symlink => |t| try testing.expectEqualStrings(
-            try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" }),
+            try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" }),
             t,
         ),
         else => return error.TestUnexpectedResult,
@@ -1004,7 +1004,7 @@ test "reconcile: a file mirror that cannot be linked is recorded, not created, n
 
     // One content file whose mirror will be forced to "skip".
     try fsutil.ensureDir(p.content_path);
-    try fsutil.writeFileAtomic(arena, try std.fs.path.join(arena, &.{ p.content_path, "notes.md" }), "hi");
+    try fsutil.writeFileAtomic(arena, try std.Io.Dir.path.join(arena, &.{ p.content_path, "notes.md" }), "hi");
 
     force_skip_file_links_for_test = true;
     defer force_skip_file_links_for_test = false;
@@ -1016,7 +1016,7 @@ test "reconcile: a file mirror that cannot be linked is recorded, not created, n
     // A skip is not a create: the file is the only desired link here.
     try testing.expectEqual(@as(u32, 0), report.created);
     // Not counted as created, and no link on disk.
-    const link_path = try std.fs.path.join(arena, &.{ p.hub_path, "notes.md" });
+    const link_path = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "notes.md" });
     try testing.expect(!fsutil.exists(link_path));
 }
 
@@ -1054,7 +1054,7 @@ test "reconcile: a second run over an already-correct hub retargets nothing" {
     const ws = try testutil.testWorkspace(arena, root);
     const p = try testProject(arena, &ws, "acme", "widget", .empty, .empty);
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
 
     const first = try reconcile(arena, &ws, &p, false);
     try testing.expect(first.created > 0);
@@ -1087,11 +1087,11 @@ test "reconcile: a marker URL change retargets the existing link" {
     try testing.expectEqual(@as(u32, 1), report.retargeted);
     try testing.expectEqual(@as(u32, 0), report.removed);
 
-    const code_link = try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" });
+    const code_link = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "holt" });
     const state = try fsutil.linkState(arena, code_link);
     switch (state) {
         .symlink => |t| try testing.expectEqualStrings(
-            try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "newowner", "holt" }),
+            try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "newowner", "holt" }),
             t,
         ),
         else => return error.TestUnexpectedResult,
@@ -1112,7 +1112,7 @@ test "reconcile: a stale extra symlink is swept" {
     const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
-    const stale_link = try std.fs.path.join(arena, &.{ p.hub_path, "code", "gone" });
+    const stale_link = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "gone" });
     try fsutil.replaceSymlink("/nowhere", stale_link);
 
     const report = try reconcile(arena, &ws, &p, false);
@@ -1135,7 +1135,7 @@ test "reconcile: a real file in code/ is a conflict and is preserved" {
     const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
-    const stray_path = try std.fs.path.join(arena, &.{ p.hub_path, "code", "stray.txt" });
+    const stray_path = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "stray.txt" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = stray_path, .data = "keep me" });
 
     const report = try reconcile(arena, &ws, &p, false);
@@ -1158,9 +1158,9 @@ test "reconcile: dry_run computes the report without touching disk" {
     const repos = try oneRepo(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "links" }));
 
     const report = try reconcile(arena, &ws, &p, true);
     try testing.expectEqual(@as(u32, 4), report.created);
@@ -1181,27 +1181,27 @@ test "reconcile: collision case links both members owner-qualified, third stays 
     const root = try tmpRoot(arena, &tmp);
 
     const ws = try testutil.testWorkspace(arena, root);
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "docs-a", "https://github.com/sakakibara/docs");
     try repos.put(arena, "docs-b", "https://github.com/acme/docs");
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     const p = try testProject(arena, &ws, "org", "proj", repos, .empty);
 
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "docs" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "assets" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ p.content_path, "links" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "docs" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "assets" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ p.content_path, "links" }));
 
     const report = try reconcile(arena, &ws, &p, false);
     try testing.expectEqual(@as(u32, 6), report.created);
     try testing.expectEqual(@as(usize, 0), report.conflicts.len);
 
-    const flat_holt = try std.fs.path.join(arena, &.{ p.hub_path, "code", "holt" });
+    const flat_holt = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "holt" });
     try testing.expect(try symlinkExists(arena, flat_holt));
-    const sakakibara_docs = try std.fs.path.join(arena, &.{ p.hub_path, "code", "sakakibara-docs" });
+    const sakakibara_docs = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "sakakibara-docs" });
     try testing.expect(try symlinkExists(arena, sakakibara_docs));
-    const acme_docs = try std.fs.path.join(arena, &.{ p.hub_path, "code", "acme-docs" });
+    const acme_docs = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "acme-docs" });
     try testing.expect(try symlinkExists(arena, acme_docs));
-    const bare_docs = try std.fs.path.join(arena, &.{ p.hub_path, "code", "docs" });
+    const bare_docs = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "code", "docs" });
     try testing.expect(!try symlinkExists(arena, bare_docs));
 }
 
@@ -1221,22 +1221,22 @@ test "sweepDir: hub root leaves loose files and foreign symlinks, prunes stale m
     try fsutil.ensureDir(p.hub_path);
 
     // A loose local real file at the hub root.
-    const loose = try std.fs.path.join(arena, &.{ p.hub_path, "notes.md" });
+    const loose = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "notes.md" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = loose, .data = "x\n" });
 
     // A stale mirror symlink (target under content) whose content entry is gone.
-    const stale = try std.fs.path.join(arena, &.{ p.hub_path, "gone" });
-    try fsutil.replaceSymlink(try std.fs.path.join(arena, &.{ p.content_path, "gone" }), stale);
+    const stale = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "gone" });
+    try fsutil.replaceSymlink(try std.Io.Dir.path.join(arena, &.{ p.content_path, "gone" }), stale);
 
     // A foreign symlink (target outside content and code_root).
-    const foreign = try std.fs.path.join(arena, &.{ p.hub_path, "external" });
+    const foreign = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "external" });
     try fsutil.replaceSymlink("/tmp", foreign);
 
     const report = try reconcile(arena, &ws, &p, false);
 
     // Loose file survives, is not a conflict.
     try testing.expect(fsutil.exists(loose));
-    for (report.conflicts) |c| try testing.expect(std.mem.indexOf(u8, c, "notes.md") == null);
+    for (report.conflicts) |c| try testing.expect(std.mem.find(u8, c, "notes.md") == null);
     // Foreign symlink survives.
     switch (try fsutil.linkState(arena, foreign)) {
         .symlink => {},
@@ -1282,14 +1282,14 @@ test "removeHub: a real file left behind keeps the hub dir but drops the links" 
     const p = try testProject(arena, &ws, "acme", "proj", repos, .empty);
     _ = try reconcile(arena, &ws, &p, false);
 
-    const stray_path = try std.fs.path.join(arena, &.{ p.hub_path, "keep.txt" });
+    const stray_path = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "keep.txt" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = stray_path, .data = "keep me" });
 
     try removeHub(&p);
 
     try testing.expect(fsutil.exists(p.hub_path));
     try testing.expect(fsutil.exists(stray_path));
-    const docs_link = try std.fs.path.join(arena, &.{ p.hub_path, "docs" });
+    const docs_link = try std.Io.Dir.path.join(arena, &.{ p.hub_path, "docs" });
     try testing.expectEqual(fsutil.LinkState.missing, try fsutil.linkState(arena, docs_link));
 }
 
@@ -1299,6 +1299,6 @@ test "fsutil.joinSlashy joins a slash-keyed rel under the hub using the platform
     const arena = arena_state.allocator();
 
     const got = try fsutil.joinSlashy(arena, "/hub/acme/proj", "code/backend");
-    const want = try std.fs.path.join(arena, &.{ "/hub/acme/proj", "code", "backend" });
+    const want = try std.Io.Dir.path.join(arena, &.{ "/hub/acme/proj", "code", "backend" });
     try testing.expectEqualStrings(want, got);
 }

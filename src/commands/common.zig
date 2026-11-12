@@ -28,14 +28,14 @@ const testing = std.testing;
 pub fn reportProjectFailure(ctx: *app.Ctx, query: []const u8, found: workspace.FindResult) anyerror!u8 {
     switch (found) {
         .none => {
-            if (std.mem.indexOfScalar(u8, query, '/')) |slash| {
+            if (std.mem.findScalar(u8, query, '/')) |slash| {
                 const org = query[0..slash];
                 const name = query[slash + 1 ..];
                 if (try ctx.context.?.ws.hasMalformedMarker(ctx.alloc, org, name)) {
                     try ctx.err.print("holt: {s}/{s} has a malformed marker (run \"holt doctor\")\n", .{ org, name });
                     return 1;
                 }
-                const content_path = try std.fs.path.join(ctx.alloc, &.{ try ctx.context.?.ws.projectsRoot(ctx.alloc), org, name });
+                const content_path = try std.Io.Dir.path.join(ctx.alloc, &.{ try ctx.context.?.ws.projectsRoot(ctx.alloc), org, name });
                 if (marker.markerEvicted(ctx.alloc, content_path)) {
                     try ctx.err.print("holt: {s}/{s}'s marker is evicted from local storage; open its folder to download it, then retry\n", .{ org, name });
                     return 1;
@@ -85,12 +85,12 @@ pub fn projectFromCwd(ctx: *app.Ctx) !?project_mod.Project {
     if (cwd_real.len == hub_real.len) return null;
 
     const rel = cwd_real[hub_real.len + 1 ..];
-    var parts = std.mem.splitScalar(u8, rel, std.fs.path.sep);
+    var parts = std.mem.splitScalar(u8, rel, std.Io.Dir.path.sep);
     const org = parts.next() orelse return null;
     const name = parts.next() orelse return null;
     if (org.len == 0 or name.len == 0) return null;
 
-    const query = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ org, name });
+    const query = try alloc.print("{s}/{s}", .{ org, name });
     const found = try ws.find(alloc, query);
     switch (found) {
         .one => |p| return p,
@@ -107,7 +107,7 @@ pub const OrgName = struct { org: []const u8, name: []const u8 };
 /// `holt list --repos` prints it.
 pub fn codeKey(alloc: std.mem.Allocator, code_root: []const u8, clone_path: []const u8) ![]const u8 {
     const rel = try alloc.dupe(u8, if (clone_path.len > code_root.len and fsutil.pathIsInside(clone_path, code_root)) clone_path[code_root.len + 1 ..] else clone_path);
-    if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+    if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
     return rel;
 }
 
@@ -124,7 +124,7 @@ pub fn validateSegment(comptime kind: enum { org, name }, seg: []const u8) ?[]co
     if (seg.len > 255) return "is longer than 255 bytes";
     if (std.ascii.isWhitespace(seg[0]) or std.ascii.isWhitespace(seg[seg.len - 1]))
         return "cannot have leading or trailing whitespace";
-    if (std.mem.indexOfScalar(u8, seg, '/') != null) return "cannot contain a \"/\"";
+    if (std.mem.findScalar(u8, seg, '/') != null) return "cannot contain a \"/\"";
     if (std.mem.eql(u8, seg, ".") or std.mem.eql(u8, seg, ".."))
         return "cannot be \".\" or \"..\"";
     for (seg) |c| {
@@ -148,7 +148,7 @@ pub fn validateSegment(comptime kind: enum { org, name }, seg: []const u8) ?[]co
 /// a project name is one path segment). Callers turn null into a usage error
 /// and can name the specific reason via `parseOrgNameMessage`.
 pub fn parseOrgName(spec: []const u8) ?OrgName {
-    const slash = std.mem.indexOfScalar(u8, spec, '/') orelse return null;
+    const slash = std.mem.findScalar(u8, spec, '/') orelse return null;
     const org = spec[0..slash];
     const name = spec[slash + 1 ..];
     if (validateSegment(.org, org) != null) return null;
@@ -160,15 +160,15 @@ pub fn parseOrgName(spec: []const u8) ?OrgName {
 /// segment failed and why (or the bare "<org>/<name>" form on a missing
 /// slash). Callers assign the result to `ctx.args.message`.
 pub fn parseOrgNameMessage(alloc: std.mem.Allocator, spec: []const u8) ![]const u8 {
-    const slash = std.mem.indexOfScalar(u8, spec, '/') orelse
-        return std.fmt.allocPrint(alloc, "expected \"<org>/<name>\", got \"{s}\"", .{spec});
+    const slash = std.mem.findScalar(u8, spec, '/') orelse
+        return alloc.print("expected \"<org>/<name>\", got \"{s}\"", .{spec});
     const org = spec[0..slash];
     const name = spec[slash + 1 ..];
     if (validateSegment(.org, org)) |why|
-        return std.fmt.allocPrint(alloc, "invalid org name \"{s}\": {s}", .{ org, why });
+        return alloc.print("invalid org name \"{s}\": {s}", .{ org, why });
     if (validateSegment(.name, name)) |why|
-        return std.fmt.allocPrint(alloc, "invalid project name \"{s}\": {s}", .{ name, why });
-    return std.fmt.allocPrint(alloc, "expected \"<org>/<name>\", got \"{s}\"", .{spec});
+        return alloc.print("invalid project name \"{s}\": {s}", .{ name, why });
+    return alloc.print("expected \"<org>/<name>\", got \"{s}\"", .{spec});
 }
 
 /// Moves `from` to `to`, creating `to`'s parent directory first so the move
@@ -203,8 +203,8 @@ pub fn moveClone(ctx: *app.Ctx, from: []const u8, to: []const u8) !void {
     try moveDir(ctx, from, to);
 
     const alloc = ctx.alloc;
-    const from_wt = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{from});
-    const to_wt = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{to});
+    const from_wt = try alloc.print("{s}@worktrees", .{from});
+    const to_wt = try alloc.print("{s}@worktrees", .{to});
     var wt_failed: ?anyerror = null;
     if (fsutil.exists(from_wt)) fsutil.moveTree(alloc, from_wt, to_wt) catch |err| {
         wt_failed = err;
@@ -250,10 +250,10 @@ fn relinkMoved(ctx: *app.Ctx, from: []const u8, to: []const u8, wt_moved: bool) 
         const old_tree = try deleter.resolvedPath(a, at);
         const tree = try movedPath(a, old_tree, from_real, to_real, wt_moved);
         if (!try deleter.findsRecord(a, tree, rec.record)) {
-            const old = kept.content.readSmall(a, try std.fs.path.join(a, &.{ tree, ".git" })) catch continue;
+            const old = kept.content.readSmall(a, try std.Io.Dir.path.join(a, &.{ tree, ".git" })) catch continue;
             const line = std.mem.trimEnd(u8, old, " \t\r\n");
             if (!std.mem.startsWith(u8, line, "gitdir: ")) continue;
-            const named = try deleter.resolvedPath(a, try std.fs.path.resolve(a, &.{ old_tree, line["gitdir: ".len..] }));
+            const named = try deleter.resolvedPath(a, try std.Io.Dir.path.resolveAlloc(a, &.{ old_tree, line["gitdir: ".len..] }));
             if (!std.mem.eql(u8, named, old_record)) continue;
             deleter.writeLink(a, tree, rec.record, old) catch |err| switch (err) {
                 error.OutOfMemory => return err,
@@ -264,7 +264,7 @@ fn relinkMoved(ctx: *app.Ctx, from: []const u8, to: []const u8, wt_moved: bool) 
             };
         }
         if (std.mem.eql(u8, try deleter.resolvedPath(a, now), tree)) continue;
-        fsutil.writeFileAtomic(a, try std.fs.path.join(a, &.{ rec.record, "gitdir" }), try deleter.recordText(a, tree)) catch |err| {
+        fsutil.writeFileAtomic(a, try std.Io.Dir.path.join(a, &.{ rec.record, "gitdir" }), try deleter.recordText(a, tree)) catch |err| {
             try ctx.err.print("holt: moved clone but could not point the record of its worktree {s} at it ({s}) (run: {s})\n", .{ try app.tilde(ctx, tree), @errorName(err), try deleter.repointCmd(ctx, rec.record, tree) });
         };
     }
@@ -305,9 +305,9 @@ pub fn cloneIfAbsent(ctx: *app.Ctx, url: []const u8, clone_path: []const u8) !bo
             // A failed clone still left the ensureDir'd parent scaffold behind;
             // prune it back up to (but never above) code_root, leaving a
             // shared owner/host dir with other clones untouched.
-            if (std.fs.path.dirname(clone_path)) |owner_dir| {
+            if (std.Io.Dir.path.dirname(clone_path)) |owner_dir| {
                 fsutil.rmdirIfEmpty(owner_dir);
-                if (std.fs.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
+                if (std.Io.Dir.path.dirname(owner_dir)) |host_dir| fsutil.rmdirIfEmpty(host_dir);
             }
             return err;
         },
@@ -340,14 +340,14 @@ pub fn reportHubFailure(ctx: *app.Ctx, org: []const u8, name: []const u8, err: a
 pub fn moveProject(ctx: *app.Ctx, ws: *const workspace.Workspace, p: *const project_mod.Project, new_org: []const u8, new_name: []const u8) !void {
     const alloc = ctx.alloc;
     const projects_root = try ws.projectsRoot(alloc);
-    const dest_path = try std.fs.path.join(alloc, &.{ projects_root, new_org, new_name });
+    const dest_path = try std.Io.Dir.path.join(alloc, &.{ projects_root, new_org, new_name });
 
     try moveDir(ctx, p.content_path, dest_path);
 
     var new_marker = p.marker;
     new_marker.org = new_org;
     new_marker.name = new_name;
-    const marker_path = try std.fs.path.join(alloc, &.{ dest_path, marker.marker_basename });
+    const marker_path = try std.Io.Dir.path.join(alloc, &.{ dest_path, marker.marker_basename });
     try marker.save(&new_marker, marker_path);
 
     hub.removeHub(p) catch |err| {
@@ -355,7 +355,7 @@ pub fn moveProject(ctx: *app.Ctx, ws: *const workspace.Workspace, p: *const proj
         return err;
     };
 
-    const new_hub_path = try std.fs.path.join(alloc, &.{ ws.cfg.hub_root, new_org, new_name });
+    const new_hub_path = try std.Io.Dir.path.join(alloc, &.{ ws.cfg.hub_root, new_org, new_name });
     const new_p: project_mod.Project = .{ .org = new_org, .name = new_name, .content_path = dest_path, .hub_path = new_hub_path, .marker = new_marker };
     _ = hub.reconcile(alloc, ws, &new_p, false) catch |err| {
         try reportHubFailure(ctx, new_org, new_name, err);
@@ -418,13 +418,13 @@ test "parseOrgName: rejects a traversal or slashed segment and reports which par
     const arena = arena_state.allocator();
 
     const org_msg = try parseOrgNameMessage(arena, "../x");
-    try testing.expect(std.mem.indexOf(u8, org_msg, "invalid org name") != null);
+    try testing.expect(std.mem.find(u8, org_msg, "invalid org name") != null);
 
     const name_msg = try parseOrgNameMessage(arena, "acme/..");
-    try testing.expect(std.mem.indexOf(u8, name_msg, "invalid project name") != null);
+    try testing.expect(std.mem.find(u8, name_msg, "invalid project name") != null);
 
     const no_slash = try parseOrgNameMessage(arena, "widget");
-    try testing.expect(std.mem.indexOf(u8, no_slash, "<org>/<name>") != null);
+    try testing.expect(std.mem.find(u8, no_slash, "<org>/<name>") != null);
 }
 
 test "reportProjectFailure: an evicted marker gets a download-it message, not a bare no-match" {
@@ -438,9 +438,9 @@ test "reportProjectFailure: an evicted marker gets a download-it message, not a 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    const evicted_content = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "gone" });
+    const evicted_content = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "gone" });
     try fsutil.ensureDir(evicted_content);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ evicted_content, marker.evicted_marker_basename }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ evicted_content, marker.evicted_marker_basename }), .data = "" });
 
     var out: std.Io.Writer.Allocating = .init(arena);
     defer out.deinit();
@@ -452,8 +452,8 @@ test "reportProjectFailure: an evicted marker gets a download-it message, not a 
     _ = try reportProjectFailure(&ctx, "acme/gone", found);
 
     const reported = err_w.written();
-    try testing.expect(std.mem.indexOf(u8, reported, "evicted") != null);
-    try testing.expect(std.mem.indexOf(u8, reported, "acme/gone") != null);
+    try testing.expect(std.mem.find(u8, reported, "evicted") != null);
+    try testing.expect(std.mem.find(u8, reported, "acme/gone") != null);
 }
 
 test "moveDir: a move that fails reports both paths and the error, not a bare error name" {
@@ -466,8 +466,8 @@ test "moveDir: a move that fails reports both paths and the error, not a bare er
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const from = try std.fs.path.join(arena, &.{ root, "does-not-exist" });
-    const to = try std.fs.path.join(arena, &.{ root, "dest", "widget" });
+    const from = try std.Io.Dir.path.join(arena, &.{ root, "does-not-exist" });
+    const to = try std.Io.Dir.path.join(arena, &.{ root, "dest", "widget" });
 
     var out: std.Io.Writer.Allocating = .init(arena);
     defer out.deinit();
@@ -478,10 +478,10 @@ test "moveDir: a move that fails reports both paths and the error, not a bare er
     try testing.expectError(error.FileNotFound, moveDir(&ctx, from, to));
 
     const reported = err_w.written();
-    try testing.expect(std.mem.indexOf(u8, reported, "failed to move") != null);
+    try testing.expect(std.mem.find(u8, reported, "failed to move") != null);
     const env = app.envOf_current();
-    try testing.expect(std.mem.indexOf(u8, reported, try fsutil.contractTilde(arena, env, from)) != null);
-    try testing.expect(std.mem.indexOf(u8, reported, try fsutil.contractTilde(arena, env, to)) != null);
+    try testing.expect(std.mem.find(u8, reported, try fsutil.contractTilde(arena, env, from)) != null);
+    try testing.expect(std.mem.find(u8, reported, try fsutil.contractTilde(arena, env, to)) != null);
 }
 
 test "removeContent: a delete that fails reports the path and the error, not a bare error name" {
@@ -503,7 +503,7 @@ test "removeContent: a delete that fails reports the path and the error, not a b
 
         var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-        const target_path = try std.fs.path.join(arena, &.{ root, "parent", "target" });
+        const target_path = try std.Io.Dir.path.join(arena, &.{ root, "parent", "target" });
 
         var out: std.Io.Writer.Allocating = .init(arena);
         defer out.deinit();
@@ -514,8 +514,8 @@ test "removeContent: a delete that fails reports the path and the error, not a b
         try testing.expectError(error.AccessDenied, removeContent(&ctx, target_path));
 
         const reported = err_w.written();
-        try testing.expect(std.mem.indexOf(u8, reported, "failed to delete") != null);
-        try testing.expect(std.mem.indexOf(u8, reported, try fsutil.contractTilde(arena, app.envOf_current(), target_path)) != null);
+        try testing.expect(std.mem.find(u8, reported, "failed to delete") != null);
+        try testing.expect(std.mem.find(u8, reported, try fsutil.contractTilde(arena, app.envOf_current(), target_path)) != null);
     }
 }
 
@@ -528,7 +528,7 @@ test "cloneIfAbsent: an incomplete clone already at the destination is refused, 
     defer sb.deinit();
 
     // A `.git` with no commits, exactly what a killed `git clone` leaves.
-    const clone_path = try std.fs.path.join(arena, &.{ sb.root, "host", "owner", "repo" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ sb.root, "host", "owner", "repo" });
     try fsutil.ensureDir(clone_path);
     try testutil.runGit(&sb, clone_path, &.{ "init", "-q" });
 
@@ -539,7 +539,7 @@ test "cloneIfAbsent: an incomplete clone already at the destination is refused, 
     var ctx: app.Ctx = .{ .alloc = arena, .io = testing.io, .context = null, .out = &out.writer, .err = &err_w.writer };
 
     try testing.expectError(error.IncompleteClone, cloneIfAbsent(&ctx, "https://holt-test.invalid/x/y", clone_path));
-    try testing.expect(std.mem.indexOf(u8, err_w.written(), "incomplete") != null);
+    try testing.expect(std.mem.find(u8, err_w.written(), "incomplete") != null);
 }
 
 test "cloneIfAbsent: a failed clone prunes the empty owner and host scaffold it created" {
@@ -555,7 +555,7 @@ test "cloneIfAbsent: a failed clone prunes the empty owner and host scaffold it 
     const url = "https://127.0.0.1/acme/widget";
     const override = try testutil.gitUnreachable(arena, root, &.{url});
     defer override.restore();
-    const clone_path = try std.fs.path.join(arena, &.{ root, "127.0.0.1", "acme", "widget" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ root, "127.0.0.1", "acme", "widget" });
 
     var out: std.Io.Writer.Allocating = .init(arena);
     defer out.deinit();
@@ -565,8 +565,8 @@ test "cloneIfAbsent: a failed clone prunes the empty owner and host scaffold it 
 
     try testing.expectError(error.GitCloneFailed, cloneIfAbsent(&ctx, url, clone_path));
 
-    const owner_dir = try std.fs.path.join(arena, &.{ root, "127.0.0.1", "acme" });
-    const host_dir = try std.fs.path.join(arena, &.{ root, "127.0.0.1" });
+    const owner_dir = try std.Io.Dir.path.join(arena, &.{ root, "127.0.0.1", "acme" });
+    const host_dir = try std.Io.Dir.path.join(arena, &.{ root, "127.0.0.1" });
     try testing.expect(!fsutil.exists(owner_dir));
     try testing.expect(!fsutil.exists(host_dir));
 }
@@ -582,10 +582,10 @@ test "projectFromCwd: resolves the project when cwd is inside its hub" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
     const ws = try testutil.testWorkspace(arena, root);
-    const repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    const repos: std.array_hash_map.String([]const u8) = .empty;
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const hub_dir = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
+    const hub_dir = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "proj" });
     try fsutil.ensureDir(hub_dir);
 
     var out: std.Io.Writer.Allocating = .init(arena);
@@ -649,14 +649,14 @@ test "cloneIfAbsent: a failed clone leaves a shared owner directory holding anot
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const owner_dir = try std.fs.path.join(arena, &.{ root, "127.0.0.1", "acme" });
-    const sibling_clone = try std.fs.path.join(arena, &.{ owner_dir, "other" });
+    const owner_dir = try std.Io.Dir.path.join(arena, &.{ root, "127.0.0.1", "acme" });
+    const sibling_clone = try std.Io.Dir.path.join(arena, &.{ owner_dir, "other" });
     try fsutil.ensureDir(sibling_clone);
 
     const url = "https://127.0.0.1/acme/widget";
     const override = try testutil.gitUnreachable(arena, root, &.{url});
     defer override.restore();
-    const clone_path = try std.fs.path.join(arena, &.{ owner_dir, "widget" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ owner_dir, "widget" });
 
     var out: std.Io.Writer.Allocating = .init(arena);
     defer out.deinit();
@@ -669,6 +669,6 @@ test "cloneIfAbsent: a failed clone leaves a shared owner directory holding anot
     try testing.expect(fsutil.exists(owner_dir));
     try testing.expect(fsutil.exists(sibling_clone));
 
-    const host_dir = try std.fs.path.join(arena, &.{ root, "127.0.0.1" });
+    const host_dir = try std.Io.Dir.path.join(arena, &.{ root, "127.0.0.1" });
     try testing.expect(fsutil.exists(host_dir));
 }

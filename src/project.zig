@@ -19,13 +19,13 @@ pub const Project = struct {
 
     /// "org/name". Caller-owned memory in `alloc`.
     pub fn qualified(self: Project, alloc: std.mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(alloc, "{s}/{s}", .{ self.org, self.name });
+        return alloc.print("{s}/{s}", .{ self.org, self.name });
     }
 
     /// Path to this project's on-disk marker file. Caller-owned memory in
     /// `alloc`.
     pub fn markerPath(self: Project, alloc: std.mem.Allocator) ![]u8 {
-        return std.fs.path.join(alloc, &.{ self.content_path, marker.marker_basename });
+        return std.Io.Dir.path.join(alloc, &.{ self.content_path, marker.marker_basename });
     }
 };
 

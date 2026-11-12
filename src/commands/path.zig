@@ -78,10 +78,10 @@ fn resolve(ctx: *app.Ctx, ws: workspace.Workspace, query: []const u8) anyerror!u
 
     // `<project>/<repo>@<branch>` resolves to that branch's worktree checkout.
     // The branch (after '@') may itself contain '/', so it is taken whole.
-    if (std.mem.indexOfScalar(u8, query, '@')) |at| {
+    if (std.mem.findScalar(u8, query, '@')) |at| {
         const repo_sel = query[0..at];
         const branch = query[at + 1 ..];
-        if (std.mem.lastIndexOfScalar(u8, repo_sel, '/')) |s| {
+        if (std.mem.findScalarLast(u8, repo_sel, '/')) |s| {
             const pq = repo_sel[0..s];
             const rq = repo_sel[s + 1 ..];
             if (pq.len > 0 and rq.len > 0 and branch.len > 0) {
@@ -102,7 +102,7 @@ fn resolve(ctx: *app.Ctx, ws: workspace.Workspace, query: []const u8) anyerror!u
         .none, .ambiguous => {},
     }
 
-    if (std.mem.lastIndexOfScalar(u8, query, '/')) |slash| {
+    if (std.mem.findScalarLast(u8, query, '/')) |slash| {
         const project_query = query[0..slash];
         const repo_query = query[slash + 1 ..];
         if (project_query.len > 0 and repo_query.len > 0) {
@@ -128,7 +128,7 @@ fn resolveWorktree(ctx: *app.Ctx, ws: workspace.Workspace, project_query: []cons
         return app.usageError(ctx, "invalid branch name \"{s}\"", .{branch});
     }
     const clone_path = (try resolveRepoPath(ctx, ws, project_query, repo_query)) orelse return 1;
-    const worktrees_dir = try std.fmt.allocPrint(alloc, "{s}@worktrees", .{clone_path});
+    const worktrees_dir = try alloc.print("{s}@worktrees", .{clone_path});
     const wt_path = try fsutil.joinSlashy(alloc, worktrees_dir, branch);
     if (!fsutil.exists(wt_path)) {
         try ctx.err.print("holt: no worktree for branch \"{s}\" in {s}/{s} (create it: holt worktree {s}/{s} {s})\n", .{ branch, project_query, repo_query, project_query, repo_query, branch });
@@ -191,7 +191,7 @@ fn testWorkspace(arena: std.mem.Allocator, root: []const u8, code_root: []const 
         .presets = &.{},
         .synced_root = @constCast(root),
         .code_root = @constCast(code_root),
-        .hub_root = std.fs.path.join(arena, &.{ root, "hub" }) catch unreachable,
+        .hub_root = std.Io.Dir.path.join(arena, &.{ root, "hub" }) catch unreachable,
     }, .env = app.envOf_current() };
 }
 
@@ -206,13 +206,13 @@ test "run: <project>/<repo>@<branch> resolves the worktree path, and misses repo
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // A worktree only needs to exist on disk for resolution; stage the dir.
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
-    const wt_path = try std.fs.path.join(arena, &.{ try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}), "feature", "x" });
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    const wt_path = try std.Io.Dir.path.join(arena, &.{ try arena.print("{s}@worktrees", .{clone_path}), "feature", "x" });
     try fsutil.ensureDir(wt_path);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj/backend@feature/x"});
@@ -221,7 +221,7 @@ test "run: <project>/<repo>@<branch> resolves the worktree path, and misses repo
 
     const miss = try testutil.runCmd(arena, command.run, ws, &.{"proj/backend@nope"});
     try testing.expectEqual(@as(u8, 1), miss.code);
-    try testing.expect(std.mem.indexOf(u8, miss.err, "no worktree") != null);
+    try testing.expect(std.mem.find(u8, miss.err, "no worktree") != null);
 }
 
 test "run: an @<branch> whose segments would escape the worktrees dir is a usage error" {
@@ -235,18 +235,18 @@ test "run: an @<branch> whose segments would escape the worktrees dir is a usage
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://holt-test.invalid/acme/backend");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     // The traversal target exists, so without validation the escaped path
     // would pass the exists() check and be printed for a `cd $(...)`.
-    const clone_path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
-    try fsutil.ensureDir(try std.fmt.allocPrint(arena, "{s}@worktrees", .{clone_path}));
+    const clone_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "backend" });
+    try fsutil.ensureDir(try arena.print("{s}@worktrees", .{clone_path}));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"proj/backend@../.."});
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "invalid branch name") != null);
+    try testing.expect(std.mem.find(u8, got.err, "invalid branch name") != null);
     try testing.expectEqualStrings("", got.out);
 }
 
@@ -264,7 +264,7 @@ test "run: bare query (empty positional) prints the hub root" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{ws.cfg.hub_root}), got.out);
+    try testing.expectEqualStrings(try arena.print("{s}\n", .{ws.cfg.hub_root}), got.out);
 }
 
 test "run: --root prints each configured root alone, absolute, with no query needed" {
@@ -288,8 +288,8 @@ test "run: --root prints each configured root alone, absolute, with no query nee
         try testing.expectEqual(@as(u8, 0), got.code);
         // Sole line, absolute: `hir` joins it onto a relative key inside
         // quotes, where a `~` would never expand.
-        try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{c.want}), got.out);
-        try testing.expect(std.fs.path.isAbsolute(std.mem.trimEnd(u8, got.out, "\n")));
+        try testing.expectEqualStrings(try arena.print("{s}\n", .{c.want}), got.out);
+        try testing.expect(std.Io.Dir.path.isAbsolute(std.mem.trimEnd(u8, got.out, "\n")));
     }
 }
 
@@ -306,8 +306,8 @@ test "run: an unknown --root value is a usage error naming the accepted roots" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--root", "archive" });
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "archive") != null);
-    try testing.expect(std.mem.indexOf(u8, got.err, "code, hub, or synced") != null);
+    try testing.expect(std.mem.find(u8, got.err, "archive") != null);
+    try testing.expect(std.mem.find(u8, got.err, "code, hub, or synced") != null);
     try testing.expectEqualStrings("", got.out);
 }
 
@@ -343,8 +343,8 @@ test "run: a project query prints the hub path" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{"widget"});
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const want_hub = try std.fs.path.join(arena, &.{ root, "hub", "acme", "widget" });
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_hub}), got.out);
+    const want_hub = try std.Io.Dir.path.join(arena, &.{ root, "hub", "acme", "widget" });
+    try testing.expectEqualStrings(try arena.print("{s}\n", .{want_hub}), got.out);
 }
 
 test "run: a project/repo query prints the real clone path, not the hub link" {
@@ -357,7 +357,7 @@ test "run: a project/repo query prints the real clone path, not the hub link" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://github.com/acme/backend");
 
     const ws = testWorkspace(arena, root, "/code");
@@ -367,11 +367,11 @@ test "run: a project/repo query prints the real clone path, not the hub link" {
     try testing.expectEqual(@as(u8, 0), result.code);
 
     const got = result.out;
-    const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), got);
+    const want_clone = try std.Io.Dir.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
+    try testing.expectEqualStrings(try arena.print("{s}\n", .{want_clone}), got);
 
-    const hub_path = try std.fs.path.join(arena, &.{ root, "hub", "acme", "widget" });
-    try testing.expect(std.mem.indexOf(u8, got, hub_path) == null);
+    const hub_path = try std.Io.Dir.path.join(arena, &.{ root, "hub", "acme", "widget" });
+    try testing.expect(std.mem.find(u8, got, hub_path) == null);
 }
 
 test "run: repo resolves by unique subsequence when not an exact name" {
@@ -384,7 +384,7 @@ test "run: repo resolves by unique subsequence when not an exact name" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "backend", "https://github.com/acme/backend");
 
     const ws = testWorkspace(arena, root, "/code");
@@ -392,8 +392,8 @@ test "run: repo resolves by unique subsequence when not an exact name" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/bck"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), got.out);
+    const want_clone = try std.Io.Dir.path.join(arena, &.{ "/code", "github.com", "acme", "backend" });
+    try testing.expectEqualStrings(try arena.print("{s}\n", .{want_clone}), got.out);
 }
 
 test "run: no matching project exits 1 and reports on stderr" {
@@ -410,7 +410,7 @@ test "run: no matching project exits 1 and reports on stderr" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"nope"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "nope") != null);
+    try testing.expect(std.mem.find(u8, got.err, "nope") != null);
 }
 
 test "run: ambiguous project exits 1 and lists every candidate" {
@@ -430,8 +430,8 @@ test "run: ambiguous project exits 1 and lists every candidate" {
     const result = try testutil.runCmd(arena, command.run, ws, &.{"widget"});
     try testing.expectEqual(@as(u8, 1), result.code);
     const got = result.err;
-    try testing.expect(std.mem.indexOf(u8, got, "acme/widget") != null);
-    try testing.expect(std.mem.indexOf(u8, got, "other/widget") != null);
+    try testing.expect(std.mem.find(u8, got, "acme/widget") != null);
+    try testing.expect(std.mem.find(u8, got, "other/widget") != null);
 }
 
 test "run: a repo whose marker value never parsed reports and prints nothing" {
@@ -444,7 +444,7 @@ test "run: a repo whose marker value never parsed reports and prints nothing" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "broken", "not a url");
 
     const ws = testWorkspace(arena, root, "/code");
@@ -453,7 +453,7 @@ test "run: a repo whose marker value never parsed reports and prints nothing" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/broken"});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expectEqual(@as(usize, 0), got.out.len);
-    try testing.expect(std.mem.indexOf(u8, got.err, "not a usable url") != null);
+    try testing.expect(std.mem.find(u8, got.err, "not a usable url") != null);
 }
 
 test "run: an orphan alias never matches a repo query" {
@@ -473,6 +473,6 @@ test "run: an orphan alias never matches a repo query" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"widget/g"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    const want_clone = try std.fs.path.join(arena, &.{ "/code", "github.com", "acme", "gadget" });
-    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{want_clone}), got.out);
+    const want_clone = try std.Io.Dir.path.join(arena, &.{ "/code", "github.com", "acme", "gadget" });
+    try testing.expectEqualStrings(try arena.print("{s}\n", .{want_clone}), got.out);
 }

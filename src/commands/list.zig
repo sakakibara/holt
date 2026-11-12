@@ -26,7 +26,7 @@ const Spec = struct {
 /// Windows `cd`/`Set-Location` accept `/`, so `hir`'s `code_root/<key>` still
 /// resolves. `relative` handles a trailing slash on `code_root`.
 fn repoKey(alloc: std.mem.Allocator, code_root: []const u8, clone: []const u8) ![]u8 {
-    const rel = try std.fs.path.relative(alloc, "", null, code_root, clone);
+    const rel = try std.Io.Dir.path.relativeAlloc(alloc, "", null, code_root, clone);
     std.mem.replaceScalar(u8, rel, '\\', '/');
     return rel;
 }
@@ -129,7 +129,7 @@ fn testWorkspace(arena: std.mem.Allocator, root: []const u8) workspace.Workspace
         .presets = &.{},
         .synced_root = @constCast(root),
         .code_root = @constCast(@as([]const u8, "/code")),
-        .hub_root = std.fs.path.join(arena, &.{ root, "hub" }) catch unreachable,
+        .hub_root = std.Io.Dir.path.join(arena, &.{ root, "hub" }) catch unreachable,
     }, .env = app.envOf_current() };
 }
 
@@ -170,10 +170,10 @@ test "run: --paths appends a tab and the hub path" {
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--paths"});
 
     try testing.expectEqual(@as(u8, 0), got.code);
-    const gadget_hub = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "hub", "acme", "gadget" });
-    const widget_hub = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "hub", "acme", "widget" });
-    const aardvark_hub = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "hub", "zebra", "aardvark" });
-    const want = try std.fmt.allocPrint(arena, "acme/gadget\t{s}\nacme/widget\t{s}\nzebra/aardvark\t{s}\n", .{ gadget_hub, widget_hub, aardvark_hub });
+    const gadget_hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "hub", "acme", "gadget" });
+    const widget_hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "hub", "acme", "widget" });
+    const aardvark_hub = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "hub", "zebra", "aardvark" });
+    const want = try arena.print("acme/gadget\t{s}\nacme/widget\t{s}\nzebra/aardvark\t{s}\n", .{ gadget_hub, widget_hub, aardvark_hub });
     try testing.expectEqualStrings(want, got.out);
 }
 
@@ -205,7 +205,7 @@ test "run: an empty workspace prints a helpful hint on stderr, stdout stays clea
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expectEqualStrings("", got.out);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no projects yet") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no projects yet") != null);
 }
 
 test "run: --json emits a parseable array with the right orgs, names, and repos" {
@@ -219,14 +219,14 @@ test "run: --json emits a parseable array with the right orgs, names, and repos"
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = testWorkspace(arena, root);
 
-    var repos_widget: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos_widget: std.array_hash_map.String([]const u8) = .empty;
     try repos_widget.put(arena, "widget-repo", "https://holt-test.invalid/acme/widget-repo");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "widget", repos_widget, .empty);
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "zebra", "aardvark", .empty, .empty);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--json"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "\x1b[") == null);
+    try testing.expect(std.mem.find(u8, got.out, "\x1b[") == null);
 
     const Entry = struct { org: []const u8, name: []const u8, hub_path: []const u8, content_path: []const u8, repos: [][]const u8 };
     const parsed = try json.parseInto([]Entry, arena, got.out, .{});
@@ -248,15 +248,15 @@ test "list --repos: prints the sorted relative code-tree keys, not absolute path
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--repos"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "local/mox") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, ws.cfg.code_root) == null);
+    try testing.expect(std.mem.find(u8, got.out, "local/mox") != null);
+    try testing.expect(std.mem.find(u8, got.out, ws.cfg.code_root) == null);
     // The key is a portable `/`-joined logical key on every platform, never a
     // native-separator path (a backslash would break this on Windows).
-    try testing.expect(std.mem.indexOf(u8, got.out, "\\") == null);
+    try testing.expect(std.mem.find(u8, got.out, "\\") == null);
 }
 
 test "list --repos --json: emits a JSON array of relative code-tree keys" {
@@ -268,14 +268,14 @@ test "list --repos --json: emits a JSON array of relative code-tree keys" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{ "--repos", "--json" });
     try testing.expectEqual(@as(u8, 0), got.code);
     const trimmed = std.mem.trim(u8, got.out, " \t\r\n");
     try testing.expect(trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']');
-    try testing.expect(std.mem.indexOf(u8, got.out, "local/mox") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, ws.cfg.code_root) == null);
+    try testing.expect(std.mem.find(u8, got.out, "local/mox") != null);
+    try testing.expect(std.mem.find(u8, got.out, ws.cfg.code_root) == null);
 }
 
 test "list --repos: a trailing slash on code_root does not corrupt the relative key" {
@@ -288,14 +288,14 @@ test "list --repos: a trailing slash on code_root does not corrupt the relative 
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     var ws = try testutil.testWorkspace(arena, root);
     // Force a trailing slash on code_root (a real config typo / tab-completion artifact).
-    ws.cfg.code_root = try std.fmt.allocPrint(arena, "{s}/", .{ws.cfg.code_root});
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "backend", ".git" }));
+    ws.cfg.code_root = try arena.print("{s}/", .{ws.cfg.code_root});
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "backend", ".git" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--repos"});
     try testing.expectEqual(@as(u8, 0), got.code);
     // Exact match, not a substring check: "github.com" contains "ithub.com"
     // as a substring, so a corrupted (over-stripped) key would slip past
-    // std.mem.indexOf(..., "ithub.com") even though it's plainly wrong.
+    // std.mem.find(..., "ithub.com") even though it's plainly wrong.
     try testing.expectEqualStrings("github.com/acme/backend\n", got.out);
 }
 
@@ -325,14 +325,14 @@ test "run: a synced root that does not exist fails, naming it and saying its bac
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
-    var ws = testWorkspace(arena, try std.fs.path.join(arena, &.{ root, "never-mounted" }));
+    var ws = testWorkspace(arena, try std.Io.Dir.path.join(arena, &.{ root, "never-mounted" }));
     ws.cfg.backend = "gdrive";
 
     inline for (.{ &[_][]const u8{}, &[_][]const u8{"--json"} }) |args| {
         const got = try testutil.runCmd(arena, command.run, ws, args);
         try testing.expectEqual(@as(u8, 1), got.code);
         try testing.expectEqualStrings("", got.out);
-        const want = try std.fmt.allocPrint(arena, "holt: the synced folder {s} does not exist; gdrive may not be mounted\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
+        const want = try arena.print("holt: the synced folder {s} does not exist; gdrive may not be mounted\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
         try testing.expectEqualStrings(want, got.err);
     }
 }
@@ -346,8 +346,8 @@ test "list --repos: reads the code tree even when the synced root does not exist
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     var ws = try testutil.testWorkspace(arena, root);
-    ws.cfg.synced_root = try std.fs.path.join(arena, &.{ root, "never-mounted" });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
+    ws.cfg.synced_root = try std.Io.Dir.path.join(arena, &.{ root, "never-mounted" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "local", "mox", ".git" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--repos"});
     try testing.expectEqual(@as(u8, 0), got.code);

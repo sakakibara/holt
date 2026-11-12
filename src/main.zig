@@ -126,13 +126,13 @@ fn coverageCheckCommand(alloc: std.mem.Allocator, command: app.Command, path: []
         if (a.variadic) continue;
         if (a.complete != .none) continue;
         if (coverageAllowed(allow, path, a.name)) continue;
-        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s}.{s} (positional, no completion)", .{ path, a.name }));
+        try gaps.append(alloc, try alloc.print("{s}.{s} (positional, no completion)", .{ path, a.name }));
     }
     for (command.flags) |f| {
         if (!f.takes_value) continue;
         if (f.complete != .none) continue;
         if (coverageAllowed(allow, path, f.long)) continue;
-        try gaps.append(alloc, try std.fmt.allocPrint(alloc, "{s} --{s} (value flag, no completion)", .{ path, f.long }));
+        try gaps.append(alloc, try alloc.print("{s} --{s} (value flag, no completion)", .{ path, f.long }));
     }
 }
 
@@ -162,7 +162,7 @@ test "coverage: every command positional and value-flag completes or is allowlis
     for (app.command_table) |c| {
         try coverageCheckCommand(arena, c, c.name, &allow, &gaps);
         for (c.subcommands) |sub| {
-            const path = try std.fmt.allocPrint(arena, "{s} {s}", .{ c.name, sub.name });
+            const path = try arena.print("{s} {s}", .{ c.name, sub.name });
             try coverageCheckCommand(arena, sub, path, &allow, &gaps);
         }
     }
@@ -200,7 +200,7 @@ test "stdioWriter: what it writes to a file opened for appending lands after wha
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
-    const path = try std.fs.path.join(testing.allocator, &.{ sb.root, "log" });
+    const path = try std.Io.Dir.path.join(testing.allocator, &.{ sb.root, "log" });
     defer testing.allocator.free(path);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = path, .data = "first\n" });
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .APPEND = true }, 0);
@@ -242,7 +242,7 @@ fn completionCtx(alloc: std.mem.Allocator, out: *std.Io.Writer, err: *std.Io.Wri
 fn seedCompletionFixture(alloc: std.mem.Allocator, ws: *const workspace.Workspace) !void {
     try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "widget", .empty, .empty);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(alloc, "backend", "https://example.com/acme/backend.git");
     try repos.put(alloc, "tool", "local:tool");
     try testutil.writeMarker(alloc, try ws.projectsRoot(alloc), "acme", "proj", repos, .empty);
@@ -305,7 +305,7 @@ test "integration: project/repo/backend_seed categories carry real descriptions"
 
     // `info`'s project positional carries the project's org as description.
     try app.HoltCli.completionReply(arena, &app.command_table, &.{ "info", "wid" }, app.HoltCli.completion_resolve, &ctx, &out.writer);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "widget\tacme") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "widget\tacme") != null);
 
     // `setup --backend` lists the builtin seeds even with a null workspace
     // (the fresh-install path, before config.toml exists).

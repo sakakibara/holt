@@ -95,7 +95,7 @@ fn writeConfig(ctx: *app.Ctx, path: []const u8, active: ?[]const u8, direct_root
 }
 
 fn writeBody(alloc: std.mem.Allocator, path: []const u8, body: []const u8) !void {
-    if (std.fs.path.dirname(path)) |parent| try fsutil.ensureDir(parent);
+    if (std.Io.Dir.path.dirname(path)) |parent| try fsutil.ensureDir(parent);
     try fsutil.writeFileAtomic(alloc, path, body);
 }
 
@@ -138,7 +138,7 @@ fn runInteractive(ctx: *app.Ctx, path: []const u8, code_root_opt: ?[]const u8, h
 
     if (choice >= 1 and choice <= config.builtin_seeds.len) {
         const seed = config.builtin_seeds[choice - 1];
-        const reply_msg = try std.fmt.allocPrint(alloc, "synced_root [{s}]:", .{seed.synced_root});
+        const reply_msg = try alloc.print("synced_root [{s}]:", .{seed.synced_root});
         const reply = try ui.prompt(alloc, w, reply_msg);
         if (reply.len == 0) {
             active = seed.name;
@@ -157,11 +157,11 @@ fn runInteractive(ctx: *app.Ctx, path: []const u8, code_root_opt: ?[]const u8, h
         return 1;
     }
 
-    const code_reply_msg = try std.fmt.allocPrint(alloc, "code_root [{s}]:", .{code_root_opt orelse default_code_root});
+    const code_reply_msg = try alloc.print("code_root [{s}]:", .{code_root_opt orelse default_code_root});
     const code_reply = try ui.prompt(alloc, w, code_reply_msg);
     const code_root = if (code_reply.len > 0) code_reply else (code_root_opt orelse default_code_root);
 
-    const hub_reply_msg = try std.fmt.allocPrint(alloc, "hub_root [{s}]:", .{hub_root_opt orelse default_hub_root});
+    const hub_reply_msg = try alloc.print("hub_root [{s}]:", .{hub_root_opt orelse default_hub_root});
     const hub_reply = try ui.prompt(alloc, w, hub_reply_msg);
     const hub_root = if (hub_reply.len > 0) hub_reply else (hub_root_opt orelse default_hub_root);
 
@@ -196,7 +196,7 @@ test "run: --backend dropbox writes a config that loads with backend dropbox, na
     try testing.expectEqual(@as(u8, 0), got.code);
 
     const path = try config.configPath(arena, app.envOf_current());
-    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), path)) != null);
+    try testing.expect(std.mem.find(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), path)) != null);
 
     const cfg = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqualStrings("dropbox", cfg.backend.?);
@@ -222,7 +222,7 @@ test "run: --synced-root writes direct mode; load resolves it with no active bac
     const cfg = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqual(@as(?[]const u8, null), cfg.backend);
     const home = try fsutil.expandTilde(arena, app.envOf_current(), "~");
-    try testing.expectEqualStrings(try std.fs.path.join(arena, &.{ home, "custom" }), cfg.synced_root);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(arena, &.{ home, "custom" }), cfg.synced_root);
 }
 
 test "run: refuses to overwrite an existing config without --force, --force overwrites" {
@@ -239,12 +239,12 @@ test "run: refuses to overwrite an existing config without --force, --force over
     defer override.restore();
 
     const path = try config.configPath(arena, app.envOf_current());
-    try fsutil.ensureDir(std.fs.path.dirname(path).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path).?);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = path, .data = "[workspace]\nsynced_root = \"/custom\"\n" });
 
     const refused = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox" });
     try testing.expectEqual(@as(u8, 1), refused.code);
-    try testing.expect(std.mem.indexOf(u8, refused.err, "already exists") != null);
+    try testing.expect(std.mem.find(u8, refused.err, "already exists") != null);
 
     const preserved = try config.load(arena, app.envOf_current(), path, null);
     try testing.expectEqual(@as(?[]const u8, null), preserved.backend);
@@ -271,7 +271,7 @@ test "run: --backend and --synced-root together is a usage error" {
 
     const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox", "--synced-root", "~/x" });
     try testing.expectEqual(@as(u8, 2), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "mutually exclusive") != null);
+    try testing.expect(std.mem.find(u8, got.err, "mutually exclusive") != null);
 }
 
 test "run: a read-only config directory yields a permission-denied message, not a bare internal error" {
@@ -286,7 +286,7 @@ test "run: a read-only config directory yields a permission-denied message, not 
 
     // XDG points at a directory holt cannot write into. Mode bits don't
     // gate access on Windows, so this whole simulation is POSIX-only.
-    const xdg = try std.fs.path.join(arena, &.{ root, "ro-cfg" });
+    const xdg = try std.Io.Dir.path.join(arena, &.{ root, "ro-cfg" });
     try fsutil.ensureDir(xdg);
     if (builtin.os.tag != .windows) {
         try tmp.dir.setFilePermissions(testing.io, "ro-cfg", std.Io.File.Permissions.fromMode(0o555), .{});
@@ -297,7 +297,7 @@ test "run: a read-only config directory yields a permission-denied message, not 
 
         const got = try testutil.runCmd(arena, command.run, null, &.{ "--backend", "dropbox" });
         try testing.expectEqual(@as(u8, 1), got.code);
-        try testing.expect(std.mem.indexOf(u8, got.err, "permission denied") != null);
+        try testing.expect(std.mem.find(u8, got.err, "permission denied") != null);
     }
 }
 
@@ -318,5 +318,5 @@ test "run: no flags and no terminal (the test harness's real stdin) errors askin
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "no terminal to ask") != null);
+    try testing.expect(std.mem.find(u8, got.err, "no terminal to ask") != null);
 }

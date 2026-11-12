@@ -272,12 +272,12 @@ fn humanBytes(alloc: std.mem.Allocator, n: u64) ![]const u8 {
     var v: u64 = n;
     var u: usize = 0;
     while (v >= 1024 * 10 and u + 1 < units.len) : (u += 1) v /= 1024;
-    return std.fmt.allocPrint(alloc, "{d} {s}", .{ v, units[u] });
+    return alloc.print("{d} {s}", .{ v, units[u] });
 }
 
 /// `n` and the noun for it: `one` for 1, `many` otherwise.
 pub fn counted(alloc: std.mem.Allocator, n: usize, one: []const u8, many: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(alloc, "{d} {s}", .{ n, if (n == 1) one else many });
+    return alloc.print("{d} {s}", .{ n, if (n == 1) one else many });
 }
 
 /// `<files> in <repos>[ and <hub roots>]`, naming only the parts that are
@@ -336,7 +336,7 @@ fn renderKept(ctx: *app.Ctx, ws: *const workspace.Workspace, r: *const doctor_ke
     }
     for (r.aside_bad) |e| {
         const why = if (e.check == .missing) "is incomplete or its manifest cannot be read" else "no longer matches its manifest";
-        try w.print("  {s}: aside entry {s}\n", .{ try util.q(ctx, try std.fs.path.join(a, &.{ try layout.asideDir(a), e.stamp })), why });
+        try w.print("  {s}: aside entry {s}\n", .{ try util.q(ctx, try std.Io.Dir.path.join(a, &.{ try layout.asideDir(a), e.stamp })), why });
     }
 
     try passFail(w, color_enabled, "tracked kept path", r.trackedOk());
@@ -390,7 +390,7 @@ fn renderKept(ctx: *app.Ctx, ws: *const workspace.Workspace, r: *const doctor_ke
     }
     for (r.aside_unchecked) |e| {
         const why = if (e.check == .online_only) "online-only, so it was not verified" else "names a device or stream, so it was not verified";
-        try w.print("note: aside entry {s} is {s}\n", .{ try util.q(ctx, try std.fs.path.join(a, &.{ try layout.asideDir(a), e.stamp })), why });
+        try w.print("note: aside entry {s} is {s}\n", .{ try util.q(ctx, try std.Io.Dir.path.join(a, &.{ try layout.asideDir(a), e.stamp })), why });
     }
     for (r.released) |rel| {
         var aw: std.Io.Writer.Allocating = .init(a);
@@ -400,12 +400,12 @@ fn renderKept(ctx: *app.Ctx, ws: *const workspace.Workspace, r: *const doctor_ke
             if (r.machine_id) |me| if (std.mem.eql(u8, me, m)) try aw.writer.writeAll(" (this machine)");
         }
         const cmd = if (rel.clone) |c|
-            try std.fmt.allocPrint(a, "run: holt unkeep --purge {s} --yes", .{try place(ctx, c, rel.rel)})
+            try a.print("run: holt unkeep --purge {s} --yes", .{try place(ctx, c, rel.rel)})
         else blk: {
             const at = try fsutil.joinSlashy(a, ws.cfg.code_root, rel.key);
-            const purge = try std.fmt.allocPrint(a, "holt unkeep --purge {s} --yes", .{try place(ctx, at, rel.rel)});
-            if (rel.origin) |o| break :blk try std.fmt.allocPrint(a, "run: holt repo get {s} && {s}", .{ try ui.printable(a, try ui.shellQuote(a, o)), purge });
-            break :blk try std.fmt.allocPrint(a, "with its clone back at {s}, run: {s}", .{ try util.q(ctx, at), purge });
+            const purge = try a.print("holt unkeep --purge {s} --yes", .{try place(ctx, at, rel.rel)});
+            if (rel.origin) |o| break :blk try a.print("run: holt repo get {s} && {s}", .{ try ui.printable(a, try ui.shellQuote(a, o)), purge });
+            break :blk try a.print("with its clone back at {s}, run: {s}", .{ try util.q(ctx, at), purge });
         };
         try w.print("note: {s} was released but its kept copy remains; once every machine has synced (records from: {s}), remove it ({s})\n", .{ try util.q(ctx, try layout.copyPath(a, rel.key, rel.rel)), if (rel.machines.len == 0) "none" else aw.written(), cmd });
     }
@@ -507,19 +507,19 @@ const Phase = enum { workspace, kept };
 /// the path keeps its end, and is left out when too little of it fits.
 fn statusLine(alloc: std.mem.Allocator, env: Env, phase: Phase, count: usize, path: []const u8, root: []const u8, columns: usize, elapsed: std.Io.Duration) ![]const u8 {
     const limit = columns -| 2;
-    const suffix = try std.fmt.allocPrint(alloc, " ({s})", .{try elapsedText(alloc, elapsed)});
+    const suffix = try alloc.print(" ({s})", .{try elapsedText(alloc, elapsed)});
     const lead, const path_lead = switch (phase) {
         .workspace => if (count == 0)
             .{ "holt: doctor: checking the workspace", "" }
         else if (path.len == 0)
-            .{ try std.fmt.allocPrint(alloc, "holt: doctor: scanned {d} folder{s}; checking the rest", .{ count, if (count == 1) "" else "s" }), "" }
+            .{ try alloc.print("holt: doctor: scanned {d} folder{s}; checking the rest", .{ count, if (count == 1) "" else "s" }), "" }
         else
-            .{ try std.fmt.allocPrint(alloc, "holt: doctor: scanned {d} folder{s}", .{ count, if (count == 1) "" else "s" }), ", now in " },
+            .{ try alloc.print("holt: doctor: scanned {d} folder{s}", .{ count, if (count == 1) "" else "s" }), ", now in " },
         .kept => .{ "holt: doctor: checking kept files", if (path.len == 0) "" else ", now " },
     };
     const plain = fitAscii(try std.mem.concat(alloc, u8, &.{ lead, suffix }), limit);
     if (path_lead.len == 0) return plain;
-    const rel = if (std.mem.startsWith(u8, path, root) and path.len > root.len and std.fs.path.isSep(path[root.len])) path[root.len + 1 ..] else try fsutil.contractTilde(alloc, env, path);
+    const rel = if (std.mem.startsWith(u8, path, root) and path.len > root.len and std.Io.Dir.path.isSep(path[root.len])) path[root.len + 1 ..] else try fsutil.contractTilde(alloc, env, path);
     const shown = try ui.printable(alloc, rel);
     if (shown.len == 0) return plain;
     const budget = limit -| (lead.len + path_lead.len + suffix.len);
@@ -538,9 +538,9 @@ fn fitAscii(line: []const u8, limit: usize) []const u8 {
 /// `elapsed` as `7s`, `1m05s`, or `1h02m`.
 fn elapsedText(alloc: std.mem.Allocator, elapsed: std.Io.Duration) ![]const u8 {
     const s: u64 = @intCast(@max(elapsed.toSeconds(), 0));
-    if (s < 60) return std.fmt.allocPrint(alloc, "{d}s", .{s});
-    if (s < 3600) return std.fmt.allocPrint(alloc, "{d}m{d:0>2}s", .{ s / 60, s % 60 });
-    return std.fmt.allocPrint(alloc, "{d}h{d:0>2}m", .{ s / 3600, s % 3600 / 60 });
+    if (s < 60) return alloc.print("{d}s", .{s});
+    if (s < 3600) return alloc.print("{d}m{d:0>2}s", .{ s / 60, s % 60 });
+    return alloc.print("{d}h{d:0>2}m", .{ s / 3600, s % 3600 / 60 });
 }
 
 /// At least the terminal columns `s` takes: one for an ASCII byte, two for
@@ -603,43 +603,43 @@ test "run: every planted violation is caught; --fix resolves only the hub drift"
 
     // A healthy project whose hub gets built, then a stale link planted
     // to simulate drift, plus a repo whose clone never existed (missing).
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "good", repos, .empty);
 
-    const good_hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "good" });
-    const good_content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "good" });
-    const m = try marker.load(arena, try std.fs.path.join(arena, &.{ good_content_path, marker.marker_basename }), null);
+    const good_hub_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "good" });
+    const good_content_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "good" });
+    const m = try marker.load(arena, try std.Io.Dir.path.join(arena, &.{ good_content_path, marker.marker_basename }), null);
     const p: project_mod.Project = .{ .org = "acme", .name = "good", .content_path = good_content_path, .hub_path = good_hub_path, .marker = m };
     _ = try hub.reconcile(arena, &ws, &p, false);
 
-    const stale_link = try std.fs.path.join(arena, &.{ good_hub_path, "code", "gone" });
+    const stale_link = try std.Io.Dir.path.join(arena, &.{ good_hub_path, "code", "gone" });
     try fsutil.replaceSymlink("/nowhere", stale_link);
 
     // A symlink planted directly under CONTENT (D1).
-    const d1_offender = try std.fs.path.join(arena, &.{ good_content_path, "evil" });
+    const d1_offender = try std.Io.Dir.path.join(arena, &.{ good_content_path, "evil" });
     try fsutil.replaceSymlink("/nonexistent-huge-tree", d1_offender);
 
     // A corrupted marker.
-    const broken_dir = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "broken" });
+    const broken_dir = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "broken" });
     try fsutil.ensureDir(broken_dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ broken_dir, marker.marker_basename }), .data = "not json" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ broken_dir, marker.marker_basename }), .data = "not json" });
 
     const before = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), before.code);
-    try testing.expect(std.mem.indexOf(u8, before.out, "no symlinks under projects/archive/kept: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, before.out, "markers parse: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, before.out, "clones present: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, before.out, "hub drift: FAIL") != null);
+    try testing.expect(std.mem.find(u8, before.out, "no symlinks under projects/archive/kept: FAIL") != null);
+    try testing.expect(std.mem.find(u8, before.out, "markers parse: FAIL") != null);
+    try testing.expect(std.mem.find(u8, before.out, "clones present: FAIL") != null);
+    try testing.expect(std.mem.find(u8, before.out, "hub drift: FAIL") != null);
 
     const after = try testutil.runCmd(arena, command.run, ws, &.{"--fix"});
     try testing.expectEqual(@as(u8, 1), after.code);
     // Hub drift is now resolved...
-    try testing.expect(std.mem.indexOf(u8, after.out, "hub drift: PASS") != null);
+    try testing.expect(std.mem.find(u8, after.out, "hub drift: PASS") != null);
     // ...but the rest are untouched: still failing.
-    try testing.expect(std.mem.indexOf(u8, after.out, "no symlinks under projects/archive/kept: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, after.out, "markers parse: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, after.out, "clones present: FAIL") != null);
+    try testing.expect(std.mem.find(u8, after.out, "no symlinks under projects/archive/kept: FAIL") != null);
+    try testing.expect(std.mem.find(u8, after.out, "markers parse: FAIL") != null);
+    try testing.expect(std.mem.find(u8, after.out, "clones present: FAIL") != null);
 
     switch (try fsutil.linkState(arena, d1_offender)) {
         .symlink => {},
@@ -661,24 +661,24 @@ test "run: a stale clone temp is reported, and --fix removes it" {
 
     // A clean project with its hub built, so the only finding is the temp.
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
-    const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
-    const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
-    const m = try marker.load(arena, try std.fs.path.join(arena, &.{ content_path, marker.marker_basename }), null);
+    const content_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
+    const hub_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
+    const m = try marker.load(arena, try std.Io.Dir.path.join(arena, &.{ content_path, marker.marker_basename }), null);
     const p: project_mod.Project = .{ .org = "acme", .name = "empty", .content_path = content_path, .hub_path = hub_path, .marker = m };
     _ = try hub.reconcile(arena, &ws, &p, false);
 
     // A leftover clone-staging dir at a clone-sibling path under code_root.
-    const temp = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "widget.AbC123.holt-tmp" });
+    const temp = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "acme", "widget.AbC123.holt-tmp" });
     try fsutil.ensureDir(temp);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ temp, "partial" }), .data = "x" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ temp, "partial" }), .data = "x" });
 
     const before = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), before.code);
-    try testing.expect(std.mem.indexOf(u8, before.out, "no stale clone temporaries: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, before.out, try fsutil.contractTilde(arena, app.envOf_current(), temp)) != null);
+    try testing.expect(std.mem.find(u8, before.out, "no stale clone temporaries: FAIL") != null);
+    try testing.expect(std.mem.find(u8, before.out, try fsutil.contractTilde(arena, app.envOf_current(), temp)) != null);
 
     const after = try testutil.runCmd(arena, command.run, ws, &.{"--fix"});
-    try testing.expect(std.mem.indexOf(u8, after.out, "no stale clone temporaries: PASS") != null);
+    try testing.expect(std.mem.find(u8, after.out, "no stale clone temporaries: PASS") != null);
     try testing.expect(!fsutil.exists(temp));
 }
 
@@ -700,24 +700,24 @@ test "run: a clean workspace passes every check and exits 0" {
     // No docs/assets/links content dirs: `holt project new` leaves them empty and
     // cloud backends drop empty directories, so a healthy synced workspace
     // routinely has dangling content links. That must still pass doctor.
-    const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
-    const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
-    const m = try marker.load(arena, try std.fs.path.join(arena, &.{ content_path, marker.marker_basename }), null);
+    const content_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
+    const hub_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
+    const m = try marker.load(arena, try std.Io.Dir.path.join(arena, &.{ content_path, marker.marker_basename }), null);
     const p: project_mod.Project = .{ .org = "acme", .name = "empty", .content_path = content_path, .hub_path = hub_path, .marker = m };
     _ = try hub.reconcile(arena, &ws, &p, false);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no symlinks under projects/archive/kept: PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "code is outside the synced folder: PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "hub is outside the synced folder: PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "dangling hub links: PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no archive/active shadow: PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no orphaned content: PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "aliases valid: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no symlinks under projects/archive/kept: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "code is outside the synced folder: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "hub is outside the synced folder: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "dangling hub links: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no archive/active shadow: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no orphaned content: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "aliases valid: PASS") != null);
 
-    const want_backend_line = try std.fmt.allocPrint(arena, "backend: (direct synced_root) -> {s} [exists]\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
-    try testing.expect(std.mem.indexOf(u8, got.out, want_backend_line) != null);
+    const want_backend_line = try arena.print("backend: (direct synced_root) -> {s} [exists]\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
+    try testing.expect(std.mem.find(u8, got.out, want_backend_line) != null);
 }
 
 test "run: reports the active backend name and flags a missing synced_root as informational only" {
@@ -731,15 +731,15 @@ test "run: reports the active backend name and flags a missing synced_root as in
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     var ws = try testutil.testWorkspace(arena, root);
     ws.cfg.backend = "dropbox";
-    ws.cfg.synced_root = try std.fs.path.join(arena, &.{ root, "never-mounted" });
+    ws.cfg.synced_root = try std.Io.Dir.path.join(arena, &.{ root, "never-mounted" });
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     // A missing synced_root is informational (an unmounted cloud), so it must
     // not flip an otherwise-clean doctor run to a failing exit code.
     try testing.expectEqual(@as(u8, 0), got.code);
 
-    const want_backend_line = try std.fmt.allocPrint(arena, "backend: dropbox -> {s} [missing]\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
-    try testing.expect(std.mem.indexOf(u8, got.out, want_backend_line) != null);
+    const want_backend_line = try arena.print("backend: dropbox -> {s} [missing]\n", .{try fsutil.contractTilde(arena, app.envOf_current(), ws.cfg.synced_root)});
+    try testing.expect(std.mem.find(u8, got.out, want_backend_line) != null);
 }
 
 test "run: output leads with human check names, never the internal D1/D2/D3 codes" {
@@ -755,9 +755,9 @@ test "run: output leads with human check names, never the internal D1/D2/D3 code
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "empty", .empty, .empty);
 
-    const content_path = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
-    const hub_path = try std.fs.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
-    const m = try marker.load(arena, try std.fs.path.join(arena, &.{ content_path, marker.marker_basename }), null);
+    const content_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "empty" });
+    const hub_path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.hub_root, "acme", "empty" });
+    const m = try marker.load(arena, try std.Io.Dir.path.join(arena, &.{ content_path, marker.marker_basename }), null);
     const p: project_mod.Project = .{ .org = "acme", .name = "empty", .content_path = content_path, .hub_path = hub_path, .marker = m };
     _ = try hub.reconcile(arena, &ws, &p, false);
 
@@ -774,7 +774,7 @@ test "run: output leads with human check names, never the internal D1/D2/D3 code
 /// happened to spell one, which they eventually do.
 fn leaksCode(out: []const u8, code: []const u8) bool {
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, out, i, code)) |at| {
+    while (std.mem.findPos(u8, out, i, code)) |at| {
         i = at + code.len;
         const before_ok = at == 0 or !std.ascii.isAlphanumeric(out[at - 1]);
         const after = at + code.len;
@@ -795,11 +795,11 @@ test "run: dangling hub links catches a deleted remote clone and a cloneless loc
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var remote_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var remote_repos: std.array_hash_map.String([]const u8) = .empty;
     try remote_repos.put(arena, "holt", "https://github.com/sakakibara/holt");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "remote", remote_repos, .empty);
 
-    var local_repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var local_repos: std.array_hash_map.String([]const u8) = .empty;
     try local_repos.put(arena, "scratch", "local:scratch");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "scratchy", local_repos, .empty);
 
@@ -807,19 +807,19 @@ test "run: dangling hub links catches a deleted remote clone and a cloneless loc
     // both materializes the links and reports them dead.
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--fix"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "dangling hub links: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "dangling hub links: FAIL") != null);
 
-    const remote_target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" });
-    const remote_line = try std.fmt.allocPrint(arena, "{s} (hint: holt restore)", .{try fsutil.contractTilde(arena, app.envOf_current(), remote_target)});
-    try testing.expect(std.mem.indexOf(u8, got.out, remote_line) != null);
+    const remote_target = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "github.com", "sakakibara", "holt" });
+    const remote_line = try arena.print("{s} (hint: holt restore)", .{try fsutil.contractTilde(arena, app.envOf_current(), remote_target)});
+    try testing.expect(std.mem.find(u8, got.out, remote_line) != null);
 
-    const local_target = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
-    const local_line = try std.fmt.allocPrint(arena, "{s} (hint: re-adopt the clone)", .{try fsutil.contractTilde(arena, app.envOf_current(), local_target)});
-    try testing.expect(std.mem.indexOf(u8, got.out, local_line) != null);
+    const local_target = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
+    const local_line = try arena.print("{s} (hint: re-adopt the clone)", .{try fsutil.contractTilde(arena, app.envOf_current(), local_target)});
+    try testing.expect(std.mem.find(u8, got.out, local_line) != null);
 
     // The local repo's missing clone is invisible to the clones-present check,
     // proving the dangling scan is what catches it.
-    try testing.expect(std.mem.indexOf(u8, got.out, "scratchy: scratch missing at") == null);
+    try testing.expect(std.mem.find(u8, got.out, "scratchy: scratch missing at") == null);
 }
 
 test "run: an org/name present in both projects and archive is a shadow" {
@@ -838,8 +838,8 @@ test "run: an org/name present in both projects and archive is a shadow" {
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no archive/active shadow: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/dup (hint: holt project remove acme/dup for the active one, or delete its archive dir)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no archive/active shadow: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/dup (hint: holt project remove acme/dup for the active one, or delete its archive dir)") != null);
 }
 
 test "run: a marker-less dir under an org is orphaned content" {
@@ -855,13 +855,13 @@ test "run: a marker-less dir under an org is orphaned content" {
 
     // A real project so the org dir exists, plus a sibling dir with no marker.
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "real", .empty, .empty);
-    const leftover = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "leftover" });
+    const leftover = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "leftover" });
     try fsutil.ensureDir(leftover);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no orphaned content: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), leftover)) != null);
+    try testing.expect(std.mem.find(u8, got.out, "no orphaned content: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, try fsutil.contractTilde(arena, app.envOf_current(), leftover)) != null);
 }
 
 test "run: cloud conflict copies are reported; NAS/sync metadata dirs are not orphaned content" {
@@ -874,26 +874,26 @@ test "run: cloud conflict copies are reported; NAS/sync metadata dirs are not or
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
-    const proot = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects" });
+    const proot = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects" });
 
     try testutil.writeMarker(arena, proot, "acme", "real", .empty, .empty);
 
     // A name-level conflict copy (marker and all) and a whole-org conflict copy.
     try testutil.writeMarkerAs(arena, proot, "acme", "real (conflicted copy 2024-01-01)", "acme", "real", .empty, .empty);
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ proot, "acme (conflicted copy)", "child" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ proot, "acme (conflicted copy)", "child" }));
 
     // Cloud/NAS metadata dirs that must NOT be flagged as orphaned content.
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ proot, "acme", "@eaDir" }));
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ proot, "acme", ".stfolder" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ proot, "acme", "@eaDir" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ proot, "acme", ".stfolder" }));
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no conflict copies: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "real (conflicted copy 2024-01-01)") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme (conflicted copy)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no conflict copies: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "real (conflicted copy 2024-01-01)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme (conflicted copy)") != null);
     // The metadata dirs and the child under the conflict-copy org are not
     // "orphaned content".
-    try testing.expect(std.mem.indexOf(u8, got.out, "no orphaned content: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no orphaned content: PASS") != null);
 }
 
 test "run: a stale alias with no matching member is reported" {
@@ -907,16 +907,16 @@ test "run: a stale alias with no matching member is reported" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var aliases: std.array_hash_map.String([]const u8) = .empty;
     try aliases.put(arena, "ghost", "whatever");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "aliases valid: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj: alias \"ghost\" has no such member") != null);
+    try testing.expect(std.mem.find(u8, got.out, "aliases valid: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/proj: alias \"ghost\" has no such member") != null);
 }
 
 test "run: a member whose alias value is unusable is reported, not silently skipped" {
@@ -930,16 +930,16 @@ test "run: a member whose alias value is unusable is reported, not silently skip
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var aliases: std.array_hash_map.String([]const u8) = .empty;
     try aliases.put(arena, "holt", "../evil");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "aliases valid: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "acme/proj: unusable alias value for \"holt\"") != null);
+    try testing.expect(std.mem.find(u8, got.out, "aliases valid: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "acme/proj: unusable alias value for \"holt\"") != null);
 }
 
 test "run: --fix never repairs the report-only checks" {
@@ -953,28 +953,28 @@ test "run: --fix never repairs the report-only checks" {
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
     const ws = try testutil.testWorkspace(arena, root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "holt", "https://github.com/sakakibara/holt");
-    var aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var aliases: std.array_hash_map.String([]const u8) = .empty;
     try aliases.put(arena, "ghost", "whatever");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, aliases);
 
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "dup", .empty, .empty);
     try testutil.writeMarker(arena, try ws.archiveRoot(arena), "acme", "dup", .empty, .empty);
 
-    const leftover = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "leftover" });
+    const leftover = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "projects", "acme", "leftover" });
     try fsutil.ensureDir(leftover);
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{"--fix"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "dangling hub links: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no archive/active shadow: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no orphaned content: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "aliases valid: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "dangling hub links: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no archive/active shadow: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no orphaned content: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "aliases valid: FAIL") != null);
 
     // --fix touches only the hub: the shadowing archive marker and the
     // marker-less content dir are still on disk afterward.
-    const archived_marker = try std.fs.path.join(arena, &.{ ws.cfg.synced_root, "archive", "acme", "dup", marker.marker_basename });
+    const archived_marker = try std.Io.Dir.path.join(arena, &.{ ws.cfg.synced_root, "archive", "acme", "dup", marker.marker_basename });
     try testing.expect(fsutil.exists(archived_marker));
     try testing.expect(fsutil.exists(leftover));
 }
@@ -991,18 +991,18 @@ test "run: a local clone that has grown an origin fails, hinted promote when cla
 
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "claimed", "local:claimed");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
-    const local_root = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local" });
+    const local_root = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "local" });
     try fsutil.ensureDir(local_root);
     for ([_][2][]const u8{
         .{ "claimed", "https://holt-test.invalid/acme/claimed" },
         .{ "stray", "https://holt-test.invalid/acme/stray" },
         .{ "plain", "" },
     }) |c| {
-        const path = try std.fs.path.join(arena, &.{ local_root, c[0] });
+        const path = try std.Io.Dir.path.join(arena, &.{ local_root, c[0] });
         try testutil.runGit(&sb, null, &.{ "clone", bare, path });
         if (c[1].len == 0) {
             try testutil.runGit(&sb, path, &.{ "remote", "remove", "origin" });
@@ -1013,11 +1013,11 @@ test "run: a local clone that has grown an origin fails, hinted promote when cla
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "no local repos with an origin: FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "claimed -> holt-test.invalid/acme/claimed (hint: holt repo promote claimed)") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "stray -> holt-test.invalid/acme/stray (hint: holt repo adopt ") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "plain ->") == null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "note: 1 local repo(s) have no remote") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no local repos with an origin: FAIL") != null);
+    try testing.expect(std.mem.find(u8, got.out, "claimed -> holt-test.invalid/acme/claimed (hint: holt repo promote claimed)") != null);
+    try testing.expect(std.mem.find(u8, got.out, "stray -> holt-test.invalid/acme/stray (hint: holt repo adopt ") != null);
+    try testing.expect(std.mem.find(u8, got.out, "plain ->") == null);
+    try testing.expect(std.mem.find(u8, got.out, "note: 1 local repo(s) have no remote") != null);
 }
 
 test "run: local clones without an origin pass the local-origin check and are noted" {
@@ -1029,20 +1029,20 @@ test "run: local clones without an origin pass the local-origin check and are no
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
 
-    var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var repos: std.array_hash_map.String([]const u8) = .empty;
     try repos.put(arena, "claimed", "local:claimed");
     try testutil.writeMarker(arena, try ws.projectsRoot(arena), "acme", "proj", repos, .empty);
 
     for ([_][]const u8{ "scratch", "claimed" }) |name| {
-        const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", name });
+        const path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "local", name });
         try testutil.seedMinimalGitClone(arena, &sb.git_env, path);
     }
 
     const got = try testutil.runCmd(arena, command.run, ws, &.{});
-    try testing.expect(std.mem.indexOf(u8, got.out, "no local repos with an origin: PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, "note: 2 local repo(s) have no remote") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, std.fs.path.sep_str ++ "claimed (member of acme/proj)\n") != null);
-    try testing.expect(std.mem.indexOf(u8, got.out, std.fs.path.sep_str ++ "scratch\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, "no local repos with an origin: PASS") != null);
+    try testing.expect(std.mem.find(u8, got.out, "note: 2 local repo(s) have no remote") != null);
+    try testing.expect(std.mem.find(u8, got.out, std.Io.Dir.path.sep_str ++ "claimed (member of acme/proj)\n") != null);
+    try testing.expect(std.mem.find(u8, got.out, std.Io.Dir.path.sep_str ++ "scratch\n") != null);
 }
 
 test "run: remoteless local clones alone never fail doctor" {
@@ -1053,7 +1053,7 @@ test "run: remoteless local clones alone never fail doctor" {
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
     const ws = try testutil.testWorkspace(arena, sb.root);
-    const path = try std.fs.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
+    const path = try std.Io.Dir.path.join(arena, &.{ ws.cfg.code_root, "local", "scratch" });
     try testutil.seedMinimalGitClone(arena, &sb.git_env, path);
 
     const report = try doctor.run(arena, &ws, .{});
@@ -1079,22 +1079,22 @@ test "run: --fix links a kept file that is missing its link, and never touches a
     try bed.remove(c, "a.txt");
     try bed.remove(c, "b.txt");
     try bed.write(c, "b.txt", "b edited");
-    const aside_dir = try std.fs.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept", ".holt-aside" });
+    const aside_dir = try std.Io.Dir.path.join(arena, &.{ bed.ws.cfg.synced_root, "kept", ".holt-aside" });
     const aside_before = try kept_hooks.snapshot(arena, aside_dir, null);
 
     const got = try testutil.runCmd(arena, command.run, bed.ws, &.{"--fix"});
     try testing.expect(try bed.linked(c, key, "a.txt"));
-    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "linked {s}\n", .{try bed.shown(try std.fs.path.join(arena, &.{ c, "a.txt" }))})) != null);
+    try testing.expect(std.mem.find(u8, got.out, try arena.print("linked {s}\n", .{try bed.shown(try std.Io.Dir.path.join(arena, &.{ c, "a.txt" }))})) != null);
     try testing.expectEqualStrings("b edited", try bed.read(c, "b.txt"));
     try testing.expect(!try bed.linked(c, key, "b.txt"));
     try testing.expectEqualStrings("b", try kept.content.readSmall(arena, try (kept.store.Layout{ .synced_root = bed.ws.cfg.synced_root }).copyPath(arena, key, "b.txt")));
     try testing.expectEqualStrings(aside_before, try kept_hooks.snapshot(arena, aside_dir, null));
-    const b_shown = try bed.shown(try std.fs.path.join(arena, &.{ c, "b.txt" }));
-    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "linked {s}\n", .{b_shown})) == null);
-    try testing.expect(std.mem.indexOf(u8, got.out, try std.fmt.allocPrint(arena, "  {s}: local copy differs from the kept copy", .{b_shown})) != null);
+    const b_shown = try bed.shown(try std.Io.Dir.path.join(arena, &.{ c, "b.txt" }));
+    try testing.expect(std.mem.find(u8, got.out, try arena.print("linked {s}\n", .{b_shown})) == null);
+    try testing.expect(std.mem.find(u8, got.out, try arena.print("  {s}: local copy differs from the kept copy", .{b_shown})) != null);
 
     const plain = try testutil.runCmd(arena, command.run, bed.ws, &.{});
-    try testing.expect(std.mem.indexOf(u8, plain.out, "linked ") == null);
+    try testing.expect(std.mem.find(u8, plain.out, "linked ") == null);
 }
 
 test "run: --fix judges the kept files after its repairs, so what it just linked passes" {
@@ -1131,7 +1131,7 @@ test "run: kept files linked fails while sync would give up holding a file git r
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(has(got.out, "kept files linked: FAIL\n"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: git reads it only as a regular file, so holt cannot keep it; sync gives it up, and git sees it again (run: holt sync)\n", .{try quoted(arena, p)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: git reads it only as a regular file, so holt cannot keep it; sync gives it up, and git sees it again (run: holt sync)\n", .{try quoted(arena, p)})));
 
     _ = try testutil.runCmd(arena, @import("sync.zig").command.run, w.ws, &.{});
     const after = try testutil.runCmd(arena, command.run, w.ws, &.{});
@@ -1143,7 +1143,7 @@ const kept = @import("../kept.zig");
 const kept_cmd = @import("../kept_cmd.zig");
 
 fn has(hay: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, hay, needle) != null;
+    return std.mem.find(u8, hay, needle) != null;
 }
 
 /// `path` as a hint prints it (`ui.quotePath`).
@@ -1159,11 +1159,11 @@ fn keptWorld(a: std.mem.Allocator, sb: *testutil.Sandbox, with_store: bool) !kep
 }
 
 fn firstAside(a: std.mem.Allocator, synced: []const u8) ![]const u8 {
-    const dir = try std.fs.path.join(a, &.{ synced, "kept", ".holt-aside" });
+    const dir = try std.Io.Dir.path.join(a, &.{ synced, "kept", ".holt-aside" });
     var d = try std.Io.Dir.cwd().openDir(fsutil.io(), dir, .{ .iterate = true });
     defer d.close(fsutil.io());
     var it = d.iterate();
-    while (try it.next(fsutil.io())) |e| if (e.kind == .directory) return std.fs.path.join(a, &.{ dir, e.name });
+    while (try it.next(fsutil.io())) |e| if (e.kind == .directory) return std.Io.Dir.path.join(a, &.{ dir, e.name });
     return error.NoAside;
 }
 
@@ -1245,7 +1245,7 @@ test "run: kept files linked fails for a link gone, a local copy that differs, a
     try fsutil.removePath(try fsutil.joinSlashy(arena, w.clone, ".clasp.json"));
     try fsutil.removePath(try fsutil.joinSlashy(arena, w.clone, "local.json"));
     _ = try w.write(arena, "local.json", "{\"changed\":1}\n");
-    const exclude = try std.fs.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
     const text = try kept.content.readSmall(arena, exclude);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = try std.mem.concat(arena, u8, &.{ text, "!/shown.json\n" }) });
 
@@ -1253,11 +1253,11 @@ test "run: kept files linked fails for a link gone, a local copy that differs, a
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(has(got.out, "kept files linked: FAIL\n"));
     const clasp = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, ".clasp.json"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: not linked yet (run: holt sync)\n", .{clasp})));
+    try testing.expect(has(got.out, try arena.print("  {s}: not linked yet (run: holt sync)\n", .{clasp})));
     const local = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "local.json"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: local copy differs from the kept copy (run: holt keep --take-local {s}, or holt keep --take-kept {s})\n", .{ local, local, local })));
+    try testing.expect(has(got.out, try arena.print("  {s}: local copy differs from the kept copy (run: holt keep --take-local {s}, or holt keep --take-kept {s})\n", .{ local, local, local })));
     const shown = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "shown.json"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: git does not ignore holt's link, so it could be committed; a .gitignore negation may include it (run: git -C {s} check-ignore --no-index -v -- shown.json)\n", .{ shown, try quoted(arena, w.clone) })));
+    try testing.expect(has(got.out, try arena.print("  {s}: git does not ignore holt's link, so it could be committed; a .gitignore negation may include it (run: git -C {s} check-ignore --no-index -v -- shown.json)\n", .{ shown, try quoted(arena, w.clone) })));
     try testing.expect(has(got.out, "kept store valid: PASS\n"));
     try testing.expect(fsutil.exists(try fsutil.joinSlashy(arena, w.clone, "local.json")));
     try testing.expect(try kept.content.entryAt(try fsutil.joinSlashy(arena, w.clone, ".clasp.json")) == .absent);
@@ -1276,40 +1276,40 @@ test "run: kept store valid fails on unknown files, conflict copies, unknown ver
     const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
     const key_dir = try layout.keyDir(arena, w.key);
     const kept_dir = try layout.keptDir(arena);
-    const stray = try std.fs.path.join(arena, &.{ key_dir, "stray.txt" });
+    const stray = try std.Io.Dir.path.join(arena, &.{ key_dir, "stray.txt" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = stray, .data = "x" });
-    const loose = try std.fs.path.join(arena, &.{ kept_dir, "loose.txt" });
+    const loose = try std.Io.Dir.path.join(arena, &.{ kept_dir, "loose.txt" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = loose, .data = "x" });
-    const copy = try std.fs.path.join(arena, &.{ kept_dir, ".holt-skip (1)" });
+    const copy = try std.Io.Dir.path.join(arena, &.{ kept_dir, ".holt-skip (1)" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = copy, .data = "x" });
-    const key_copy = try std.fs.path.join(arena, &.{ key_dir, ".holt-kept (conflicted copy).json" });
+    const key_copy = try std.Io.Dir.path.join(arena, &.{ key_dir, ".holt-kept (conflicted copy).json" });
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = key_copy, .data = "{}" });
     const other_key = try layout.keyDir(arena, "github.com/acme/future");
     try fsutil.ensureDir(other_key);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ other_key, kept.store.record_basename }), .data = "{\"version\": 99}\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ other_key, kept.store.record_basename }), .data = "{\"version\": 99}\n" });
 
     const entry = try firstAside(arena, w.ws.cfg.synced_root);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ entry, "data", ".clasp.json" }), .data = "tampered" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ entry, "data", ".clasp.json" }), .data = "tampered" });
 
     const committed = try fsutil.joinSlashy(arena, w.clone, "committed-link");
     try kept.content.createLink(try w.keptPath(arena, ".clasp.json"), committed, .file);
     try testutil.runGit(&sb, w.clone, &.{ "add", "committed-link" });
     try testutil.runGit(&sb, w.clone, &.{ "commit", "-qm", "oops" });
 
-    const org = try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, "projects", "kept" });
+    const org = try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, "projects", "kept" });
     try fsutil.ensureDir(org);
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(has(got.out, "kept store valid: FAIL\n"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: unknown file in the kept store", .{try quoted(arena, stray)})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: unknown file in the kept store", .{try quoted(arena, loose)})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: a cloud conflict copy of a holt file", .{try quoted(arena, copy)})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: a cloud conflict copy of a holt file", .{try quoted(arena, key_copy)})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: its record has a version this holt does not know, so holt never writes to it (run: holt upgrade)\n", .{try quoted(arena, other_key)})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: aside entry no longer matches its manifest\n", .{try quoted(arena, entry)})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: a tracked symlink into kept/", .{try quoted(arena, committed)})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "(run: git -C {s} rm --cached -- committed-link)\n", .{try quoted(arena, w.clone)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: unknown file in the kept store", .{try quoted(arena, stray)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: unknown file in the kept store", .{try quoted(arena, loose)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: a cloud conflict copy of a holt file", .{try quoted(arena, copy)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: a cloud conflict copy of a holt file", .{try quoted(arena, key_copy)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: its record has a version this holt does not know, so holt never writes to it (run: holt upgrade)\n", .{try quoted(arena, other_key)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: aside entry no longer matches its manifest\n", .{try quoted(arena, entry)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: a tracked symlink into kept/", .{try quoted(arena, committed)})));
+    try testing.expect(has(got.out, try arena.print("(run: git -C {s} rm --cached -- committed-link)\n", .{try quoted(arena, w.clone)})));
     try testing.expect(!has(got.out, try quoted(arena, org)));
     try testing.expect(fsutil.exists(stray) and fsutil.exists(copy));
 }
@@ -1326,11 +1326,11 @@ test "run: an online-only stand-in for a kept copy is a placeholder, not an unkn
 
     const kc = try w.keptPath(arena, "local.json");
     try fsutil.removePath(kc);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ std.fs.path.dirname(kc).?, ".local.json.icloud" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ std.Io.Dir.path.dirname(kc).?, ".local.json.icloud" }), .data = "" });
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: online-only on this machine; open it to download it\n", .{try quoted(arena, kc)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: online-only on this machine; open it to download it\n", .{try quoted(arena, kc)})));
     try testing.expect(!has(got.out, "unknown file in the kept store"));
 }
 
@@ -1344,10 +1344,10 @@ test "run: a kept path the upstream default branch tracks fails, and is skipped 
     defer w.deinit();
     try w.keep(arena, "conf/local.json", "{}\n");
 
-    const other = try std.fs.path.join(arena, &.{ sb.root, "other-clone" });
+    const other = try std.Io.Dir.path.join(arena, &.{ sb.root, "other-clone" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", w.bare, other });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ other, "conf" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ other, "conf", "local.json" }), .data = "{}\n" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ other, "conf" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ other, "conf", "local.json" }), .data = "{}\n" });
     try testutil.runGit(&sb, other, &.{ "add", "conf/local.json" });
     try testutil.runGit(&sb, other, &.{ "commit", "-qm", "track it upstream" });
     try testutil.runGit(&sb, other, &.{ "push", "-q", "origin", "main" });
@@ -1356,7 +1356,7 @@ test "run: a kept path the upstream default branch tracks fails, and is skipped 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     const p = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "conf/local.json"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "tracked kept path: FAIL\n  {s}: tracked on the upstream default branch (run: holt unkeep {s})\n", .{ p, p })));
+    try testing.expect(has(got.out, try arena.print("tracked kept path: FAIL\n  {s}: tracked on the upstream default branch (run: holt unkeep {s})\n", .{ p, p })));
 
     try testutil.runGit(&sb, w.clone, &.{ "remote", "set-head", "origin", "-d" });
     const unset = try testutil.runCmd(arena, command.run, w.ws, &.{});
@@ -1375,8 +1375,8 @@ test "run: an auto-pattern match a .gitignore negation un-ignores is noted with 
     const auto = try w.write(arena, "neg/.clasp.json", "{}\n");
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
-    const line = try std.fmt.allocPrint(arena, "{s}:2:!.clasp.json", .{try fsutil.contractTilde(arena, app.envOf_current(), ignore)});
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: {s}: matches an auto pattern (.clasp.json) but {s} un-ignores it, so holt cannot keep it; remove or narrow that line, or leave it for a commit\n", .{ try quoted(arena, auto), line })));
+    const line = try arena.print("{s}:2:!.clasp.json", .{try fsutil.contractTilde(arena, app.envOf_current(), ignore)});
+    try testing.expect(has(got.out, try arena.print("note: {s}: matches an auto pattern (.clasp.json) but {s} un-ignores it, so holt cannot keep it; remove or narrow that line, or leave it for a commit\n", .{ try quoted(arena, auto), line })));
     try testing.expect(!has(got.out, "holt keep "));
 }
 
@@ -1402,7 +1402,7 @@ test "run: notes candidates, an auto-pattern match git does not ignore, a releas
     const layout = c.layout;
     try kept.store.writeReleased(arena, layout, w.key, "old.json");
 
-    const exclude = try std.fs.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
     const text = try kept.content.readSmall(arena, exclude);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = try std.mem.concat(arena, u8, &.{ text, ".env\n" }) });
     _ = try w.write(arena, ".env", "S=1\n");
@@ -1412,23 +1412,23 @@ test "run: notes candidates, an auto-pattern match git does not ignore, a releas
     const old_key = "github.com/acme/old-widget";
     const old_dir = try layout.keyDir(arena, old_key);
     try fsutil.ensureDir(old_dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ old_dir, kept.store.record_basename }), .data = try std.fmt.allocPrint(arena, "{{\"version\": 1, \"root\": \"{s}\"}}\n", .{roots[0]}) });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ old_dir, "legacy.json" }), .data = "{}" });
-    try kept.store.writeFact(arena, layout, old_key, "00000000000000ff", "legacy.json", .file, &(try kept.content.hashFile(arena, try std.fs.path.join(arena, &.{ old_dir, "legacy.json" }))));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ old_dir, kept.store.record_basename }), .data = try arena.print("{{\"version\": 1, \"root\": \"{s}\"}}\n", .{roots[0]}) });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ old_dir, "legacy.json" }), .data = "{}" });
+    try kept.store.writeFact(arena, layout, old_key, "00000000000000ff", "legacy.json", .file, &(try kept.content.hashFile(arena, try std.Io.Dir.path.join(arena, &.{ old_dir, "legacy.json" }))));
 
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ w.hub, "todo.md" }), .data = "t\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ w.hub, "todo.md" }), .data = "t\n" });
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     const clone_q = try quoted(arena, w.clone);
     const hub_q = try quoted(arena, w.hub);
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: 2 files not kept in 1 repo and 1 hub root (run: holt keep --review --all):\n  {s}: 1 (run: holt keep --review {s})\n  {s}: 1 (run: holt keep --review {s})\n", .{ clone_q, clone_q, hub_q, hub_q })));
+    try testing.expect(has(got.out, try arena.print("note: 2 files not kept in 1 repo and 1 hub root (run: holt keep --review --all):\n  {s}: 1 (run: holt keep --review {s})\n  {s}: 1 (run: holt keep --review {s})\n", .{ clone_q, clone_q, hub_q, hub_q })));
     const auto = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "sub/.clasp.json"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: {s}: matches an auto pattern (.clasp.json) but git does not ignore it; add it to .gitignore, or keep it (run: holt keep {s})\n", .{ auto, auto })));
+    try testing.expect(has(got.out, try arena.print("note: {s}: matches an auto pattern (.clasp.json) but git does not ignore it; add it to .gitignore, or keep it (run: holt keep {s})\n", .{ auto, auto })));
     const released = try quoted(arena, try w.keptPath(arena, "old.json"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: {s} was released but its kept copy remains; once every machine has synced (records from: {s} (this machine)), remove it (run: holt unkeep --purge {s} --yes)\n", .{ released, c.machine_id, try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "old.json")) })));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: github.com/acme/old-widget has no clone here, and {s} shares its history: same history - renamed, transferred, or a fork (run: holt keep --from github.com/acme/old-widget {s})\n", .{ clone_q, clone_q })));
+    try testing.expect(has(got.out, try arena.print("note: {s} was released but its kept copy remains; once every machine has synced (records from: {s} (this machine)), remove it (run: holt unkeep --purge {s} --yes)\n", .{ released, c.machine_id, try quoted(arena, try fsutil.joinSlashy(arena, w.clone, "old.json")) })));
+    try testing.expect(has(got.out, try arena.print("note: github.com/acme/old-widget has no clone here, and {s} shares its history: same history - renamed, transferred, or a fork (run: holt keep --from github.com/acme/old-widget {s})\n", .{ clone_q, clone_q })));
     const suspect = try quoted(arena, try fsutil.joinSlashy(arena, try w.keptPath(arena, "docs-local"), "a (1).md"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: {s} looks like a cloud conflict copy; merge what you need, then delete it\n", .{suspect})));
+    try testing.expect(has(got.out, try arena.print("note: {s} looks like a cloud conflict copy; merge what you need, then delete it\n", .{suspect})));
 }
 
 test "run: without kept/, a clone whose links point into another synced root fails with the copy hint alone" {
@@ -1442,14 +1442,14 @@ test "run: without kept/, a clone whose links point into another synced root fai
     try w.keep(arena, ".clasp.json", "{}\n");
 
     var moved = w.ws;
-    moved.cfg.synced_root = try std.fs.path.join(arena, &.{ sb.root, "new-synced" });
-    try fsutil.copyTree(arena, try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, "projects" }), try std.fs.path.join(arena, &.{ moved.cfg.synced_root, "projects" }));
+    moved.cfg.synced_root = try std.Io.Dir.path.join(arena, &.{ sb.root, "new-synced" });
+    try fsutil.copyTree(arena, try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, "projects" }), try std.Io.Dir.path.join(arena, &.{ moved.cfg.synced_root, "projects" }));
     for (try moved.list(arena)) |p| _ = try hub.reconcile(arena, &moved, &p, false);
 
     const got = try testutil.runCmd(arena, command.run, moved, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(has(got.out, "kept files linked: FAIL\n"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  kept/ is at {s}: copy it to {s}\n", .{ try quoted(arena, w.ws.cfg.synced_root), try quoted(arena, moved.cfg.synced_root) })));
+    try testing.expect(has(got.out, try arena.print("  kept/ is at {s}: copy it to {s}\n", .{ try quoted(arena, w.ws.cfg.synced_root), try quoted(arena, moved.cfg.synced_root) })));
     try testing.expect(!has(got.out, "kept/ is missing"));
     try testing.expect(has(got.out, "kept store valid: PASS\n"));
 }
@@ -1468,7 +1468,7 @@ test "run: without kept/ and with no clone holding kept-file links, the kept che
     try testing.expectEqual(@as(u8, 0), got.code);
     try testing.expect(has(got.out, "kept files linked: PASS\nkept store valid: PASS\ntracked kept path: PASS\n"));
     try testing.expect(!has(got.out, "note: "));
-    try testing.expect(!fsutil.exists(try std.fs.path.join(arena, &.{ sb.root, "state" })));
+    try testing.expect(!fsutil.exists(try std.Io.Dir.path.join(arena, &.{ sb.root, "state" })));
 }
 
 test "run: a clone that does not match its local/ key fails kept store valid" {
@@ -1480,17 +1480,17 @@ test "run: a clone that does not match its local/ key fails kept store valid" {
     var w = try keptWorld(arena, &sb, true);
     defer w.deinit();
 
-    const local = try std.fs.path.join(arena, &.{ w.ws.cfg.code_root, "local", "scratch" });
+    const local = try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.code_root, "local", "scratch" });
     try testutil.seedMinimalGitClone(arena, &sb.git_env, local);
     const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
     const key_dir = try layout.keyDir(arena, "local/scratch");
     try fsutil.ensureDir(key_dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, kept.store.record_basename }), .data = "{\"version\": 1, \"root\": \"" ++ &@as([40]u8, @splat('0')) ++ "\"}\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ key_dir, kept.store.record_basename }), .data = "{\"version\": 1, \"root\": \"" ++ &@as([40]u8, @splat('0')) ++ "\"}\n" });
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(has(got.out, "kept store valid: FAIL\n"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: does not match the local/ key local/scratch (a different repo, or its record has not arrived); give this clone another directory name and run holt repo adopt on it there, or, if that repo is gone, release its kept files (run: holt unkeep --repo local/scratch)\n", .{try quoted(arena, local)})));
+    try testing.expect(has(got.out, try arena.print("  {s}: does not match the local/ key local/scratch (a different repo, or its record has not arrived); give this clone another directory name and run holt repo adopt on it there, or, if that repo is gone, release its kept files (run: holt unkeep --repo local/scratch)\n", .{try quoted(arena, local)})));
 }
 
 test "run: every working tree is judged: a linked tree's missing link and hidden content, and a moved tree's record" {
@@ -1503,27 +1503,27 @@ test "run: every working tree is judged: a linked tree's missing link and hidden
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
 
-    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees{c}feat", .{ w.clone, std.fs.path.sep });
+    const linked = try arena.print("{s}@worktrees{c}feat", .{ w.clone, std.Io.Dir.path.sep });
     try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     const lq = try quoted(arena, try fsutil.joinSlashy(arena, linked, ".clasp.json"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: not linked yet (run: holt sync)\n", .{lq})));
+    try testing.expect(has(got.out, try arena.print("  {s}: not linked yet (run: holt sync)\n", .{lq})));
 
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try fsutil.joinSlashy(arena, linked, ".clasp.json"), .data = "{\"only\":\"here\"}\n" });
     const hidden = try testutil.runCmd(arena, command.run, w.ws, &.{});
-    try testing.expect(has(hidden.out, try std.fmt.allocPrint(arena, "  {s}: local copy differs from the kept copy", .{lq})));
+    try testing.expect(has(hidden.out, try arena.print("  {s}: local copy differs from the kept copy", .{lq})));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, hidden.out, lq) - 2);
 
-    const moved = try std.fmt.allocPrint(arena, "{s}@worktrees{c}moved", .{ w.clone, std.fs.path.sep });
+    const moved = try arena.print("{s}@worktrees{c}moved", .{ w.clone, std.Io.Dir.path.sep });
     try std.Io.Dir.cwd().rename(linked, std.Io.Dir.cwd(), moved, fsutil.io());
     const gone = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), gone.code);
     const cq = try quoted(arena, w.clone);
     const wq = try quoted(arena, linked);
     const rq = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, ".git/worktrees/feat"));
-    try testing.expect(has(gone.out, try std.fmt.allocPrint(arena, ", or git -C {s} worktree remove {s})\n", .{ cq, wq })));
-    if (ui.native_shell == .posix) try testing.expect(has(gone.out, try std.fmt.allocPrint(arena, "(run: mkdir -p {s} && printf 'gitdir: %s\\n' {s} > {s} && git -C {s} checkout-index -a, or ", .{ wq, rq, try quoted(arena, try std.fs.path.join(arena, &.{ linked, ".git" })), wq })));
+    try testing.expect(has(gone.out, try arena.print(", or git -C {s} worktree remove {s})\n", .{ cq, wq })));
+    if (ui.native_shell == .posix) try testing.expect(has(gone.out, try arena.print("(run: mkdir -p {s} && printf 'gitdir: %s\\n' {s} > {s} && git -C {s} checkout-index -a, or ", .{ wq, rq, try quoted(arena, try std.Io.Dir.path.join(arena, &.{ linked, ".git" })), wq })));
     try testing.expect(!has(gone.out, "worktree repair") and !has(gone.out, "worktree prune"));
 }
 
@@ -1539,33 +1539,33 @@ test "run: a worktree holt worktree made whose directory is gone and whose recor
     var w = try keptWorld(arena, &sb, true);
     defer w.deinit();
     try w.keep(arena, ".clasp.json", "{}\n");
-    const linked = try std.fmt.allocPrint(arena, "{s}@worktrees/feat", .{w.clone});
+    const linked = try arena.print("{s}@worktrees/feat", .{w.clone});
     try testutil.runGit(&sb, w.clone, &.{ "worktree", "add", "-q", "-b", "feat", linked });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ linked, "staged.txt" }), .data = "only in the index\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ linked, "staged.txt" }), .data = "only in the index\n" });
     try testutil.runGit(&sb, linked, &.{ "add", "staged.txt" });
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), linked);
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     const lead = "a working tree that cannot be read (absent)";
-    const at = std.mem.indexOf(u8, got.out, lead) orelse {
+    const at = std.mem.find(u8, got.out, lead) orelse {
         std.debug.print("wanted {s} in:\n{s}\n", .{ lead, got.out });
         return error.TestUnexpectedResult;
     };
-    const line = got.out[at..std.mem.indexOfScalarPos(u8, got.out, at, '\n').?];
+    const line = got.out[at..std.mem.findScalarPos(u8, got.out, at, '\n').?];
     try testing.expect(!has(got.out, " worktree remove ") and !has(got.out, "worktree prune"));
     const holt = ", or holt worktree acme/proj/widget feat -r)";
     try testing.expect(std.mem.endsWith(u8, line, holt));
     const refused = try testutil.runCmd(arena, worktree_cmd.command.run, w.ws, &.{ "acme/proj/widget", "feat", "-r" });
     try testing.expectEqual(@as(u8, 1), refused.code);
     try testing.expect(has(refused.err, "staged changes only "));
-    const open = std.mem.indexOf(u8, line, "(run: ").? + "(run: ".len;
+    const open = std.mem.find(u8, line, "(run: ").? + "(run: ".len;
     const relink = line[open .. line.len - holt.len];
     const res = try proc.runEnv(arena, &.{ "sh", "-c", relink }, null, &sb.git_env.map);
     try testing.expectEqual(@as(u8, 0), res.status);
     const after = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expect(!has(after.out, lead));
-    try testing.expectEqualStrings("only in the index\n", try kept.content.readSmall(arena, try std.fs.path.join(arena, &.{ linked, "staged.txt" })));
+    try testing.expectEqualStrings("only in the index\n", try kept.content.readSmall(arena, try std.Io.Dir.path.join(arena, &.{ linked, "staged.txt" })));
 }
 
 test "run: a kept path this branch tracks is information, never a failure" {
@@ -1590,7 +1590,7 @@ test "run: a kept path this branch tracks is information, never a failure" {
 }
 
 fn noReportScratch(a: std.mem.Allocator, sb: *testutil.Sandbox) !bool {
-    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), try std.fs.path.join(a, &.{ sb.root, "tmp" }), .{ .iterate = true });
+    var d = try std.Io.Dir.cwd().openDir(fsutil.io(), try std.Io.Dir.path.join(a, &.{ sb.root, "tmp" }), .{ .iterate = true });
     defer d.close(fsutil.io());
     var it = d.iterate();
     while (try it.next(fsutil.io())) |e| if (std.mem.startsWith(u8, e.name, "holt-report-")) return false;
@@ -1608,22 +1608,22 @@ test "run: a key directory whose record has not arrived is reported, never hinte
     try w.keep(arena, ".clasp.json", "{}\n");
     const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
     const other = try layout.keyDir(arena, "github.com/acme/other");
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ other, ".holt-paths", "ab" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ other, ".env" }), .data = "SECRET=1\n" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ other, ".holt-paths", "ab" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ other, ".env" }), .data = "SECRET=1\n" });
     const bare = try layout.keyDir(arena, "gitlab.com/acme/lagging");
     try fsutil.ensureDir(bare);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ bare, "notes.md" }), .data = "n\n" });
-    const nested = try std.fs.path.join(arena, &.{ try layout.keyDir(arena, w.key), "sub" });
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ nested, ".holt-paths" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ bare, "notes.md" }), .data = "n\n" });
+    const nested = try std.Io.Dir.path.join(arena, &.{ try layout.keyDir(arena, w.key), "sub" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ nested, ".holt-paths" }));
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
     try testing.expect(has(got.out, "kept store valid: FAIL\n"));
-    for ([_][]const u8{ other, try std.fs.path.join(arena, &.{ w.ws.cfg.synced_root, "kept", "gitlab.com" }), nested }) |p| {
-        try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: no key record here yet (not synced, or lost); nothing in it is linked or removed until its .holt-kept.json arrives\n", .{try quoted(arena, p)})));
+    for ([_][]const u8{ other, try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.synced_root, "kept", "gitlab.com" }), nested }) |p| {
+        try testing.expect(has(got.out, try arena.print("  {s}: no key record here yet (not synced, or lost); nothing in it is linked or removed until its .holt-kept.json arrives\n", .{try quoted(arena, p)})));
     }
     try testing.expect(!has(got.out, "delete it"));
-    try testing.expect(fsutil.exists(try std.fs.path.join(arena, &.{ other, ".env" })));
+    try testing.expect(fsutil.exists(try std.Io.Dir.path.join(arena, &.{ other, ".env" })));
 }
 
 test "run: what folders gather on their own is never unknown in kept/, iCloud's stand-ins for holt's files are placeholders, and control characters are escaped" {
@@ -1638,28 +1638,28 @@ test "run: what folders gather on their own is never unknown in kept/, iCloud's 
     const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
     const key_dir = try layout.keyDir(arena, w.key);
     const kept_dir = try layout.keptDir(arena);
-    for ([_][]const u8{ kept_dir, try std.fs.path.join(arena, &.{ kept_dir, "holt-test.invalid" }), key_dir, try layout.asideDir(arena) }) |d| {
+    for ([_][]const u8{ kept_dir, try std.Io.Dir.path.join(arena, &.{ kept_dir, "holt-test.invalid" }), key_dir, try layout.asideDir(arena) }) |d| {
         for ([_][]const u8{ ".DS_Store", "Icon\r", "desktop.ini", "Thumbs.db", ".directory" }) |n| {
             // Windows cannot name a file with a control character.
-            if (builtin.os.tag == .windows and std.mem.indexOfScalar(u8, n, '\r') != null) continue;
-            try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ d, n }), .data = "x" });
+            if (builtin.os.tag == .windows and std.mem.findScalar(u8, n, '\r') != null) continue;
+            try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ d, n }), .data = "x" });
         }
-        try fsutil.ensureDir(try std.fs.path.join(arena, &.{ d, "@eaDir", "x" }));
-        try fsutil.ensureDir(try std.fs.path.join(arena, &.{ d, ".Trash-1000", "files" }));
+        try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ d, "@eaDir", "x" }));
+        try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ d, ".Trash-1000", "files" }));
     }
-    try fsutil.ensureDir(try std.fs.path.join(arena, &.{ kept_dir, ".stversions" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(arena, &.{ kept_dir, ".stversions" }));
     const clean = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 0), clean.code);
     try testing.expect(has(clean.out, "kept store valid: PASS\n"));
 
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ kept_dir, "..holt-skip.icloud" }), .data = "x" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, "..holt-paths.icloud" }), .data = "x" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ kept_dir, "..holt-skip.icloud" }), .data = "x" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ key_dir, "..holt-paths.icloud" }), .data = "x" });
     const control_names = builtin.os.tag != .windows;
-    if (control_names) try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ key_dir, "bad\x1b[31mname" }), .data = "x" });
+    if (control_names) try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ key_dir, "bad\x1b[31mname" }), .data = "x" });
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    for ([_][]const u8{ try std.fs.path.join(arena, &.{ kept_dir, ".holt-skip" }), try std.fs.path.join(arena, &.{ key_dir, ".holt-paths" }) }) |p| {
-        try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: online-only on this machine; open it to download it\n", .{try quoted(arena, p)})));
+    for ([_][]const u8{ try std.Io.Dir.path.join(arena, &.{ kept_dir, ".holt-skip" }), try std.Io.Dir.path.join(arena, &.{ key_dir, ".holt-paths" }) }) |p| {
+        try testing.expect(has(got.out, try arena.print("  {s}: online-only on this machine; open it to download it\n", .{try quoted(arena, p)})));
     }
     try testing.expect(!has(got.out, ".icloud"));
     try testing.expect(!has(got.out, "\x1b"));
@@ -1676,12 +1676,12 @@ test "run: doctor writes nothing in holt's machine-local state, leaves no scratc
     defer w.deinit();
     try w.keep(arena, "old.json", "{}\n");
     try kept.store.writeReleased(arena, .{ .synced_root = w.ws.cfg.synced_root }, w.key, "old.json");
-    const exclude = try std.fs.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
+    const exclude = try std.Io.Dir.path.join(arena, &.{ w.clone, ".git", "info", "exclude" });
     const text = try kept.content.readSmall(arena, exclude);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = exclude, .data = try std.mem.concat(arena, u8, &.{ text, ".env\n" }) });
     _ = try w.write(arena, ".env", "S=1\n");
-    const state = try std.fs.path.join(arena, &.{ sb.root, "state" });
-    const saved = try std.fs.path.join(arena, &.{ sb.root, "state-saved" });
+    const state = try std.Io.Dir.path.join(arena, &.{ sb.root, "state" });
+    const saved = try std.Io.Dir.path.join(arena, &.{ sb.root, "state-saved" });
     try fsutil.copyTree(arena, state, saved);
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), state);
 
@@ -1718,7 +1718,7 @@ test "run: doctor and status never wait on a writer's locks" {
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expect(!has(got.out, "WouldBlock"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: not linked yet (run: holt sync)\n", .{try quoted(arena, try fsutil.joinSlashy(arena, w.clone, ".clasp.json"))})));
+    try testing.expect(has(got.out, try arena.print("  {s}: not linked yet (run: holt sync)\n", .{try quoted(arena, try fsutil.joinSlashy(arena, w.clone, ".clasp.json"))})));
     const st = try testutil.runCmd(arena, @import("status.zig").command.run, w.ws, &.{});
     try testing.expect(!has(st.err, "WouldBlock"));
     try testing.expect(has(st.out, "1 not linked (run: holt sync)\n"));
@@ -1732,17 +1732,17 @@ test "run: a clone with no key is information: one outside a repo's path, and on
     defer sb.deinit();
     var w = try keptWorld(arena, &sb, true);
     defer w.deinit();
-    const odd = try std.fs.path.join(arena, &.{ w.ws.cfg.code_root, "scratch" });
+    const odd = try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.code_root, "scratch" });
     try testutil.seedMinimalGitClone(arena, &sb.git_env, odd);
-    const elsewhere = try std.fs.path.join(arena, &.{ w.ws.cfg.code_root, "local", "moved" });
+    const elsewhere = try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.code_root, "local", "moved" });
     try testutil.seedMinimalGitClone(arena, &sb.git_env, elsewhere);
-    const tree = try std.fs.path.join(arena, &.{ sb.root, "tree-elsewhere" });
+    const tree = try std.Io.Dir.path.join(arena, &.{ sb.root, "tree-elsewhere" });
     try fsutil.ensureDir(tree);
     try testutil.runGit(&sb, elsewhere, &.{ "config", "core.worktree", tree });
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expect(has(got.out, "kept files linked: PASS\n"));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: {s}: not at a repo's path under the code root (<host>/<owner>/<repo> or local/<name>), so it has no kept files\n", .{try quoted(arena, odd)})));
+    try testing.expect(has(got.out, try arena.print("note: {s}: not at a repo's path under the code root (<host>/<owner>/<repo> or local/<name>), so it has no kept files\n", .{try quoted(arena, odd)})));
     try testing.expect(has(got.out, ": core.worktree points elsewhere, so this clone has no key\n"));
     try testing.expect(!has(got.out, "not under the code root"));
 }
@@ -1758,7 +1758,7 @@ test "run: a kept path whose parent is a symlink or a file fails, naming what is
     try w.keep(arena, "conf/a.json", "{}\n");
     const conf = try fsutil.joinSlashy(arena, w.clone, "conf");
     try std.Io.Dir.cwd().deleteTree(fsutil.io(), conf);
-    const elsewhere = try std.fs.path.join(arena, &.{ sb.root, "elsewhere" });
+    const elsewhere = try std.Io.Dir.path.join(arena, &.{ sb.root, "elsewhere" });
     try fsutil.ensureDir(elsewhere);
     try fsutil.replaceSymlink(elsewhere, conf);
     const cq = try quoted(arena, conf);
@@ -1766,7 +1766,7 @@ test "run: a kept path whose parent is a symlink or a file fails, naming what is
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    const want = try std.fmt.allocPrint(arena, "  {s}: its parent {s} is a symlink (-> {s}), where a directory belongs; remove the link and sync to make one (run: rm {s} && holt sync)\n", .{ aq, cq, elsewhere, cq });
+    const want = try arena.print("  {s}: its parent {s} is a symlink (-> {s}), where a directory belongs; remove the link and sync to make one (run: rm {s} && holt sync)\n", .{ aq, cq, elsewhere, cq });
     try testing.expect(has(got.out, "kept files linked: FAIL\n"));
     try testing.expect(has(got.out, want));
     const st = try testutil.runCmd(arena, @import("status.zig").command.run, w.ws, &.{});
@@ -1776,7 +1776,7 @@ test "run: a kept path whose parent is a symlink or a file fails, naming what is
     try fsutil.removePath(conf);
     try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = conf, .data = "only here\n" });
     const file = try testutil.runCmd(arena, command.run, w.ws, &.{});
-    try testing.expect(has(file.out, try std.fmt.allocPrint(arena, "  {s}: its parent {s} is a file, where a directory belongs; move the file elsewhere, then sync to make the directory (run: holt sync)\n", .{ aq, cq })));
+    try testing.expect(has(file.out, try arena.print("  {s}: its parent {s} is a file, where a directory belongs; move the file elsewhere, then sync to make the directory (run: holt sync)\n", .{ aq, cq })));
 }
 
 test "run: nested repositories print under their own note, and a holt link committed to the branch is reported once" {
@@ -1797,10 +1797,10 @@ test "run: nested repositories print under their own note, and a holt link commi
     try testutil.seedMinimalGitClone(arena, &sb.git_env, nested);
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "note: 1 nested repository; nothing in one can be kept, so push each or move it out of the clone:\n  {s}\n", .{try quoted(arena, nested)})));
+    try testing.expect(has(got.out, try arena.print("note: 1 nested repository; nothing in one can be kept, so push each or move it out of the clone:\n  {s}\n", .{try quoted(arena, nested)})));
     const link = try quoted(arena, try fsutil.joinSlashy(arena, w.clone, ".clasp.json"));
-    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, try std.fmt.allocPrint(arena, "  {s}: ", .{link})));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: a tracked symlink into kept/", .{link})));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got.out, try arena.print("  {s}: ", .{link})));
+    try testing.expect(has(got.out, try arena.print("  {s}: a tracked symlink into kept/", .{link})));
 }
 
 test "run: a purged path the next sync restores from aside names the entry, and a purge whose aside entry has not arrived fails until it does" {
@@ -1817,15 +1817,15 @@ test "run: a purged path the next sync restores from aside names the entry, and 
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "  {s}: purged on another machine; sync restores a local copy from aside entry {s} (run: holt sync)\n", .{ p, stamp })));
+    try testing.expect(has(got.out, try arena.print("  {s}: purged on another machine; sync restores a local copy from aside entry {s} (run: holt sync)\n", .{ p, stamp })));
 
     const layout: kept.store.Layout = .{ .synced_root = w.ws.cfg.synced_root };
-    const entry = try std.fs.path.join(arena, &.{ try layout.asideDir(arena), stamp });
-    const away = try std.fs.path.join(arena, &.{ sb.root, "away" });
+    const entry = try std.Io.Dir.path.join(arena, &.{ try layout.asideDir(arena), stamp });
+    const away = try std.Io.Dir.path.join(arena, &.{ sb.root, "away" });
     try std.Io.Dir.renameAbsolute(entry, away, fsutil.io());
     const pending = try testutil.runCmd(arena, command.run, w.ws, &.{});
     try testing.expectEqual(@as(u8, 1), pending.code);
-    try testing.expect(has(pending.out, try std.fmt.allocPrint(arena, "  {s}: purged on another machine; its aside entry {s} has not arrived yet; sync once your cloud client downloads it (run: holt sync)\n", .{ p, stamp })));
+    try testing.expect(has(pending.out, try arena.print("  {s}: purged on another machine; its aside entry {s} has not arrived yet; sync once your cloud client downloads it (run: holt sync)\n", .{ p, stamp })));
     const waiting = try testutil.runCmd(arena, @import("sync.zig").command.run, w.ws, &.{});
     try testing.expect(has(waiting.out, "has not arrived yet"));
     try testing.expectEqual(kept.content.Entry.symlink, try kept.content.entryAt(try fsutil.joinSlashy(arena, w.clone, ".env")));
@@ -1849,14 +1849,14 @@ test "run: a released path of a key with no clone here names the clone to get an
     const key = "github.com/acme/gone";
     const dir = try layout.keyDir(arena, key);
     try fsutil.ensureDir(dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ dir, kept.store.record_basename }), .data = "{\"version\": 1, \"origin\": \"https://github.com/acme/gone\"}\n" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ dir, "old.json" }), .data = "{}" });
-    try kept.store.writeFact(arena, layout, key, "00000000000000ff", "old.json", .file, &(try kept.content.hashFile(arena, try std.fs.path.join(arena, &.{ dir, "old.json" }))));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ dir, kept.store.record_basename }), .data = "{\"version\": 1, \"origin\": \"https://github.com/acme/gone\"}\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ dir, "old.json" }), .data = "{}" });
+    try kept.store.writeFact(arena, layout, key, "00000000000000ff", "old.json", .file, &(try kept.content.hashFile(arena, try std.Io.Dir.path.join(arena, &.{ dir, "old.json" }))));
     try kept.store.writeReleased(arena, layout, key, "old.json");
 
     const got = try testutil.runCmd(arena, command.run, w.ws, &.{});
-    const at = try quoted(arena, try std.fs.path.join(arena, &.{ w.ws.cfg.code_root, "github.com", "acme", "gone", "old.json" }));
-    try testing.expect(has(got.out, try std.fmt.allocPrint(arena, "(run: holt repo get 'https://github.com/acme/gone' && holt unkeep --purge {s} --yes)\n", .{at})));
+    const at = try quoted(arena, try std.Io.Dir.path.join(arena, &.{ w.ws.cfg.code_root, "github.com", "acme", "gone", "old.json" }));
+    try testing.expect(has(got.out, try arena.print("(run: holt repo get 'https://github.com/acme/gone' && holt unkeep --purge {s} --yes)\n", .{at})));
 }
 
 fn reportFor(arena: std.mem.Allocator, terminal: bool, delay_ms: u32, frames: usize, linger_ms: u32) ![]const u8 {
@@ -1887,7 +1887,7 @@ test "Reporter: on a terminal, redraws one line in place, erasing what the last 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const out = try reportFor(arena_state.allocator(), true, 0, 2, 0);
-    try testing.expect(std.mem.indexOfScalar(u8, out, '\n') == null);
+    try testing.expect(std.mem.findScalar(u8, out, '\n') == null);
     try testing.expect(std.mem.startsWith(u8, out, "\rholt: doctor: scanned 1 folder, now in projects/acme ("));
     try testing.expect(std.mem.count(u8, out, "\r") >= 3);
     try testing.expectEqual(std.mem.count(u8, out, "\r"), std.mem.count(u8, out, "\x1b[K"));
@@ -1900,7 +1900,7 @@ test "Reporter: off a terminal, prints one plain line once the delay has passed"
     const out = try reportFor(arena_state.allocator(), false, 0, 1, 50);
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "\n"));
     try testing.expect(std.mem.startsWith(u8, out, "holt: doctor: scanned 1 folder, now in projects/acme ("));
-    try testing.expect(std.mem.indexOfAny(u8, out, "\r\x1b") == null);
+    try testing.expect(std.mem.findAny(u8, out, "\r\x1b") == null);
 }
 
 test "Reporter: a run that ends before the delay prints nothing, and stopping does not wait out the delay" {
@@ -1933,7 +1933,7 @@ test "statusLine: wide characters are counted as two columns, and a cut never sp
     while (it.nextCodepoint()) |cp| width += if (cp < 0x80) 1 else 2;
     try testing.expect(width <= 78);
     try testing.expect(std.mem.endsWith(u8, line, "refs/heads (1h02m)"));
-    try testing.expect(std.mem.indexOf(u8, line, "now in ...") != null);
+    try testing.expect(std.mem.find(u8, line, "now in ...") != null);
 }
 
 test "statusLine: a terminal too narrow for the line gets a cut that still leaves two columns free" {

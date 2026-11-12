@@ -55,7 +55,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     const explicit = version_arg != null;
     const tag = if (version_arg) |v|
-        (if (std.mem.startsWith(u8, v, "v")) v else try std.fmt.allocPrint(alloc, "v{s}", .{v}))
+        (if (std.mem.startsWith(u8, v, "v")) v else try alloc.print("v{s}", .{v}))
     else blk: {
         const api_url = try envOrDefault(alloc, env, "HOLT_UPGRADE_API", default_api_url);
         const body = fetch(alloc, api_url) catch |err| switch (err) {
@@ -92,7 +92,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
     };
 
     if (!auto_yes) {
-        const prompt = try std.fmt.allocPrint(alloc, "Upgrade holt {s} -> {s}?", .{ build_options.version, tag });
+        const prompt = try alloc.print("Upgrade holt {s} -> {s}?", .{ build_options.version, tag });
         if (!try ui.confirm(ctx.out, prompt)) {
             try ctx.out.writeAll("upgrade cancelled\n");
             return 0;
@@ -107,7 +107,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
 
     const is_zip = builtin.os.tag == .windows;
     const archive_name: []const u8 = if (is_zip) "asset.zip" else "asset.tar.gz";
-    const archive_path = try std.fs.path.join(alloc, &.{ tmp_dir, archive_name });
+    const archive_path = try std.Io.Dir.path.join(alloc, &.{ tmp_dir, archive_name });
     const dl_res = proc.run(alloc, &.{ "curl", "-fsSL", "-o", archive_path, url }, null) catch |err| switch (err) {
         error.FileNotFound => return error.CurlNotFound,
         else => return err,
@@ -146,7 +146,7 @@ fn run(ctx: *app.Ctx, a: cli.Args(Spec)) anyerror!u8 {
         return 1;
     };
 
-    const extracted_bin = try std.fs.path.join(alloc, &.{ tmp_dir, assetBinaryName(builtin.os.tag) });
+    const extracted_bin = try std.Io.Dir.path.join(alloc, &.{ tmp_dir, assetBinaryName(builtin.os.tag) });
     if (!fsutil.exists(extracted_bin)) {
         try ctx.err.writeAll("holt: extracted archive did not contain a holt binary\n");
         return 1;
@@ -239,7 +239,7 @@ pub fn assetName(alloc: std.mem.Allocator, os_tag: std.Target.Os.Tag, arch: std.
         else => return error.UnsupportedPlatform,
     };
     const ext: []const u8 = if (os_tag == .windows) "zip" else "tar.gz";
-    return std.fmt.allocPrint(alloc, "holt-{s}-{s}.{s}", .{ os_name, arch_name, ext });
+    return alloc.print("holt-{s}-{s}.{s}", .{ os_name, arch_name, ext });
 }
 
 /// The binary's name inside the release archive: `holt.exe` on Windows,
@@ -311,7 +311,7 @@ fn extractArchive(archive_path: []const u8, dest_dir: []const u8, is_zip: bool) 
 
 /// `<base>/<tag>/<asset>`, the GitHub release-asset download URL layout.
 pub fn downloadUrl(alloc: std.mem.Allocator, base: []const u8, tag: []const u8, asset: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(alloc, "{s}/{s}/{s}", .{ base, tag, asset });
+    return alloc.print("{s}/{s}/{s}", .{ base, tag, asset });
 }
 
 const temp_name_random_bytes = 12;
@@ -326,9 +326,9 @@ fn makeTempDir(alloc: std.mem.Allocator, env: Env) ![]const u8 {
     fsutil.io().random(&random_bytes);
     var name_buf: [temp_name_len]u8 = undefined;
     const suffix = std.base64.url_safe.Encoder.encode(&name_buf, &random_bytes);
-    const dir_name = try std.fmt.allocPrint(alloc, "holt-upgrade-{s}", .{suffix});
+    const dir_name = try alloc.print("holt-upgrade-{s}", .{suffix});
 
-    const path = try std.fs.path.join(alloc, &.{ base, dir_name });
+    const path = try std.Io.Dir.path.join(alloc, &.{ base, dir_name });
     try fsutil.ensureDir(path);
     return path;
 }
@@ -348,7 +348,7 @@ fn makeTempDir(alloc: std.mem.Allocator, env: Env) ![]const u8 {
 /// succeeds, the now-locked `.old` is left for a later run to reap.
 pub fn replaceBinary(alloc: std.mem.Allocator, target_path: []const u8, new_binary_path: []const u8) !void {
     const io = fsutil.io();
-    const staged_path = try std.fmt.allocPrint(alloc, "{s}.new", .{target_path});
+    const staged_path = try alloc.print("{s}.new", .{target_path});
 
     installBinary(io, alloc, new_binary_path, staged_path) catch |err| {
         std.Io.Dir.deleteFileAbsolute(io, staged_path) catch {};
@@ -356,7 +356,7 @@ pub fn replaceBinary(alloc: std.mem.Allocator, target_path: []const u8, new_bina
     };
 
     if (builtin.os.tag == .windows) {
-        const old_path = try std.fmt.allocPrint(alloc, "{s}.old", .{target_path});
+        const old_path = try alloc.print("{s}.old", .{target_path});
         std.Io.Dir.deleteFileAbsolute(io, old_path) catch {};
         std.Io.Dir.renameAbsolute(target_path, old_path, io) catch |err| {
             std.Io.Dir.deleteFileAbsolute(io, staged_path) catch {};
@@ -468,9 +468,9 @@ test "extractArchive: unpacks a gzip tar into the destination" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try arena.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    const srcdir = try std.fs.path.join(arena, &.{ root, "src" });
+    const srcdir = try std.Io.Dir.path.join(arena, &.{ root, "src" });
     try fsutil.ensureDir(srcdir);
-    const dest = try std.fs.path.join(arena, &.{ root, "dest" });
+    const dest = try std.Io.Dir.path.join(arena, &.{ root, "dest" });
     try fsutil.ensureDir(dest);
 
     if (builtin.os.tag == .windows) {
@@ -479,24 +479,24 @@ test "extractArchive: unpacks a gzip tar into the destination" {
         // holt extracts on Windows anyway; stage the same .zip fixture the
         // e2e tests use via stageFakeReleaseAsset and exercise the .zip arm
         // of extractArchive instead.
-        const archive = try std.fs.path.join(arena, &.{ root, "a.zip" });
+        const archive = try std.Io.Dir.path.join(arena, &.{ root, "a.zip" });
         try stageFakeReleaseAsset(arena, srcdir, archive, "BINARY");
 
         try extractArchive(archive, dest, true);
 
-        const out = try std.fs.path.join(arena, &.{ dest, "holt.exe" });
+        const out = try std.Io.Dir.path.join(arena, &.{ dest, "holt.exe" });
         try testing.expectEqualStrings("BINARY", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), out, arena, .unlimited));
     } else {
         // Build a real holt-*.tar.gz containing a file named "holt" via the
         // system tar (this is the FIXTURE, not the code under test), then
         // extract it in process and assert the file lands in dest.
-        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(arena, &.{ srcdir, "holt" }), .data = "BINARY" });
-        const archive = try std.fs.path.join(arena, &.{ root, "a.tar.gz" });
+        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(arena, &.{ srcdir, "holt" }), .data = "BINARY" });
+        const archive = try std.Io.Dir.path.join(arena, &.{ root, "a.tar.gz" });
         _ = try proc.run(arena, &.{ "tar", "-C", srcdir, "-czf", archive, "holt" }, null);
 
         try extractArchive(archive, dest, false);
 
-        const out = try std.fs.path.join(arena, &.{ dest, "holt" });
+        const out = try std.Io.Dir.path.join(arena, &.{ dest, "holt" });
         try testing.expectEqualStrings("BINARY", try std.Io.Dir.cwd().readFileAlloc(fsutil.io(), out, arena, .unlimited));
     }
 }
@@ -520,9 +520,9 @@ test "replaceBinary: swaps in the new binary's bytes; leaves the old image aside
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const target_path = try std.fs.path.join(arena, &.{ root, "target" });
+    const target_path = try std.Io.Dir.path.join(arena, &.{ root, "target" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_path, .data = "OLD" });
-    const new_path = try std.fs.path.join(arena, &.{ root, "new" });
+    const new_path = try std.Io.Dir.path.join(arena, &.{ root, "new" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = new_path, .data = "NEW" });
 
     try replaceBinary(arena, target_path, new_path);
@@ -535,7 +535,7 @@ test "replaceBinary: swaps in the new binary's bytes; leaves the old image aside
         try testing.expectEqual(@as(std.posix.mode_t, 0o755), st.permissions.toMode() & 0o777);
     }
 
-    const old_path = try std.fmt.allocPrint(arena, "{s}.old", .{target_path});
+    const old_path = try arena.print("{s}.old", .{target_path});
     if (builtin.os.tag == .windows) {
         // The locked running image can't be deleted, only renamed aside; a
         // later run reaps it, so replaceBinary intentionally leaves it here.
@@ -555,16 +555,16 @@ test "replaceBinary: a missing new binary leaves the original target intact" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const target_path = try std.fs.path.join(arena, &.{ root, "target" });
+    const target_path = try std.Io.Dir.path.join(arena, &.{ root, "target" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_path, .data = "OLD" });
-    const missing_new_path = try std.fs.path.join(arena, &.{ root, "does-not-exist" });
+    const missing_new_path = try std.Io.Dir.path.join(arena, &.{ root, "does-not-exist" });
 
     try testing.expectError(error.FileNotFound, replaceBinary(arena, target_path, missing_new_path));
 
     const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_path, arena, .unlimited);
     try testing.expectEqualStrings("OLD", got);
 
-    const old_path = try std.fmt.allocPrint(arena, "{s}.old", .{target_path});
+    const old_path = try arena.print("{s}.old", .{target_path});
     try testing.expect(!fsutil.exists(old_path));
 }
 
@@ -578,12 +578,12 @@ test "replaceBinary: a failure staging the new binary leaves the original target
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const bin_dir = try std.fs.path.join(arena, &.{ root, "bin" });
+    const bin_dir = try std.Io.Dir.path.join(arena, &.{ root, "bin" });
     try fsutil.ensureDir(bin_dir);
-    const target_path = try std.fs.path.join(arena, &.{ bin_dir, "target" });
+    const target_path = try std.Io.Dir.path.join(arena, &.{ bin_dir, "target" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_path, .data = "OLD" });
 
-    const new_path = try std.fs.path.join(arena, &.{ root, "new" });
+    const new_path = try std.Io.Dir.path.join(arena, &.{ root, "new" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = new_path, .data = "NEW" });
 
     var root_dir = try std.Io.Dir.cwd().openDir(testing.io, root, .{ .iterate = true });
@@ -602,7 +602,7 @@ test "replaceBinary: a failure staging the new binary leaves the original target
         const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_path, arena, .unlimited);
         try testing.expectEqualStrings("OLD", got);
 
-        const staged_path = try std.fmt.allocPrint(arena, "{s}.new", .{target_path});
+        const staged_path = try arena.print("{s}.new", .{target_path});
         try testing.expect(!fsutil.exists(staged_path));
     }
 }
@@ -617,17 +617,17 @@ test "run: a release matching the current version reports up to date" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const fixture_path = try std.fs.path.join(arena, &.{ root, "release.json" });
-    const content = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"v{s}\"}}", .{build_options.version});
+    const fixture_path = try std.Io.Dir.path.join(arena, &.{ root, "release.json" });
+    const content = try arena.print("{{\"tag_name\":\"v{s}\"}}", .{build_options.version});
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = fixture_path, .data = content });
 
-    const url = try std.fmt.allocPrint(arena, "file://{s}", .{fixture_path});
+    const url = try arena.print("file://{s}", .{fixture_path});
     const override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", url }});
     defer override.restore();
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "up to date") != null);
+    try testing.expect(std.mem.find(u8, got.out, "up to date") != null);
 }
 
 test "run: an explicit version argument equal to the current version reports up to date without a fetch" {
@@ -637,7 +637,7 @@ test "run: an explicit version argument equal to the current version reports up 
 
     const got = try testutil.runCmd(arena, command.run, null, &.{build_options.version});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "up to date") != null);
+    try testing.expect(std.mem.find(u8, got.out, "up to date") != null);
 }
 
 test "run: an unreachable HOLT_UPGRADE_API degrades cleanly to no releases found" {
@@ -650,7 +650,7 @@ test "run: an unreachable HOLT_UPGRADE_API degrades cleanly to no releases found
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const url = try std.fmt.allocPrint(arena, "file://{s}/does-not-exist.json", .{root});
+    const url = try arena.print("file://{s}/does-not-exist.json", .{root});
     const override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", url }});
     defer override.restore();
 
@@ -667,11 +667,11 @@ test "run: an unreachable HOLT_UPGRADE_API degrades cleanly to no releases found
 /// windows-latest may resolve to GNU tar, which cannot write zip).
 fn stageFakeReleaseAsset(arena: std.mem.Allocator, pkg_dir: []const u8, asset_path: []const u8, contents: []const u8) !void {
     const bin_name = assetBinaryName(builtin.os.tag);
-    const bin_path = try std.fs.path.join(arena, &.{ pkg_dir, bin_name });
+    const bin_path = try std.Io.Dir.path.join(arena, &.{ pkg_dir, bin_name });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = bin_path, .data = contents });
 
     if (builtin.os.tag == .windows) {
-        const cmd = try std.fmt.allocPrint(arena, "Compress-Archive -Path '{s}' -DestinationPath '{s}' -Force", .{ bin_path, asset_path });
+        const cmd = try arena.print("Compress-Archive -Path '{s}' -DestinationPath '{s}' -Force", .{ bin_path, asset_path });
         const res = try proc.run(arena, &.{ "powershell", "-NoProfile", "-Command", cmd }, null);
         try testing.expectEqual(@as(u8, 0), res.status);
     } else {
@@ -685,13 +685,13 @@ fn stageFakeReleaseAsset(arena: std.mem.Allocator, pkg_dir: []const u8, asset_pa
 /// non-null value plants a deliberately wrong digest to exercise refusal.
 fn writeSums(arena: std.mem.Allocator, dl_dir: []const u8, sums_name: []const u8, asset: []const u8, digest: ?[]const u8) !void {
     const hex: []const u8 = if (digest) |d| d else blk: {
-        const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+        const asset_path = try std.Io.Dir.path.join(arena, &.{ dl_dir, asset });
         const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, asset_path, arena, .unlimited);
         const h = sha256Hex(bytes);
         break :blk try arena.dupe(u8, &h);
     };
-    const body = try std.fmt.allocPrint(arena, "{s}  {s}\n", .{ hex, asset });
-    const sums_path = try std.fs.path.join(arena, &.{ dl_dir, sums_name });
+    const body = try arena.print("{s}  {s}\n", .{ hex, asset });
+    const sums_path = try std.Io.Dir.path.join(arena, &.{ dl_dir, sums_name });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = sums_path, .data = body });
 }
 
@@ -707,28 +707,28 @@ test "run: a newer release fetched via HOLT_UPGRADE_API downloads, extracts, and
 
     const tag = "v99.0.0";
 
-    const bin_dir = try std.fs.path.join(arena, &.{ root, "bin" });
+    const bin_dir = try std.Io.Dir.path.join(arena, &.{ root, "bin" });
     try fsutil.ensureDir(bin_dir);
-    const target_bin = try std.fs.path.join(arena, &.{ bin_dir, "holt" });
+    const target_bin = try std.Io.Dir.path.join(arena, &.{ bin_dir, "holt" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
 
     const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
-    const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
+    const pkg_dir = try std.Io.Dir.path.join(arena, &.{ root, "pkg" });
     try fsutil.ensureDir(pkg_dir);
 
-    const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
+    const dl_dir = try std.Io.Dir.path.join(arena, &.{ root, "dl", tag });
     try fsutil.ensureDir(dl_dir);
-    const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+    const asset_path = try std.Io.Dir.path.join(arena, &.{ dl_dir, asset });
     try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
     try writeSums(arena, dl_dir, "SHA256SUMS", asset, null);
 
-    const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
-    const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});
+    const release_path = try std.Io.Dir.path.join(arena, &.{ root, "release.json" });
+    const release_body = try arena.print("{{\"tag_name\":\"{s}\"}}", .{tag});
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = release_path, .data = release_body });
 
-    const api_url = try std.fmt.allocPrint(arena, "file://{s}", .{release_path});
-    const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
-    const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
+    const api_url = try arena.print("file://{s}", .{release_path});
+    const download_root = try std.Io.Dir.path.join(arena, &.{ root, "dl" });
+    const download_base = try arena.print("file://{s}", .{download_root});
 
     const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
     defer api_override.restore();
@@ -739,7 +739,7 @@ test "run: a newer release fetched via HOLT_UPGRADE_API downloads, extracts, and
 
     const got = try testutil.runCmd(arena, command.run, null, &.{"--yes"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "upgraded") != null);
+    try testing.expect(std.mem.find(u8, got.out, "upgraded") != null);
 
     const installed = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_bin, arena, .unlimited);
     try testing.expectEqualStrings("NEW", installed);
@@ -757,29 +757,29 @@ test "run: a checksum mismatch is refused and the target binary is left untouche
 
     const tag = "v99.0.0";
 
-    const bin_dir = try std.fs.path.join(arena, &.{ root, "bin" });
+    const bin_dir = try std.Io.Dir.path.join(arena, &.{ root, "bin" });
     try fsutil.ensureDir(bin_dir);
-    const target_bin = try std.fs.path.join(arena, &.{ bin_dir, "holt" });
+    const target_bin = try std.Io.Dir.path.join(arena, &.{ bin_dir, "holt" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
 
     const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
-    const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
+    const pkg_dir = try std.Io.Dir.path.join(arena, &.{ root, "pkg" });
     try fsutil.ensureDir(pkg_dir);
 
-    const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
+    const dl_dir = try std.Io.Dir.path.join(arena, &.{ root, "dl", tag });
     try fsutil.ensureDir(dl_dir);
-    const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+    const asset_path = try std.Io.Dir.path.join(arena, &.{ dl_dir, asset });
     try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
     // A deliberately wrong digest: 64 zero hex nibbles.
     try writeSums(arena, dl_dir, "SHA256SUMS", asset, &@as([64]u8, @splat('0')));
 
-    const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
-    const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});
+    const release_path = try std.Io.Dir.path.join(arena, &.{ root, "release.json" });
+    const release_body = try arena.print("{{\"tag_name\":\"{s}\"}}", .{tag});
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = release_path, .data = release_body });
 
-    const api_url = try std.fmt.allocPrint(arena, "file://{s}", .{release_path});
-    const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
-    const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
+    const api_url = try arena.print("file://{s}", .{release_path});
+    const download_root = try std.Io.Dir.path.join(arena, &.{ root, "dl" });
+    const download_base = try arena.print("file://{s}", .{download_root});
 
     const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
     defer api_override.restore();
@@ -790,7 +790,7 @@ test "run: a checksum mismatch is refused and the target binary is left untouche
 
     const got = try testutil.runCmd(arena, command.run, null, &.{"--yes"});
     try testing.expectEqual(@as(u8, 1), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.err, "checksum mismatch") != null);
+    try testing.expect(std.mem.find(u8, got.err, "checksum mismatch") != null);
 
     // The running binary must be left exactly as it was.
     const untouched = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_bin, arena, .unlimited);
@@ -809,30 +809,30 @@ test "run: a release that publishes only checksums.txt is verified via the fallb
 
     const tag = "v99.0.0";
 
-    const bin_dir = try std.fs.path.join(arena, &.{ root, "bin" });
+    const bin_dir = try std.Io.Dir.path.join(arena, &.{ root, "bin" });
     try fsutil.ensureDir(bin_dir);
-    const target_bin = try std.fs.path.join(arena, &.{ bin_dir, "holt" });
+    const target_bin = try std.Io.Dir.path.join(arena, &.{ bin_dir, "holt" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
 
     const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
-    const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
+    const pkg_dir = try std.Io.Dir.path.join(arena, &.{ root, "pkg" });
     try fsutil.ensureDir(pkg_dir);
 
-    const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
+    const dl_dir = try std.Io.Dir.path.join(arena, &.{ root, "dl", tag });
     try fsutil.ensureDir(dl_dir);
-    const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+    const asset_path = try std.Io.Dir.path.join(arena, &.{ dl_dir, asset });
     try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
     // Only the legacy name is served; no SHA256SUMS exists, so the fetch of it
     // fails and fetchChecksums falls back to checksums.txt.
     try writeSums(arena, dl_dir, "checksums.txt", asset, null);
 
-    const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
-    const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"{s}\"}}", .{tag});
+    const release_path = try std.Io.Dir.path.join(arena, &.{ root, "release.json" });
+    const release_body = try arena.print("{{\"tag_name\":\"{s}\"}}", .{tag});
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = release_path, .data = release_body });
 
-    const api_url = try std.fmt.allocPrint(arena, "file://{s}", .{release_path});
-    const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
-    const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
+    const api_url = try arena.print("file://{s}", .{release_path});
+    const download_root = try std.Io.Dir.path.join(arena, &.{ root, "dl" });
+    const download_base = try arena.print("file://{s}", .{download_root});
 
     const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
     defer api_override.restore();
@@ -843,7 +843,7 @@ test "run: a release that publishes only checksums.txt is verified via the fallb
 
     const got = try testutil.runCmd(arena, command.run, null, &.{"--yes"});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "upgraded") != null);
+    try testing.expect(std.mem.find(u8, got.out, "upgraded") != null);
 
     const installed = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_bin, arena, .unlimited);
     try testing.expectEqualStrings("NEW", installed);
@@ -859,14 +859,14 @@ test "run: a fetched latest that is not newer than the current build reports up 
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = buf[0..try tmp.dir.realPath(testing.io, &buf)];
 
-    const release_path = try std.fs.path.join(arena, &.{ root, "release.json" });
-    const release_body = try std.fmt.allocPrint(arena, "{{\"tag_name\":\"v{s}\"}}", .{build_options.version});
+    const release_path = try std.Io.Dir.path.join(arena, &.{ root, "release.json" });
+    const release_body = try arena.print("{{\"tag_name\":\"v{s}\"}}", .{build_options.version});
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = release_path, .data = release_body });
 
-    const target_bin = try std.fs.path.join(arena, &.{ root, "target" });
+    const target_bin = try std.Io.Dir.path.join(arena, &.{ root, "target" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
 
-    const api_url = try std.fmt.allocPrint(arena, "file://{s}", .{release_path});
+    const api_url = try arena.print("file://{s}", .{release_path});
     const api_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_API", api_url }});
     defer api_override.restore();
     const target_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_TARGET_BIN", target_bin }});
@@ -874,7 +874,7 @@ test "run: a fetched latest that is not newer than the current build reports up 
 
     const got = try testutil.runCmd(arena, command.run, null, &.{});
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "up to date") != null);
+    try testing.expect(std.mem.find(u8, got.out, "up to date") != null);
 
     const untouched = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_bin, arena, .unlimited);
     try testing.expectEqualStrings("OLD", untouched);
@@ -892,23 +892,23 @@ test "run: an explicit older version installs, allowing a downgrade with --yes" 
 
     const tag = "v0.0.1";
 
-    const bin_dir = try std.fs.path.join(arena, &.{ root, "bin" });
+    const bin_dir = try std.Io.Dir.path.join(arena, &.{ root, "bin" });
     try fsutil.ensureDir(bin_dir);
-    const target_bin = try std.fs.path.join(arena, &.{ bin_dir, "holt" });
+    const target_bin = try std.Io.Dir.path.join(arena, &.{ bin_dir, "holt" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = target_bin, .data = "OLD" });
 
     const asset = try assetName(arena, builtin.target.os.tag, builtin.target.cpu.arch);
-    const pkg_dir = try std.fs.path.join(arena, &.{ root, "pkg" });
+    const pkg_dir = try std.Io.Dir.path.join(arena, &.{ root, "pkg" });
     try fsutil.ensureDir(pkg_dir);
 
-    const dl_dir = try std.fs.path.join(arena, &.{ root, "dl", tag });
+    const dl_dir = try std.Io.Dir.path.join(arena, &.{ root, "dl", tag });
     try fsutil.ensureDir(dl_dir);
-    const asset_path = try std.fs.path.join(arena, &.{ dl_dir, asset });
+    const asset_path = try std.Io.Dir.path.join(arena, &.{ dl_dir, asset });
     try stageFakeReleaseAsset(arena, pkg_dir, asset_path, "NEW");
     try writeSums(arena, dl_dir, "SHA256SUMS", asset, null);
 
-    const download_root = try std.fs.path.join(arena, &.{ root, "dl" });
-    const download_base = try std.fmt.allocPrint(arena, "file://{s}", .{download_root});
+    const download_root = try std.Io.Dir.path.join(arena, &.{ root, "dl" });
+    const download_base = try arena.print("file://{s}", .{download_root});
     const download_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_DOWNLOAD_BASE", download_base }});
     defer download_override.restore();
     const target_override = try testutil.EnvScope.install(arena, &.{.{ "HOLT_UPGRADE_TARGET_BIN", target_bin }});
@@ -916,7 +916,7 @@ test "run: an explicit older version installs, allowing a downgrade with --yes" 
 
     const got = try testutil.runCmd(arena, command.run, null, &.{ tag, "--yes" });
     try testing.expectEqual(@as(u8, 0), got.code);
-    try testing.expect(std.mem.indexOf(u8, got.out, "upgraded") != null);
+    try testing.expect(std.mem.find(u8, got.out, "upgraded") != null);
 
     const installed = try std.Io.Dir.cwd().readFileAlloc(testing.io, target_bin, arena, .unlimited);
     try testing.expectEqualStrings("NEW", installed);

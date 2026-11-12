@@ -286,8 +286,8 @@ test "links made under another synced root: retargeted when the old copy is gone
     try m.write("uncopied", "u");
     for ([_][]const u8{ "same", "changed", "gone", "uncopied" }) |rel| _ = try m.keep(rel);
 
-    const new_root = try std.fs.path.join(a, &.{ sb.root, "machine", "a", "new-backend" });
-    try content.copyRegular(a, try m.ctx.layout.keptDir(a), try std.fs.path.join(a, &.{ new_root, "kept" }));
+    const new_root = try std.Io.Dir.path.join(a, &.{ sb.root, "machine", "a", "new-backend" });
+    try content.copyRegular(a, try m.ctx.layout.keptDir(a), try std.Io.Dir.path.join(a, &.{ new_root, "kept" }));
     const old: store.Layout = m.ctx.layout;
     var moved = m.ctx;
     moved.layout = .{ .synced_root = new_root };
@@ -335,7 +335,7 @@ test "a kept copy that is a symlink or of the wrong kind, and a link holt did no
     try fsutil.removePath(try m.path("kind"));
     try fsutil.removePath(try m.path("foreign"));
     // Windows reads a link's target back with its own separator.
-    const elsewhere = std.fs.path.sep_str ++ "somewhere" ++ std.fs.path.sep_str ++ "else";
+    const elsewhere = std.Io.Dir.path.sep_str ++ "somewhere" ++ std.Io.Dir.path.sep_str ++ "else";
     try content.createLink(elsewhere, try m.path("foreign"), .file);
 
     const r = try m.reconcile();
@@ -380,8 +380,8 @@ test "released: every machine turns its link into a regular copy, the kept conte
         try testing.expectEqualStrings("file", try content.readSmall(a, try m.keptPath(".clasp.json")));
         try testing.expectEqual(@as(usize, 0), (try blockRels(m)).len);
         const status = try gitStatus(m);
-        try testing.expect(std.mem.indexOf(u8, status, "?? .clasp.json") != null);
-        try testing.expect(std.mem.indexOf(u8, status, "?? .superpowers/a.md") != null);
+        try testing.expect(std.mem.find(u8, status, "?? .clasp.json") != null);
+        try testing.expect(std.mem.find(u8, status, "?? .superpowers/a.md") != null);
         _ = try expectItem(try m.reconcile(), ".clasp.json", .released_local);
     }
 }
@@ -397,9 +397,9 @@ test "block lines across working trees: a released path keeps its line while ano
 
     try m.write(".clasp.json", "kept");
     _ = try m.keep(".clasp.json");
-    const wt_path = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "widget@worktrees", "feature" });
+    const wt_path = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "widget@worktrees", "feature" });
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "feature", wt_path });
-    const wt = try fsutil.realPathOrSelf(a, try std.fs.path.resolve(a, &.{wt_path}));
+    const wt = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.resolveAlloc(a, &.{wt_path}));
 
     try testing.expect((try expectItem(try harness.reconcileIn(m.ctx, wt, .apply), ".clasp.json", .linked)).done);
 
@@ -528,8 +528,8 @@ test "keep interrupted at every point: the content stays in place, in kept, or i
     for (cases) |case| {
         for ([_]bool{ false, true }) |as_dir| {
             const name = @tagName(case.point);
-            const rel = try std.fmt.allocPrint(a, "{s}-{s}", .{ name, if (as_dir) "dir" else "file" });
-            const probe = if (as_dir) try std.fmt.allocPrint(a, "{s}/inner", .{rel}) else rel;
+            const rel = try a.print("{s}-{s}", .{ name, if (as_dir) "dir" else "file" });
+            const probe = if (as_dir) try a.print("{s}/inner", .{rel}) else rel;
             try m.write(probe, name);
 
             interrupt.at = case.point;
@@ -589,7 +589,7 @@ fn heldSomewhere(m: *const Machine, rel: []const u8, probe: []const u8, data: []
 /// identity change does.
 fn moveKey(a: std.mem.Allocator, layout: store.Layout, old: []const u8, new: []const u8, root: []const u8) !void {
     try content.copyRegular(a, try layout.keyDir(a, old), try layout.keyDir(a, new));
-    const record = try std.fmt.allocPrint(a, "{{\"root\": \"{s}\", \"version\": 1}}\n", .{root});
+    const record = try a.print("{{\"root\": \"{s}\", \"version\": 1}}\n", .{root});
     try fsutil.writeFileAtomic(a, try layout.reserved(a, new, store.record_basename), record);
     try store.writeFrom(a, layout, new, old);
     try std.Io.Dir.cwd().deleteTree(io(), try layout.keyDir(a, old));
@@ -631,12 +631,12 @@ test "a local key promoted elsewhere: the clone is awaiting promote and its link
     var w = try World.init(a, &sb, 1);
     const m = w.m(0);
 
-    const local_path = try std.fs.path.join(a, &.{ m.code, "local", "scratch" });
+    const local_path = try std.Io.Dir.path.join(a, &.{ m.code, "local", "scratch" });
     try fsutil.ensureDir(local_path);
     try testutil.runGit(&sb, local_path, &.{ "init", "-q" });
     try testutil.runGit(&sb, local_path, &.{ "commit", "-q", "--allow-empty", "-m", "first" });
     const local_clone = try fsutil.realPathOrSelf(a, local_path);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ local_clone, ".env" }), .data = "e" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ local_clone, ".env" }), .data = "e" });
     _ = try harness.keepIn(m.ctx, local_clone, ".env");
 
     try moveKey(a, m.ctx.layout, "local/scratch", "github.com/acme/scratch", (try clone.defaultRoot(a, local_clone)).?);
@@ -644,7 +644,7 @@ test "a local key promoted elsewhere: the clone is awaiting promote and its link
     const item = try expectItem(r, ".env", .awaiting_promote);
     try testing.expect(item.unsettled);
     try testing.expectEqualStrings("github.com/acme/scratch", item.detail.?);
-    try testing.expectEqual(content.Entry.symlink, try content.entryAt(try std.fs.path.join(a, &.{ local_clone, ".env" })));
+    try testing.expectEqual(content.Entry.symlink, try content.entryAt(try std.Io.Dir.path.join(a, &.{ local_clone, ".env" })));
     try testing.expectError(error.AwaitingPromote, harness.keepIn(m.ctx, local_clone, ".env"));
 }
 
@@ -664,7 +664,7 @@ test "an online-only kept copy is never read: no link is made to it and local co
     for ([_][]const u8{ "cloud", "beside" }) |rel| {
         const kp = try m.keptPath(rel);
         try std.Io.Dir.cwd().deleteFile(io(), kp);
-        const ph = try std.fs.path.join(a, &.{ std.fs.path.dirname(kp).?, try std.fmt.allocPrint(a, ".{s}.icloud", .{rel}) });
+        const ph = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(kp).?, try a.print(".{s}.icloud", .{rel}) });
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = ph, .data = "placeholder" });
         try fsutil.removePath(try m.path(rel));
     }
@@ -683,8 +683,8 @@ test "an online-only kept copy is never read: no link is made to it and local co
 /// otherwise, as after a backend switch.
 fn switchedBackend(m: *const Machine, name: []const u8, copy: bool) !@TypeOf(m.ctx) {
     const a = m.ctx.alloc;
-    const new_root = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.synced).?, name });
-    const kept = try std.fs.path.join(a, &.{ new_root, "kept" });
+    const new_root = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.synced).?, name });
+    const kept = try std.Io.Dir.path.join(a, &.{ new_root, "kept" });
     if (copy) try content.copyRegular(a, try m.ctx.layout.keptDir(a), kept) else try fsutil.ensureDir(kept);
     var moved = m.ctx;
     moved.layout = .{ .synced_root = new_root };
@@ -694,7 +694,7 @@ fn switchedBackend(m: *const Machine, name: []const u8, copy: bool) !@TypeOf(m.c
 /// A clone at `<code>/local/<name>` with one commit and no remote.
 fn localClone(m: *const Machine, sb: *testutil.Sandbox, name: []const u8) ![]const u8 {
     const a = m.ctx.alloc;
-    const p = try std.fs.path.join(a, &.{ m.code, "local", name });
+    const p = try std.Io.Dir.path.join(a, &.{ m.code, "local", name });
     try fsutil.ensureDir(p);
     try testutil.runGit(sb, p, &.{ "init", "-q" });
     try testutil.runGit(sb, p, &.{ "commit", "-q", "--allow-empty", "-m", "first" });
@@ -726,7 +726,7 @@ test "a local key whose record is missing or names another repo: reconcile stops
     const m = w.m(0);
 
     const lc = try localClone(m, &sb, "scratch");
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ lc, ".env" }), .data = "e" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ lc, ".env" }), .data = "e" });
     _ = try harness.keepIn(m.ctx, lc, ".env");
     const rec_path = try m.ctx.layout.reserved(a, "local/scratch", store.record_basename);
     const rec = try content.readSmall(a, rec_path);
@@ -735,11 +735,11 @@ test "a local key whose record is missing or names another repo: reconcile stops
     const r = try harness.reconcileIn(m.ctx, lc, .apply);
     try testing.expectEqual(reconcile_mod.Stop.local_mismatch, r.stop);
     try testing.expect((try expectItem(r, ".env", .mismatch_link_removed)).done);
-    try testing.expectEqual(content.Entry.absent, try content.entryAt(try std.fs.path.join(a, &.{ lc, ".env" })));
+    try testing.expectEqual(content.Entry.absent, try content.entryAt(try std.Io.Dir.path.join(a, &.{ lc, ".env" })));
     try testing.expectEqualStrings("e", try content.readSmall(a, try m.ctx.layout.copyPath(a, "local/scratch", ".env")));
 
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = rec_path, .data = "{\"root\": \"" ++ &@as([40]u8, @splat('0')) ++ "\", \"version\": 1}\n" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ lc, ".other" }), .data = "o" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ lc, ".other" }), .data = "o" });
     try testing.expectError(error.LocalMismatch, harness.keepIn(m.ctx, lc, ".other"));
     try testing.expectEqual(reconcile_mod.Stop.local_mismatch, (try harness.reconcileIn(m.ctx, lc, .apply)).stop);
 
@@ -801,9 +801,9 @@ test "a relative link into another synced root is judged from the link's own dir
     _ = try m.keep("rel");
     const moved = try switchedBackend(m, "new-backend", true);
     try std.Io.Dir.cwd().deleteFile(io(), try moved.layout.copyPath(a, key, "rel"));
-    const up = try std.fs.path.relative(a, m.clone, null, m.clone, m.synced);
+    const up = try std.Io.Dir.path.relativeAlloc(a, m.clone, null, m.clone, m.synced);
     try fsutil.removePath(try m.path("rel"));
-    try content.createLink(try std.fmt.allocPrint(a, "{s}/kept/{s}/rel", .{ up, key }), try m.path("rel"), .file);
+    try content.createLink(try a.print("{s}/kept/{s}/rel", .{ up, key }), try m.path("rel"), .file);
 
     const r = try harness.reconcileIn(moved, m.clone, .apply);
     _ = try expectItem(r, "rel", .in_old_root);
@@ -821,8 +821,8 @@ test "a link of holt's shape into a folder the store never lived at is the user'
 
     try m.write("cfg", "kept");
     _ = try m.keep("cfg");
-    const mine = try std.fs.path.join(a, &.{ try fsutil.joinSlashy(a, try std.fs.path.join(a, &.{ sb.root, "notes", "kept" }), key), "cfg" });
-    try fsutil.ensureDir(std.fs.path.dirname(mine).?);
+    const mine = try std.Io.Dir.path.join(a, &.{ try fsutil.joinSlashy(a, try std.Io.Dir.path.join(a, &.{ sb.root, "notes", "kept" }), key), "cfg" });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(mine).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = mine, .data = "mine" });
     try fsutil.removePath(try m.path("cfg"));
     try content.createLink(mine, try m.path("cfg"), .file);
@@ -908,7 +908,7 @@ test "a record naming a file git reads only as a regular file is invalid: never 
     try m.write("first.json", "kept by hand, so the key exists");
     _ = try m.keep("first.json");
     const kp = try m.keptPath("a/.mailmap");
-    try fsutil.ensureDir(std.fs.path.dirname(kp).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(kp).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = kp, .data = "A <a@example.com>\n" });
     const h = try content.hashPath(a, kp);
     try store.writeFact(a, m.ctx.layout, key, m.ctx.machine_id, "a/.mailmap", .file, &h.hex);
@@ -1088,9 +1088,9 @@ test "a held file git reads only as a regular file whose fact cannot be read is 
     const m = w.m(0);
     const c = try heldUnkeepable(m, true);
     const sid = paths.id("sub/.gitignore");
-    const dir = try std.fs.path.join(a, &.{ try m.ctx.layout.reserved(a, key, ".holt-paths"), &sid });
+    const dir = try std.Io.Dir.path.join(a, &.{ try m.ctx.layout.reserved(a, key, ".holt-paths"), &sid });
     try fsutil.ensureDir(dir);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ dir, try std.fmt.allocPrint(a, ".{s}.icloud", .{m.ctx.machine_id}) }), .data = "placeholder" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ dir, try a.print(".{s}.icloud", .{m.ctx.machine_id}) }), .data = "placeholder" });
 
     for ([_]reconcile_mod.Mode{ .plan, .apply }) |mode| {
         const report = try harness.reconcileIn(m.ctx, m.clone, mode);
@@ -1115,7 +1115,7 @@ test "a retarget never points a link at an online-only kept copy" {
     const moved = try switchedBackend(m, "new-backend", true);
     const kp = try moved.layout.copyPath(a, key, "p");
     try std.Io.Dir.cwd().deleteFile(io(), kp);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ std.fs.path.dirname(kp).?, ".p.icloud" }), .data = "placeholder" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(kp).?, ".p.icloud" }), .data = "placeholder" });
     try std.Io.Dir.cwd().deleteFile(io(), try m.keptPath("p"));
     const before = (try content.readLink(a, try m.path("p"))).?;
 
@@ -1187,7 +1187,7 @@ test "released: an interrupted conversion is finished by the next reconcile, wit
         .{ .rel = "dir-unlinked", .dir = true, .point = .convert_swapped, .no_exchange = true },
     };
     for (cases) |case| {
-        const probe = if (case.dir) try std.fmt.allocPrint(a, "{s}/inner", .{case.rel}) else case.rel;
+        const probe = if (case.dir) try a.print("{s}/inner", .{case.rel}) else case.rel;
         try m.write(probe, case.rel);
         _ = try m.keep(case.rel);
         try store.writeReleased(a, m.ctx.layout, key, case.rel);
@@ -1234,7 +1234,7 @@ test "released: an online-only kept copy is never copied, a gone target is taken
     try std.Io.Dir.cwd().deleteFile(io(), try m.keptPath("moved"));
     try fsutil.removePath(try m.path("theirs"));
     // Windows reads a link's target back with its own separator.
-    const not_holts = std.fs.path.sep_str ++ "not" ++ std.fs.path.sep_str ++ "holts";
+    const not_holts = std.Io.Dir.path.sep_str ++ "not" ++ std.Io.Dir.path.sep_str ++ "holts";
     try content.createLink(not_holts, try m.path("theirs"), .file);
 
     const r = try harness.reconcileIn(moved, m.clone, .apply);
@@ -1293,8 +1293,8 @@ test "a bad earlier-identity marker is reported" {
 
     try m.write("seed", "s");
     _ = try m.keep("seed");
-    const bad_path = try std.fs.path.join(a, &.{ try m.ctx.layout.reserved(a, key, ".holt-from"), &paths.id("github.com/old/widget") });
-    try fsutil.ensureDir(std.fs.path.dirname(bad_path).?);
+    const bad_path = try std.Io.Dir.path.join(a, &.{ try m.ctx.layout.reserved(a, key, ".holt-from"), &paths.id("github.com/old/widget") });
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(bad_path).?);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = bad_path, .data = "{\"key\": \"github.com/other/widget\"}" });
 
     const r = try m.reconcile();
@@ -1419,7 +1419,7 @@ test "a link into another key of the chain that still holds the copy is reported
     const successor = "github.com/renamed/widget";
     const root = (try clone.defaultRoot(a, m.clone)).?;
     try fsutil.ensureDir(try m.ctx.layout.keyDir(a, successor));
-    try fsutil.writeFileAtomic(a, try m.ctx.layout.reserved(a, successor, store.record_basename), try std.fmt.allocPrint(a, "{{\"root\": \"{s}\", \"version\": 1}}\n", .{root}));
+    try fsutil.writeFileAtomic(a, try m.ctx.layout.reserved(a, successor, store.record_basename), try a.print("{{\"root\": \"{s}\", \"version\": 1}}\n", .{root}));
     try store.writeFrom(a, m.ctx.layout, successor, key);
     try store.writeFact(a, m.ctx.layout, successor, m.ctx.machine_id, ".clasp.json", .file, &@as([64]u8, @splat('a')));
 
@@ -1527,9 +1527,9 @@ test "block lines are held while a working tree is prunable or the key's directo
 
     try m.write(".clasp.json", "kept");
     _ = try m.keep(".clasp.json");
-    const wt_path = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "widget@worktrees", "feature" });
+    const wt_path = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "widget@worktrees", "feature" });
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "feature", wt_path });
-    const wt = try fsutil.realPathOrSelf(a, try std.fs.path.resolve(a, &.{wt_path}));
+    const wt = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.resolveAlloc(a, &.{wt_path}));
     _ = try harness.reconcileIn(m.ctx, wt, .apply);
 
     try store.writeReleased(a, m.ctx.layout, key, ".clasp.json");
@@ -1550,7 +1550,7 @@ test "block lines are held while a working tree is prunable or the key's directo
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
     try block.add(a, c.common_dir, &.{"stale"});
     const key_dir = try m.ctx.layout.keyDir(a, key);
-    const hidden = try std.fmt.allocPrint(a, "{s}.away", .{key_dir});
+    const hidden = try a.print("{s}.away", .{key_dir});
     try std.Io.Dir.cwd().rename(key_dir, std.Io.Dir.cwd(), hidden, io());
     _ = try m.reconcile();
     try testing.expect(paths.contains(try blockRels(m), "stale"));
@@ -1670,7 +1670,7 @@ test "git failing to list the index stops reconcile: no link is removed and loca
     _ = try m.keep("edited");
     try m.saveByRename("edited", "local edit");
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ c.common_dir, "index" }), .data = "not an index" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ c.common_dir, "index" }), .data = "not an index" });
 
     const r = try m.reconcile();
     try testing.expectEqual(reconcile_mod.Stop.git_failed, r.stop);
@@ -1711,7 +1711,7 @@ test "every stop counts as unsettled and lists the local content it hides, set a
         .{ .stop = .unknown_version, .aside = true },
         .{ .stop = .block_unbalanced, .aside = true },
     }) |case| {
-        const away = try std.fmt.allocPrint(a, "{s}.away", .{kept});
+        const away = try a.print("{s}.away", .{kept});
         switch (case.stop) {
             .store_absent => try std.Io.Dir.cwd().rename(kept, std.Io.Dir.cwd(), away, io()),
             .store_unreadable => try chmod(kept, 0o000),
@@ -1743,7 +1743,7 @@ test "every stop counts as unsettled and lists the local content it hides, set a
     defer testing.allocator.free(outside);
     const oc = try clone.inspect(a, outside, m.ctx.code_root);
     _ = try block.write(a, oc.common_dir, &.{".env"});
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ outside, ".env" }), .data = "outside" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ outside, ".env" }), .data = "outside" });
     const nk = try harness.reconcileIn(m.ctx, outside, .apply);
     try testing.expectEqual(reconcile_mod.Stop.no_key, nk.stop);
     try testing.expect(nk.unsettledCount() > 0);
@@ -1751,12 +1751,12 @@ test "every stop counts as unsettled and lists the local content it hides, set a
 
     const lc = try localClone(m, &sb, "scratch");
     for ([_][]const u8{ "linked", "edited" }) |rel| {
-        try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ lc, rel }), .data = "kept" });
+        try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ lc, rel }), .data = "kept" });
         _ = try harness.keepIn(m.ctx, lc, rel);
     }
-    const edited = try std.fs.path.join(a, &.{ lc, "edited" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fmt.allocPrint(a, "{s}.save", .{edited}), .data = "local edit" });
-    try std.Io.Dir.cwd().rename(try std.fmt.allocPrint(a, "{s}.save", .{edited}), std.Io.Dir.cwd(), edited, io());
+    const edited = try std.Io.Dir.path.join(a, &.{ lc, "edited" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try a.print("{s}.save", .{edited}), .data = "local edit" });
+    try std.Io.Dir.cwd().rename(try a.print("{s}.save", .{edited}), std.Io.Dir.cwd(), edited, io());
     try std.Io.Dir.cwd().deleteFile(io(), try m.ctx.layout.reserved(a, "local/scratch", store.record_basename));
     const lm = try harness.reconcileIn(m.ctx, lc, .apply);
     try testing.expectEqual(reconcile_mod.Stop.local_mismatch, lm.stop);
@@ -1991,7 +1991,7 @@ test "an edit made through the link after keep or relink was interrupted is kept
 /// Writes `data` beside the clone, outside git's view, and returns its
 /// path, so a test can hash known content.
 fn writeBeside(m: *const Machine, name: []const u8, data: []const u8) ![]const u8 {
-    const p = try std.fs.path.join(m.ctx.alloc, &.{ std.fs.path.dirname(m.clone).?, name });
+    const p = try std.Io.Dir.path.join(m.ctx.alloc, &.{ std.Io.Dir.path.dirname(m.clone).?, name });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
     return p;
 }
@@ -2056,7 +2056,7 @@ test "an invalid visited path: local content there is set aside and unsettled, a
     try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "a\\b", .file, &@as([64]u8, @splat('b')));
     try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "../outside", .file, &@as([64]u8, @splat('b')));
     try m.write("a\\b", "only here");
-    const outside = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "outside" });
+    const outside = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "outside" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = outside, .data = "not the tree's" });
 
     const r = try m.reconcile();
@@ -2069,7 +2069,7 @@ test "an invalid visited path: local content there is set aside and unsettled, a
 
     const index = try store.loadIndex(a, m.ctx.layout);
     try testing.expectEqual(@as(usize, 0), (try reconcile_mod.unprotected(m.ctx, &index, m.clone)).len);
-    try testing.expect(std.mem.indexOf(u8, try gitStatus(m), "?? \"a\\\\b\"") != null);
+    try testing.expect(std.mem.find(u8, try gitStatus(m), "?? \"a\\\\b\"") != null);
 }
 
 /// True when a verified aside entry for `rel` holds `data` at `probe`.
@@ -2209,16 +2209,16 @@ test "a pending record of a working tree git no longer lists: its temporary is s
 
     try m.write("seed", "s");
     _ = try m.keep("seed");
-    const wt_path = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "widget@worktrees", "feature" });
+    const wt_path = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "widget@worktrees", "feature" });
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "feature", wt_path });
-    const wt = try fsutil.realPathOrSelf(a, try std.fs.path.resolve(a, &.{wt_path}));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ wt, "cfg" }), .data = "original" });
+    const wt = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.resolveAlloc(a, &.{wt_path}));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ wt, "cfg" }), .data = "original" });
     interrupt.at = .link_moved;
     try testing.expectError(error.Interrupted, harness.keepIn(m.ctx, wt, "cfg"));
     interrupt.at = null;
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try m.keptPath("cfg"), .data = "edited through another link" });
     const temp = try fsutil.joinSlashy(a, wt, try paths.tempRel(a, "cfg"));
-    try fsutil.removePath(try std.fs.path.join(a, &.{ wt, ".git" }));
+    try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ wt, ".git" }));
     try m.git(&sb, &.{ "worktree", "prune" });
 
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
@@ -2246,7 +2246,7 @@ test "a working tree settles and clears only its own pending records, and a temp
     var w = try World.init(a, &sb, 1);
     const m = w.m(0);
     defer interrupt.at = null;
-    const wt = try std.fmt.allocPrint(a, "{s}@worktrees/feature", .{m.clone});
+    const wt = try a.print("{s}@worktrees/feature", .{m.clone});
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "feature", wt });
 
     try m.write(".env", "original");
@@ -2377,9 +2377,9 @@ test "a keep that has linked is not failed by a staging slot it cannot clear: th
 
     try m.write("d/old", "old");
     _ = try m.keep("d");
-    const replacement = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "replacement" });
+    const replacement = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "replacement" });
     try fsutil.ensureDir(replacement);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ replacement, "new" }), .data = "new" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ replacement, "new" }), .data = "new" });
     const staged = try place.stage(a, m.ctx.layout, m.ctx.machine_id, key, replacement);
     content.no_exchange_for_test = true;
     interrupt.at = .replace_moved_out;
@@ -2401,9 +2401,9 @@ test "a keep that has linked is not failed by a staging slot it cannot clear: th
     try testing.expectEqual(.kept, got.status);
     try testing.expect(try m.linked("new"));
     try testing.expectEqual(@as(usize, 1), got.staging_left.len);
-    const slot = std.fs.path.dirname(staged.path).?;
+    const slot = std.Io.Dir.path.dirname(staged.path).?;
     try testing.expectEqualStrings(slot, got.staging_left[0].slot);
-    try testing.expectEqualStrings("old", try content.readSmall(a, try std.fs.path.join(a, &.{ slot, "old", "old" })));
+    try testing.expectEqualStrings("old", try content.readSmall(a, try std.Io.Dir.path.join(a, &.{ slot, "old", "old" })));
 }
 
 /// The `hidden` item for `rel`, set aside and unsettled, whose entry holds
@@ -2543,9 +2543,9 @@ test "the closing sweep: a released path's edited local copy is set aside while 
         try m.write(rel, "kept");
         _ = try m.keep(rel);
     }
-    const wt_path = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "widget@worktrees", "feature" });
+    const wt_path = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "widget@worktrees", "feature" });
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "feature", wt_path });
-    const wt = try fsutil.realPathOrSelf(a, try std.fs.path.resolve(a, &.{wt_path}));
+    const wt = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.resolveAlloc(a, &.{wt_path}));
     _ = try harness.reconcileIn(m.ctx, wt, .apply);
 
     try store.writeReleased(a, m.ctx.layout, key, ".clasp.json");
@@ -2685,9 +2685,9 @@ test "unprotected: holt's link of another spelling, content under a symlinked pa
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
     try block.add(a, c.common_dir, &.{"Readme.txt"});
     if (try m.entry("Readme.txt") == .absent) try content.createLink(try m.keptPath("readme.txt"), try m.path("Readme.txt"), .file);
-    const elsewhere = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "elsewhere" });
+    const elsewhere = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "elsewhere" });
     try fsutil.ensureDir(elsewhere);
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ elsewhere, "a\\b" }), .data = "not the tree's" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ elsewhere, "a\\b" }), .data = "not the tree's" });
     try content.createLink(elsewhere, try m.path("ln"), .dir);
     try store.writeFact(a, m.ctx.layout, key, "000000000000000b", "ln/a\\b", .file, &@as([64]u8, @splat('b')));
     try store.writeFact(a, m.ctx.layout, key, "000000000000000b", ".git/config", .file, &@as([64]u8, @splat('b')));
@@ -2740,9 +2740,9 @@ test "a kept directory replaced by one holding a symlink: its regular files are 
 /// `branch`, beside the clone.
 fn addWorktree(m: *const Machine, sb: *testutil.Sandbox, branch: []const u8) ![]const u8 {
     const a = m.ctx.alloc;
-    const p = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "widget@worktrees", branch });
+    const p = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "widget@worktrees", branch });
     try m.git(sb, &.{ "worktree", "add", "-q", "-b", branch, p });
-    return fsutil.realPathOrSelf(a, try std.fs.path.resolve(a, &.{p}));
+    return fsutil.realPathOrSelf(a, try std.Io.Dir.path.resolveAlloc(a, &.{p}));
 }
 
 test "a line holt adds hides another working tree's own copy: keep and reconcile set it aside first, and removing that working tree loses nothing" {
@@ -2755,7 +2755,7 @@ test "a line holt adds hides another working tree's own copy: keep and reconcile
     const m = w.m(0);
 
     const wt = try addWorktree(m, &sb, "feature");
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ wt, ".env" }), .data = "the feature tree's own" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ wt, ".env" }), .data = "the feature tree's own" });
     try m.write(".env", "the main tree's");
     const k = try m.keep(".env");
     try testing.expectEqual(@as(usize, 1), k.hidden.len);
@@ -2766,7 +2766,7 @@ test "a line holt adds hides another working tree's own copy: keep and reconcile
     try testing.expect(try inAside(m, ".env", ".env", "the feature tree's own"));
 
     const later = try addWorktree(m, &sb, "later");
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ later, ".env" }), .data = "made after the keep" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ later, ".env" }), .data = "made after the keep" });
     const r = try m.reconcile();
     const item = try expectItem(r, ".env", .hidden);
     try testing.expect(item.unsettled and item.done);
@@ -2829,7 +2829,7 @@ test "the closing sweep: a separate file the user's global core.ignorecase folds
     const m = w.m(0);
     if (!try harness.caseSensitive(a, m.clone)) return error.SkipZigTest;
 
-    const global = try std.fs.path.join(a, &.{ sb.root, "global.gitconfig" });
+    const global = try std.Io.Dir.path.join(a, &.{ sb.root, "global.gitconfig" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = global, .data = "[core]\n\tignorecase = true\n" });
     const env = try testutil.EnvOverride.install(a, "GIT_CONFIG_GLOBAL", global);
     defer env.restore();
@@ -2907,7 +2907,7 @@ test "a nested repository the block hides is reported and never copied into asid
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
     try block.add(a, c.common_dir, &.{"vendor"});
     for ([_][]const u8{ "tools", "vendor" }) |rel| {
-        try m.write(try std.fmt.allocPrint(a, "{s}/work.txt", .{rel}), "committed in the nested repository");
+        try m.write(try a.print("{s}/work.txt", .{rel}), "committed in the nested repository");
         try testutil.runGit(&sb, try m.path(rel), &.{ "init", "-q" });
     }
 
@@ -2939,8 +2939,8 @@ test "a working tree that cannot be read is reported unsettled and holds its lin
     _ = try m.keep("notes");
     const lost = try addWorktree(m, &sb, "lost");
     const other = try addWorktree(m, &sb, "other");
-    try fsutil.removePath(try std.fs.path.join(a, &.{ lost, ".git" }));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ other, ".env" }), .data = "the other tree's own" });
+    try fsutil.removePath(try std.Io.Dir.path.join(a, &.{ lost, ".git" }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ other, ".env" }), .data = "the other tree's own" });
     try store.writeReleased(a, m.ctx.layout, key, "notes");
 
     const r = try m.reconcile();
@@ -2971,7 +2971,7 @@ fn asideNames(m: *const Machine, rel: []const u8) !bool {
 /// reconcile's closing sweep), so removing the linked trees loses nothing.
 fn keepBesideLinkedVscode(m: *const Machine, sb: *testutil.Sandbox, tag: []const u8) !void {
     const a = m.ctx.alloc;
-    const early = try addWorktree(m, sb, try std.fmt.allocPrint(a, "early-{s}", .{tag}));
+    const early = try addWorktree(m, sb, try a.print("early-{s}", .{tag}));
     try fsutil.ensureDir(try fsutil.joinSlashy(a, early, ".vscode"));
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try fsutil.joinSlashy(a, early, ".vscode/settings.json"), .data = "early tree's own" });
     try m.write(".vscode/settings.json", "the main tree's");
@@ -2979,7 +2979,7 @@ fn keepBesideLinkedVscode(m: *const Machine, sb: *testutil.Sandbox, tag: []const
     try testing.expectEqual(@as(usize, 1), k.hidden.len);
     try testing.expectEqualStrings("early tree's own", try content.readSmall(a, try aside.dataPath(a, m.ctx.layout, k.hidden[0].entry.?, ".vscode/settings.json")));
 
-    const late = try addWorktree(m, sb, try std.fmt.allocPrint(a, "late-{s}", .{tag}));
+    const late = try addWorktree(m, sb, try a.print("late-{s}", .{tag}));
     try fsutil.ensureDir(try fsutil.joinSlashy(a, late, ".vscode"));
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try fsutil.joinSlashy(a, late, ".vscode/settings.json"), .data = "late tree's own" });
     const r = try m.reconcile();
@@ -3019,19 +3019,19 @@ fn fakeGit(a: std.mem.Allocator, sb: *testutil.Sandbox, script: []const u8) !tes
     var real_git: ?[]const u8 = null;
     var dirs = std.mem.splitScalar(u8, real_path, ':');
     while (dirs.next()) |d| {
-        const candidate = try std.fs.path.join(a, &.{ d, "git" });
+        const candidate = try std.Io.Dir.path.join(a, &.{ d, "git" });
         if (try content.entryAt(candidate) != .absent) {
             real_git = candidate;
             break;
         }
     }
-    const dir = try std.fs.path.join(a, &.{ sb.root, try std.fmt.allocPrint(a, "fake-git-{d}", .{sb.work_seq}) });
+    const dir = try std.Io.Dir.path.join(a, &.{ sb.root, try a.print("fake-git-{d}", .{sb.work_seq}) });
     sb.work_seq += 1;
     try fsutil.ensureDir(dir);
-    const fake = try std.fs.path.join(a, &.{ dir, "git" });
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = fake, .data = try std.fmt.allocPrint(a, "#!/bin/sh\n{s}exec '{s}' \"$@\"\n", .{ script, real_git.? }) });
+    const fake = try std.Io.Dir.path.join(a, &.{ dir, "git" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = fake, .data = try a.print("#!/bin/sh\n{s}exec '{s}' \"$@\"\n", .{ script, real_git.? }) });
     try chmod(fake, 0o755);
-    return testutil.EnvOverride.install(a, "PATH", try std.fmt.allocPrint(a, "{s}:{s}", .{ dir, real_path }));
+    return testutil.EnvOverride.install(a, "PATH", try a.print("{s}:{s}", .{ dir, real_path }));
 }
 
 test "every kept operation refuses a git older than 2.32, naming the version found" {
@@ -3070,7 +3070,7 @@ fn addForeignLine(m: *const Machine, line: []const u8) !void {
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
     const file = try block.excludePath(a, c.common_dir);
     const text = try content.readSmall(a, file);
-    const at = std.mem.indexOf(u8, text, block.begin_line ++ "\n").? + block.begin_line.len + 1;
+    const at = std.mem.find(u8, text, block.begin_line ++ "\n").? + block.begin_line.len + 1;
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = file, .data = try std.mem.concat(a, u8, &.{ text[0..at], line, "\n", text[at..] }) });
     try testing.expect(paths.contains((try block.read(a, c.common_dir)).foreign, line));
 }
@@ -3170,7 +3170,7 @@ test "the working trees cannot be read: reconcile stops unsettled, keep refuses 
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
     const exclude_before = try content.readSmall(a, try block.excludePath(a, c.common_dir));
 
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ c.common_dir, "worktrees" }), .data = "not a directory" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ c.common_dir, "worktrees" }), .data = "not a directory" });
 
     const r = try m.reconcile();
     try testing.expectEqual(reconcile_mod.Stop.worktrees_unknown, r.stop);
@@ -3330,7 +3330,7 @@ fn treeListing(a: std.mem.Allocator, root: []const u8) ![]const u8 {
     std.mem.sort([]const u8, names.items, {}, paths.lessThan);
     for (names.items) |n| {
         const st = try d.statFile(io(), n, .{ .follow_symlinks = false });
-        try out.appendSlice(a, try std.fmt.allocPrint(a, "{s} {d} {d}\n", .{ n, st.size, st.mtime.nanoseconds }));
+        try out.appendSlice(a, try a.print("{s} {d} {d}\n", .{ n, st.size, st.mtime.nanoseconds }));
     }
     return out.items;
 }
@@ -3373,7 +3373,7 @@ test "a linked working tree git records but cannot find, moved away or locked an
         const wt = try addWorktree(m, &sb, "away");
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try fsutil.joinSlashy(a, wt, ".env"), .data = "the away tree's own" });
         if (locked) try m.git(&sb, &.{ "worktree", "lock", wt });
-        const moved = try std.fmt.allocPrint(a, "{s}-moved", .{wt});
+        const moved = try a.print("{s}-moved", .{wt});
         try std.Io.Dir.cwd().rename(wt, std.Io.Dir.cwd(), moved, io());
 
         const r = try m.reconcile();
@@ -3391,7 +3391,7 @@ test "a linked working tree git records but cannot find, moved away or locked an
         const back = if (locked) wt else moved;
         if (locked) {
             try std.Io.Dir.cwd().rename(moved, std.Io.Dir.cwd(), wt, io());
-        } else try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ m.clone, ".git", "worktrees", "away", "gitdir" }), .data = try std.fmt.allocPrint(a, "{s}/.git\n", .{moved}) });
+        } else try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ m.clone, ".git", "worktrees", "away", "gitdir" }), .data = try a.print("{s}/.git\n", .{moved}) });
         const again = try m.reconcile();
         const swept = itemIn(again, .hidden, back) orelse return error.TestUnexpectedResult;
         try testing.expect(swept.unsettled and swept.entry != null);
@@ -3489,7 +3489,7 @@ test "a linked working tree whose path holds a newline is found and swept like a
     var w = try World.init(a, &sb, 1);
     const m = w.m(0);
 
-    const p = try std.fs.path.join(a, &.{ std.fs.path.dirname(m.clone).?, "widget@worktrees", "new\nline" });
+    const p = try std.Io.Dir.path.join(a, &.{ std.Io.Dir.path.dirname(m.clone).?, "widget@worktrees", "new\nline" });
     try m.git(&sb, &.{ "worktree", "add", "-q", "-b", "nl", p });
     const wt = try fsutil.realPathOrSelf(a, p);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try fsutil.joinSlashy(a, wt, ".env"), .data = "the newline tree's own" });
@@ -3508,7 +3508,7 @@ test "a linked working tree whose path holds a newline is found and swept like a
 /// the copy under no path of its own.
 fn copyWorktree(m: *const Machine, wt: []const u8) ![]const u8 {
     const a = m.ctx.alloc;
-    const copy = try std.fmt.allocPrint(a, "{s}-copy", .{wt});
+    const copy = try a.print("{s}-copy", .{wt});
     try content.copyRegular(a, wt, copy);
     return fsutil.realPathOrSelf(a, copy);
 }
@@ -3590,7 +3590,7 @@ test "a linked working tree moved with plain mv: the tree git records is unsettl
     _ = try m.keep("seed");
     try addForeignLine(m, "*.secret");
     const wt = try addWorktree(m, &sb, "feature");
-    const moved_path = try std.fmt.allocPrint(a, "{s}-moved", .{wt});
+    const moved_path = try a.print("{s}-moved", .{wt});
     try std.Io.Dir.cwd().rename(wt, std.Io.Dir.cwd(), moved_path, io());
     const moved = try fsutil.realPathOrSelf(a, moved_path);
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try fsutil.joinSlashy(a, moved, "notes.secret"), .data = "only in the moved tree" });
@@ -3640,7 +3640,7 @@ test "a kept path's new line that would hide a separate file core.ignorecase fol
         if (as_link) _ = try expectItem(r, "Config.json", .hidden_not_copyable);
         try testing.expect(!paths.contains(try blockRels(mb), "config.json"));
         try testing.expectEqual(content.Entry.absent, try mb.entry("config.json"));
-        try testing.expect(std.mem.indexOf(u8, try gitStatus(mb), "Config.json") != null);
+        try testing.expect(std.mem.find(u8, try gitStatus(mb), "Config.json") != null);
     }
 }
 
@@ -3661,7 +3661,7 @@ test "the clone's own lock serializes every writer of its state, whatever holt s
     defer ctx_mod.lock_nonblocking_for_test = false;
 
     {
-        const other = try @import("../projectlock.zig").acquireAt(try std.fs.path.join(a, &.{ state, "lock" }));
+        const other = try @import("../projectlock.zig").acquireAt(try std.Io.Dir.path.join(a, &.{ state, "lock" }));
         defer other.release();
         try testing.expectError(error.WouldBlock, harness.reconcileIn(m.ctx, m.clone, .apply));
         try testing.expectError(error.WouldBlock, harness.reconcileIn(m.ctx, m.clone, .fix));
@@ -3686,9 +3686,9 @@ test "a half-made worktree record and a file among the records hold no line and 
     const m = w.m(0);
 
     const c = try clone.inspect(a, m.clone, m.ctx.code_root);
-    const records = try std.fs.path.join(a, &.{ c.common_dir, "worktrees" });
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ records, "half" }));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ records, "stray" }), .data = "not a record" });
+    const records = try std.Io.Dir.path.join(a, &.{ c.common_dir, "worktrees" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ records, "half" }));
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ records, "stray" }), .data = "not a record" });
     try m.write(".env", "kept");
     _ = try m.keep(".env");
     try testing.expect(try m.linked(".env"));
@@ -3696,7 +3696,7 @@ test "a half-made worktree record and a file among the records hold no line and 
     const r = try m.reconcile();
     const half = try expectItem(r, ".", .half_created_record);
     try testing.expect(!half.unsettled);
-    try testing.expectEqualStrings(try std.fs.path.join(a, &.{ records, "half" }), half.detail.?);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(a, &.{ records, "half" }), half.detail.?);
     try testing.expectEqual(@as(usize, 0), r.unsettledCount());
 }
 
@@ -3710,7 +3710,7 @@ test "a clone whose main repository is bare: a linked working tree keeps and rec
     const m = w.m(0);
 
     const main = try fsutil.joinSlashy(a, m.code, "github.com/acme/tools");
-    const common = try std.fs.path.join(a, &.{ main, ".git" });
+    const common = try std.Io.Dir.path.join(a, &.{ main, ".git" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", "--bare", w.bare, common });
     const wt_path = try fsutil.joinSlashy(a, m.code, "github.com/acme/tools@worktrees/feature");
     try testutil.runGit(&sb, common, &.{ "worktree", "add", "-q", "-b", "feature", wt_path });
@@ -3780,9 +3780,9 @@ test "a clone whose core.worktree names another directory has no key: keep refus
 
     try m.write("seed", "s");
     _ = try m.keep("seed");
-    const elsewhere = try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ sb.root, "elsewhere" }));
+    const elsewhere = try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ sb.root, "elsewhere" }));
     try fsutil.ensureDir(elsewhere);
-    const env_file = try std.fs.path.join(a, &.{ elsewhere, ".env" });
+    const env_file = try std.Io.Dir.path.join(a, &.{ elsewhere, ".env" });
     try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = env_file, .data = "not the clone's" });
     try m.git(&sb, &.{ "config", "core.worktree", elsewhere });
 
@@ -4095,7 +4095,7 @@ fn keepAsideRefused(m: *const Machine, worktree: []const u8, rel: []const u8) !v
 fn removeAsideEntries(m: *const Machine, rel: []const u8) !void {
     const a = m.ctx.alloc;
     for (try aside.findEntries(a, m.ctx.layout, key, rel, null)) |stamp| {
-        try std.Io.Dir.cwd().deleteTree(io(), try std.fs.path.join(a, &.{ try m.ctx.layout.asideDir(a), stamp }));
+        try std.Io.Dir.cwd().deleteTree(io(), try std.Io.Dir.path.join(a, &.{ try m.ctx.layout.asideDir(a), stamp }));
     }
 }
 

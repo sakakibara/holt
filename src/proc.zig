@@ -512,9 +512,9 @@ fn expectChildEndsWith(sig: std.posix.SIG, fed: bool) !void {
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const pid_file = try std.fs.path.join(testing.allocator, &.{ dir, "query.pid" });
+    const pid_file = try std.Io.Dir.path.join(testing.allocator, &.{ dir, "query.pid" });
     defer testing.allocator.free(pid_file);
-    const script = try std.fmt.allocPrint(testing.allocator, "echo $$ > '{s}.tmp' && mv '{s}.tmp' '{s}' && exec sleep 47", .{ pid_file, pid_file, pid_file });
+    const script = try testing.allocator.print("echo $$ > '{s}.tmp' && mv '{s}.tmp' '{s}' && exec sleep 47", .{ pid_file, pid_file, pid_file });
     defer testing.allocator.free(script);
 
     const rc = sys.fork();
@@ -612,7 +612,7 @@ test "runEnvInput: the child reads the file as its standard input" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "in", .data = "from the file\n" });
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const path = try std.fs.path.join(testing.allocator, &.{ dir, "in" });
+    const path = try std.Io.Dir.path.join(testing.allocator, &.{ dir, "in" });
     defer testing.allocator.free(path);
     const res = try runEnvInput(testing.allocator, &.{"cat"}, null, null, path);
     defer testing.allocator.free(res.stdout);
@@ -659,7 +659,7 @@ test "spawnInherited: under test, a child's output never reaches the test runner
     defer tmp.cleanup();
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const path = try std.fs.path.join(testing.allocator, &.{ dir, "stderr" });
+    const path = try std.Io.Dir.path.join(testing.allocator, &.{ dir, "stderr" });
     defer testing.allocator.free(path);
 
     const cap = try @import("testutil.zig").StderrCapture.begin(path);

@@ -517,7 +517,7 @@ const Run = struct {
         if (!r.store_whole or paths.keepable(rel) != .git_reads_unlinked) return false;
         if (paths.contains(r.kept_set, rel) or r.ks.isReleased(rel)) return false;
         const sid = paths.id(rel);
-        for (r.ks.bad) |b| if (std.mem.indexOf(u8, b.path, &sid) != null) return false;
+        for (r.ks.bad) |b| if (std.mem.find(u8, b.path, &sid) != null) return false;
         return true;
     }
 
@@ -592,7 +592,7 @@ const Run = struct {
         }
         if (try store.nestedKeyAt(a, r.index, r.rk, rel)) |nk| {
             const how = if (nk.contains) "contains" else "inside";
-            return r.noState(rel, cp, .invalid, try std.fmt.allocPrint(a, "{s} the nested key {s}", .{ how, nk.key }), null);
+            return r.noState(rel, cp, .invalid, try a.print("{s} the nested key {s}", .{ how, nk.key }), null);
         }
         if (!try link.parentsReal(a, r.c.worktree, rel)) return r.noState(rel, cp, .parent_not_dir, null, null);
 
@@ -997,7 +997,7 @@ const Run = struct {
                 item.outcome = .no_symlink_privilege;
                 return r.add(item);
             }
-            try fsutil.ensureDir(std.fs.path.dirname(cp).?);
+            try fsutil.ensureDir(std.Io.Dir.path.dirname(cp).?);
             try r.recordRoot();
             if (content.createLink(kc_path, cp, kind)) {
                 item.done = true;

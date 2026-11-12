@@ -99,7 +99,7 @@ pub fn rootOf(alloc: std.mem.Allocator, link_path: []const u8, raw: []const u8, 
         const prefix = rootPrefix(alloc, t, k, rel) orelse continue;
         for (roots) |r| if (sameRoot(alloc, prefix, r)) return r;
         const native = alloc.dupe(u8, prefix) catch return null;
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, native, '/', std.fs.path.sep);
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, native, '/', std.Io.Dir.path.sep);
         if (store.recordsRoot(alloc, native) catch false) return native;
     }
     return null;
@@ -115,7 +115,7 @@ pub fn shapeRoot(alloc: std.mem.Allocator, link_path: []const u8, raw: []const u
     for (chain) |k| {
         const prefix = rootPrefix(alloc, t, k, rel) orelse continue;
         const root = alloc.dupe(u8, prefix) catch return null;
-        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, root, '/', std.fs.path.sep);
+        if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, root, '/', std.Io.Dir.path.sep);
         return root;
     }
     return null;
@@ -124,10 +124,10 @@ pub fn shapeRoot(alloc: std.mem.Allocator, link_path: []const u8, raw: []const u
 /// `t`, a `/`-separated target, without its `/kept/<k>/<rel>` ending,
 /// compared after Unicode normalization; null when it does not end so.
 fn rootPrefix(alloc: std.mem.Allocator, t: []const u8, k: []const u8, rel: []const u8) ?[]const u8 {
-    const suffix = std.fmt.allocPrint(alloc, "/kept/{s}/{s}", .{ k, rel }) catch return null;
+    const suffix = alloc.print("/kept/{s}/{s}", .{ k, rel }) catch return null;
     if (!endsWithNormalized(alloc, t, suffix)) return null;
     var end = t.len;
-    for (0..std.mem.count(u8, suffix, "/")) |_| end = std.mem.lastIndexOfScalar(u8, t[0..end], '/') orelse return null;
+    for (0..std.mem.count(u8, suffix, "/")) |_| end = std.mem.findScalarLast(u8, t[0..end], '/') orelse return null;
     return t[0..end];
 }
 
@@ -142,8 +142,8 @@ pub fn sameRoot(alloc: std.mem.Allocator, a: []const u8, b: []const u8) bool {
 /// The path the link at `link_path` with raw target `raw` names: `raw`
 /// itself when absolute, else `raw` taken from the link's directory.
 pub fn resolveTarget(alloc: std.mem.Allocator, link_path: []const u8, raw: []const u8) ![]const u8 {
-    if (std.fs.path.isAbsolute(raw)) return raw;
-    return std.fs.path.resolve(alloc, &.{ std.fs.path.dirname(link_path) orelse ".", raw });
+    if (std.Io.Dir.path.isAbsolute(raw)) return raw;
+    return std.Io.Dir.path.resolveAlloc(alloc, &.{ std.Io.Dir.path.dirname(link_path) orelse ".", raw });
 }
 
 /// What is at `<worktree>/<rel>`, judged against the link target `want`.
@@ -164,7 +164,7 @@ pub fn parentsReal(alloc: std.mem.Allocator, worktree: []const u8, rel: []const 
     var it = std.mem.splitScalar(u8, rel, '/');
     var comp = it.next() orelse return true;
     while (it.next()) |next| {
-        cur = try std.fs.path.join(alloc, &.{ cur, comp });
+        cur = try std.Io.Dir.path.join(alloc, &.{ cur, comp });
         switch (try content.entryAt(cur)) {
             .dir => {},
             .absent => return true,
@@ -187,12 +187,12 @@ test "classify and isHolt: the right link, a chain key's link, a recorded root's
     defer f.deinit();
     const a = f.alloc();
     const root = f.root;
-    const layout: store.Layout = .{ .synced_root = try std.fs.path.join(a, &.{ root, "synced" }) };
-    const other: store.Layout = .{ .synced_root = try std.fs.path.join(a, &.{ root, "old-backend" }) };
+    const layout: store.Layout = .{ .synced_root = try std.Io.Dir.path.join(a, &.{ root, "synced" }) };
+    const other: store.Layout = .{ .synced_root = try std.Io.Dir.path.join(a, &.{ root, "old-backend" }) };
     const roots = [_][]const u8{ layout.synced_root, other.synced_root };
     const chain = [_][]const u8{ "github.com/new/widget", "github.com/old/widget" };
     const want = try layout.copyPath(a, chain[0], ".clasp.json");
-    const lp = try std.fs.path.join(a, &.{ root, "link" });
+    const lp = try std.Io.Dir.path.join(a, &.{ root, "link" });
 
     try testing.expect((try classify(a, lp, want, &chain, &roots, ".clasp.json")) == .absent);
     try content.createLink(want, lp, .file);
@@ -206,10 +206,10 @@ test "classify and isHolt: the right link, a chain key's link, a recorded root's
     try testing.expectEqualStrings(other.synced_root, rootOf(a, lp, (try content.readLink(a, lp)).?, &chain, &roots, ".clasp.json").?);
     try testing.expect((try classify(a, lp, want, &chain, roots[0..1], ".clasp.json")) == .foreign);
 
-    const mine = try std.fs.path.join(a, &.{ root, "my-notes", "kept", chain[0], ".clasp.json" });
+    const mine = try std.Io.Dir.path.join(a, &.{ root, "my-notes", "kept", chain[0], ".clasp.json" });
     try pointAt(mine, lp);
     try testing.expect((try classify(a, lp, want, &chain, &roots, ".clasp.json")) == .foreign);
-    try testing.expectEqualStrings(try std.fs.path.join(a, &.{ root, "my-notes" }), shapeRoot(a, lp, mine, &chain, ".clasp.json").?);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(a, &.{ root, "my-notes" }), shapeRoot(a, lp, mine, &chain, ".clasp.json").?);
 
     try pointAt(try other.copyPath(a, "github.com/unrelated/x", ".clasp.json"), lp);
     try testing.expect((try classify(a, lp, want, &chain, &roots, ".clasp.json")) == .foreign);
@@ -239,9 +239,9 @@ test "parentsReal: refuses a symlinked or file parent, accepts absent and real o
     const a = f.alloc();
     const root = f.root;
 
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ root, "real", "sub" }));
-    try content.createLink(try std.fs.path.join(a, &.{ root, "real" }), try std.fs.path.join(a, &.{ root, "ln" }), .dir);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ root, "file" }), .data = "" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ root, "real", "sub" }));
+    try content.createLink(try std.Io.Dir.path.join(a, &.{ root, "real" }), try std.Io.Dir.path.join(a, &.{ root, "ln" }), .dir);
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ root, "file" }), .data = "" });
 
     try testing.expect(try parentsReal(a, root, "top"));
     try testing.expect(try parentsReal(a, root, "real/sub/x"));

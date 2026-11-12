@@ -95,7 +95,7 @@ pub fn requireGit(alloc: std.mem.Allocator) !void {
 pub fn gitTooOld(alloc: std.mem.Allocator) ![]const u8 {
     while (!git_check.lock.tryLock()) std.atomic.spinLoopHint();
     defer git_check.lock.unlock();
-    return std.fmt.allocPrint(alloc, "kept files need git {d}.{d} or newer (found {s})", .{ min_git[0], min_git[1], git_check.found[0..git_check.found_len] });
+    return alloc.print("kept files need git {d}.{d} or newer (found {s})", .{ min_git[0], min_git[1], git_check.found[0..git_check.found_len] });
 }
 
 /// Test seam: `requireGit` asks git again on its next call.
@@ -116,7 +116,7 @@ fn parseGitVersion(out: []const u8) struct { ok: bool, found: []const u8 } {
     const prefix = "git version ";
     if (!std.mem.startsWith(u8, line, prefix)) return .{ .ok = false, .found = if (line.len == 0) "no version" else line };
     const rest = line[prefix.len..];
-    const found = rest[0 .. std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len];
+    const found = rest[0 .. std.mem.findScalar(u8, rest, ' ') orelse rest.len];
     var it = std.mem.splitScalar(u8, found, '.');
     const major = std.fmt.parseInt(u32, it.next() orelse "", 10) catch return .{ .ok = false, .found = found };
     const minor = std.fmt.parseInt(u32, it.next() orelse "", 10) catch return .{ .ok = false, .found = found };
@@ -134,7 +134,7 @@ fn lines(alloc: std.mem.Allocator, out: []const u8) ![]const []const u8 {
 }
 
 fn nativePath(alloc: std.mem.Allocator, p: []const u8) ![]const u8 {
-    return fsutil.realPathOrSelf(alloc, try std.fs.path.resolve(alloc, &.{p}));
+    return fsutil.realPathOrSelf(alloc, try std.Io.Dir.path.resolveAlloc(alloc, &.{p}));
 }
 
 /// Reads the working tree containing `path`.
@@ -146,8 +146,8 @@ pub fn inspect(alloc: std.mem.Allocator, path: []const u8, code_root: []const u8
     const worktree = try nativePath(alloc, ls[0]);
     const git_dir = try nativePath(alloc, ls[1]);
     const common_dir = try nativePath(alloc, ls[2]);
-    const main = std.fs.path.dirname(common_dir) orelse common_dir;
-    const is_dotgit = std.mem.eql(u8, std.fs.path.basename(common_dir), ".git");
+    const main = std.Io.Dir.path.dirname(common_dir) orelse common_dir;
+    const is_dotgit = std.mem.eql(u8, std.Io.Dir.path.basename(common_dir), ".git");
     const tree = try treeName(alloc, git_dir, common_dir);
     const main_toplevel = if (std.mem.eql(u8, tree, ".")) worktree else try toplevelOf(alloc, main);
     const c: Clone = .{
@@ -171,9 +171,9 @@ pub fn inspect(alloc: std.mem.Allocator, path: []const u8, code_root: []const u8
 /// there is none.
 pub fn enclosing(alloc: std.mem.Allocator, dir: []const u8) !?[]const u8 {
     var at: ?[]const u8 = dir;
-    while (at) |d| : (at = std.fs.path.dirname(d)) {
+    while (at) |d| : (at = std.Io.Dir.path.dirname(d)) {
         if (try content.entryAt(d) != .dir) continue;
-        if (try content.entryAt(try std.fs.path.join(alloc, &.{ d, ".git" })) != .absent) return d;
+        if (try content.entryAt(try std.Io.Dir.path.join(alloc, &.{ d, ".git" })) != .absent) return d;
     }
     return null;
 }
@@ -194,7 +194,7 @@ fn treeName(alloc: std.mem.Allocator, git_dir: []const u8, common_dir: []const u
     if (std.mem.eql(u8, git_dir, common_dir)) return ".";
     if (!fsutil.pathIsInside(git_dir, common_dir)) return git_dir;
     const rel = try alloc.dupe(u8, git_dir[common_dir.len + 1 ..]);
-    if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, rel, std.fs.path.sep, '/');
+    if (std.Io.Dir.path.sep != '/') std.mem.replaceScalar(u8, rel, std.Io.Dir.path.sep, '/');
     return rel;
 }
 
@@ -281,12 +281,12 @@ pub fn worktrees(alloc: std.mem.Allocator, c: Clone) ![]const Worktree {
         if (std.mem.eql(u8, c.tree, ".")) own = out.items[0];
     }
 
-    const records = try std.fs.path.join(alloc, &.{ c.common_dir, "worktrees" });
+    const records = try std.Io.Dir.path.join(alloc, &.{ c.common_dir, "worktrees" });
     for (try recordDirs(alloc, records)) |id| {
-        const record = try std.fs.path.join(alloc, &.{ records, id });
+        const record = try std.Io.Dir.path.join(alloc, &.{ records, id });
         const t: Worktree = if (recordedPath(alloc, record)) |at| blk: {
             if (otherSide(at)) break :blk .{ .path = at, .problem = .other_side };
-            break :blk try treeAt(alloc, if (std.fs.path.isAbsolute(at)) at else try std.fs.path.join(alloc, &.{ record, at }), .{ .common_dir = c.common_dir, .record = record });
+            break :blk try treeAt(alloc, if (std.Io.Dir.path.isAbsolute(at)) at else try std.Io.Dir.path.join(alloc, &.{ record, at }), .{ .common_dir = c.common_dir, .record = record });
         } else |err| switch (err) {
             error.OutOfMemory => return err,
             error.FileNotFound => continue,
@@ -312,10 +312,10 @@ pub const Record = struct { record: []const u8, path: ?[]const u8 };
 /// `gitdir` names none and is left out. `WorktreeListFailed` when the
 /// records cannot be read.
 pub fn linkedRecords(alloc: std.mem.Allocator, common_dir: []const u8) ![]const Record {
-    const records = try std.fs.path.join(alloc, &.{ common_dir, "worktrees" });
+    const records = try std.Io.Dir.path.join(alloc, &.{ common_dir, "worktrees" });
     var out: std.ArrayList(Record) = .empty;
     for (try recordDirs(alloc, records)) |id| {
-        const record = try std.fs.path.join(alloc, &.{ records, id });
+        const record = try std.Io.Dir.path.join(alloc, &.{ records, id });
         const at = recordedTree(alloc, record, record) catch |err| switch (err) {
             error.OutOfMemory => return err,
             error.FileNotFound => continue,
@@ -339,10 +339,10 @@ pub const Unlisted = struct { record: []const u8, why: enum { no_gitdir, unreada
 /// `linkedRecords` leaves out or gives no path. `WorktreeListFailed` when
 /// the records cannot be read.
 pub fn unlistedRecords(alloc: std.mem.Allocator, common_dir: []const u8) ![]const Unlisted {
-    const records = try std.fs.path.join(alloc, &.{ common_dir, "worktrees" });
+    const records = try std.Io.Dir.path.join(alloc, &.{ common_dir, "worktrees" });
     var out: std.ArrayList(Unlisted) = .empty;
     for (try recordDirs(alloc, records)) |id| {
-        const record = try std.fs.path.join(alloc, &.{ records, id });
+        const record = try std.Io.Dir.path.join(alloc, &.{ records, id });
         _ = recordedTree(alloc, record, record) catch |err| switch (err) {
             error.OutOfMemory => return err,
             error.FileNotFound => try out.append(alloc, .{ .record = record, .why = .no_gitdir }),
@@ -360,8 +360,8 @@ pub fn unlistedRecords(alloc: std.mem.Allocator, common_dir: []const u8) ![]cons
 /// holds no `gitdir`.
 pub fn recordedTree(alloc: std.mem.Allocator, record: []const u8, base: []const u8) ![]const u8 {
     const at = try recordedPath(alloc, record);
-    if (std.fs.path.isAbsolute(at) or otherSide(at)) return at;
-    return std.fs.path.resolve(alloc, &.{ base, at });
+    if (std.Io.Dir.path.isAbsolute(at) or otherSide(at)) return at;
+    return std.Io.Dir.path.resolveAlloc(alloc, &.{ base, at });
 }
 
 /// The directories of the common directory's `worktrees/` that hold no
@@ -369,15 +369,15 @@ pub fn recordedTree(alloc: std.mem.Allocator, record: []const u8, base: []const 
 /// working tree and which removing that directory settles. Empty when the
 /// records cannot be read.
 pub fn halfCreated(alloc: std.mem.Allocator, c: Clone) ![]const []const u8 {
-    const records = try std.fs.path.join(alloc, &.{ c.common_dir, "worktrees" });
+    const records = try std.Io.Dir.path.join(alloc, &.{ c.common_dir, "worktrees" });
     var out: std.ArrayList([]const u8) = .empty;
     const ids = recordDirs(alloc, records) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return out.items,
     };
     for (ids) |id| {
-        const record = try std.fs.path.join(alloc, &.{ records, id });
-        const e = content.entryAt(try std.fs.path.join(alloc, &.{ record, "gitdir" })) catch continue;
+        const record = try std.Io.Dir.path.join(alloc, &.{ records, id });
+        const e = content.entryAt(try std.Io.Dir.path.join(alloc, &.{ record, "gitdir" })) catch continue;
         if (e == .absent) try out.append(alloc, record);
     }
     return out.items;
@@ -413,7 +413,7 @@ fn recordDirs(alloc: std.mem.Allocator, records: []const u8) ![]const []const u8
 /// and a trailing `/.git` removed; relative to `record` unless absolute.
 /// `FileNotFound` when `record` holds no `gitdir`.
 fn recordedPath(alloc: std.mem.Allocator, record: []const u8) ![]const u8 {
-    const raw = try content.readSmall(alloc, try std.fs.path.join(alloc, &.{ record, "gitdir" }));
+    const raw = try content.readSmall(alloc, try std.Io.Dir.path.join(alloc, &.{ record, "gitdir" }));
     var p: []const u8 = std.mem.trimEnd(u8, raw, " \t\n\r\x0b\x0c");
     if (std.mem.endsWith(u8, p, "/.git")) p = p[0 .. p.len - "/.git".len];
     if (p.len == 0) return error.MalformedRecord;
@@ -446,7 +446,7 @@ pub fn gitAsOwner(alloc: std.mem.Allocator, args: []const []const u8, repo: []co
 /// or knows no `*` there, still refuses.
 pub fn refusedForOwner(res: git.RunResult) bool {
     if (res.status == 0) return false;
-    return std.mem.indexOf(u8, res.stderr, "dubious ownership") != null or std.mem.indexOf(u8, res.stderr, "unsafe repository") != null;
+    return std.mem.find(u8, res.stderr, "dubious ownership") != null or std.mem.find(u8, res.stderr, "unsafe repository") != null;
 }
 
 /// The working tree at `raw`, with the problem that keeps it from being
@@ -463,7 +463,7 @@ fn treeAt(alloc: std.mem.Allocator, raw: []const u8, linked: ?Linked) !Worktree 
     var d = std.Io.Dir.cwd().openDir(fsutil.io(), p, .{}) catch return .{ .path = p, .problem = .unreadable };
     d.close(fsutil.io());
     const l = linked orelse return .{ .path = p };
-    const dot_git = content.entryAt(try std.fs.path.join(alloc, &.{ p, ".git" })) catch content.Entry.other;
+    const dot_git = content.entryAt(try std.Io.Dir.path.join(alloc, &.{ p, ".git" })) catch content.Entry.other;
     if (dot_git == .absent) return .{ .path = p, .problem = .not_linked };
     if (!try leadsBack(alloc, p, l.common_dir, l.record)) return .{ .path = p, .problem = .foreign_repository };
     return .{ .path = p };
@@ -681,10 +681,10 @@ pub fn negation(alloc: std.mem.Allocator, c: Clone, rel: []const u8) !?Negation 
     if (res.status == 1) return null;
     if (res.status != 0) return error.GitFailed;
     const out = std.mem.trimEnd(u8, res.stdout, "\r\n");
-    const tab = std.mem.lastIndexOfScalar(u8, out, '\t') orelse return error.GitFailed;
+    const tab = std.mem.findScalarLast(u8, out, '\t') orelse return error.GitFailed;
     const spec = out[0..tab];
     var at: usize = 0;
-    const colon, const next = while (std.mem.indexOfScalarPos(u8, spec, at, ':')) |i| : (at = i + 1) {
+    const colon, const next = while (std.mem.findScalarPos(u8, spec, at, ':')) |i| : (at = i + 1) {
         var j = i + 1;
         while (j < spec.len and std.ascii.isDigit(spec[j])) j += 1;
         if (j > i + 1 and j < spec.len and spec[j] == ':') break .{ i, j };
@@ -693,7 +693,7 @@ pub fn negation(alloc: std.mem.Allocator, c: Clone, rel: []const u8) !?Negation 
     if (pattern.len == 0 or pattern[0] != '!') return null;
     const src = spec[0..colon];
     const native_src = try fsutil.nativeSlashed(alloc, src);
-    const source = if (std.fs.path.isAbsolute(native_src)) native_src else try std.fs.path.join(alloc, &.{ c.worktree, native_src });
+    const source = if (std.Io.Dir.path.isAbsolute(native_src)) native_src else try std.Io.Dir.path.join(alloc, &.{ c.worktree, native_src });
     const line = spec[colon + 1 .. next];
     const exclude = try block.excludePath(alloc, c.common_dir);
     if (std.mem.eql(u8, try fsutil.realPathOrSelf(alloc, source), try fsutil.realPathOrSelf(alloc, exclude))) {
@@ -703,7 +703,7 @@ pub fn negation(alloc: std.mem.Allocator, c: Clone, rel: []const u8) !?Negation 
         const after_first = std.mem.count(u8, text[0 .. text.len - parsed.after.len], "\n") + 1;
         const n = std.fmt.parseInt(usize, line, 10) catch return error.GitFailed;
         if (n < after_first) return null;
-    } else if (std.fs.path.isAbsolute(src) or !std.mem.eql(u8, std.fs.path.basename(src), ".gitignore")) return null;
+    } else if (std.Io.Dir.path.isAbsolute(src) or !std.mem.eql(u8, std.Io.Dir.path.basename(src), ".gitignore")) return null;
     return .{ .source = source, .line = try alloc.dupe(u8, line), .pattern = try alloc.dupe(u8, pattern) };
 }
 
@@ -726,7 +726,7 @@ pub fn blockHides(alloc: std.mem.Allocator, worktree: []const u8, dirs: []const 
     if (builtin.is_test) if (listing_for_test) |l| return l;
     const file = (try writeRunFile(alloc, dirs, machine_id, patterns)) orelse return null;
     defer fsutil.removePath(file) catch {};
-    const res = try gitIn(alloc, &.{ "ls-files", "-z", "--others", "--ignored", try std.fmt.allocPrint(alloc, "--exclude-from={s}", .{file}), "--directory" }, worktree);
+    const res = try gitIn(alloc, &.{ "ls-files", "-z", "--others", "--ignored", try alloc.print("--exclude-from={s}", .{file}), "--directory" }, worktree);
     if (res.status != 0) return null;
     var out: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, res.stdout, 0);
@@ -747,9 +747,9 @@ const exclude_prefix = "exclude-";
 pub fn writeRunFile(alloc: std.mem.Allocator, dirs: []const []const u8, machine_id: []const u8, data: []const u8) !?[]const u8 {
     const suffix = content.randomSuffix();
     var host_buf: [machine.host_name_max]u8 = undefined;
-    const name = try std.fmt.allocPrint(alloc, exclude_prefix ++ "{s}-{s}-{d}-{s}", .{ machine_id, machine.hostName(&host_buf), machine.processId(), &suffix });
+    const name = try alloc.print(exclude_prefix ++ "{s}-{s}-{d}-{s}", .{ machine_id, machine.hostName(&host_buf), machine.processId(), &suffix });
     for (dirs) |d| {
-        const path = try std.fs.path.join(alloc, &.{ d, name });
+        const path = try std.Io.Dir.path.join(alloc, &.{ d, name });
         std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = path, .data = data, .flags = .{ .exclusive = true } }) catch |err| {
             if (err != error.PathAlreadyExists) fsutil.removePath(path) catch {};
             continue;
@@ -778,7 +778,7 @@ pub fn clearStaleExcludes(alloc: std.mem.Allocator, dir: []const u8, machine_id:
         const st = d.statFile(fsutil.io(), e.name, .{ .follow_symlinks = false }) catch continue;
         const old = st.mtime.nanoseconds < now - std.time.ns_per_day;
         const orphaned = if (made.by) |by| std.mem.eql(u8, by.machine, machine_id) and std.mem.eql(u8, by.host, host) and !machine.processRunning(by.pid) else false;
-        if (old or orphaned) try stale.append(alloc, try std.fs.path.join(alloc, &.{ dir, e.name }));
+        if (old or orphaned) try stale.append(alloc, try std.Io.Dir.path.join(alloc, &.{ dir, e.name }));
     }
     for (stale.items) |p| fsutil.removePath(p) catch {};
 }
@@ -843,10 +843,10 @@ pub fn originUrl(alloc: std.mem.Allocator, repo: []const u8) !?[]const u8 {
 }
 
 pub fn stripUserinfo(alloc: std.mem.Allocator, url: []const u8) ![]const u8 {
-    const sep = std.mem.indexOf(u8, url, "://") orelse return url;
+    const sep = std.mem.find(u8, url, "://") orelse return url;
     const auth_start = sep + 3;
-    const auth_end = std.mem.indexOfScalarPos(u8, url, auth_start, '/') orelse url.len;
-    const at = std.mem.lastIndexOfScalar(u8, url[auth_start..auth_end], '@') orelse return url;
+    const auth_end = std.mem.findScalarPos(u8, url, auth_start, '/') orelse url.len;
+    const at = std.mem.findScalarLast(u8, url[auth_start..auth_end], '@') orelse return url;
     return std.mem.concat(alloc, u8, &.{ url[0..auth_start], url[auth_start + at + 1 ..] });
 }
 
@@ -870,12 +870,12 @@ pub const Sparse = struct {
         switch (self.mode) {
             .off => return true,
             .patterns => {
-                const parent = std.fs.path.dirnamePosix(rel) orelse return true;
+                const parent = std.Io.Dir.path.dirnamePosix(rel) orelse return true;
                 return try content.entryAt(try fsutil.joinSlashy(alloc, worktree, parent)) == .dir;
             },
             .cone => {},
         }
-        const target = if (kind == .dir) rel else (std.fs.path.dirnamePosix(rel) orelse return true);
+        const target = if (kind == .dir) rel else (std.Io.Dir.path.dirnamePosix(rel) orelse return true);
         for (self.dirs) |d| {
             if (std.mem.eql(u8, d, target)) return true;
             if (below(target, d) or below(d, target)) return true;
@@ -924,11 +924,11 @@ pub const Pending = struct { tree: []const u8, rel: []const u8, op: Op, entry: ?
 
 /// The clone's own holt state, `$GIT_COMMON_DIR/holt`.
 pub fn stateDir(alloc: std.mem.Allocator, common_dir: []const u8) ![]u8 {
-    return std.fs.path.join(alloc, &.{ common_dir, "holt" });
+    return std.Io.Dir.path.join(alloc, &.{ common_dir, "holt" });
 }
 
 fn pendingPath(alloc: std.mem.Allocator, common_dir: []const u8) ![]u8 {
-    return std.fs.path.join(alloc, &.{ try stateDir(alloc, common_dir), "pending" });
+    return std.Io.Dir.path.join(alloc, &.{ try stateDir(alloc, common_dir), "pending" });
 }
 
 /// Every pending record of the clone. A line that does not read as one is
@@ -971,7 +971,7 @@ fn writePending(alloc: std.mem.Allocator, common_dir: []const u8, list: []const 
         try buf.append(alloc, '\n');
     }
     const path = try pendingPath(alloc, common_dir);
-    try fsutil.ensureDir(std.fs.path.dirname(path).?);
+    try fsutil.ensureDir(std.Io.Dir.path.dirname(path).?);
     try fsutil.writeFileAtomic(alloc, path, buf.items);
 }
 
@@ -1007,7 +1007,7 @@ pub fn clearPending(alloc: std.mem.Allocator, common_dir: []const u8, tree: []co
 /// linked one while its administrative directory exists, prunable or not.
 pub fn treeListed(alloc: std.mem.Allocator, common_dir: []const u8, tree: []const u8) !bool {
     if (std.mem.eql(u8, tree, ".")) return true;
-    const dir = if (std.fs.path.isAbsolute(tree)) tree else try fsutil.joinSlashy(alloc, common_dir, tree);
+    const dir = if (std.Io.Dir.path.isAbsolute(tree)) tree else try fsutil.joinSlashy(alloc, common_dir, tree);
     return try content.entryAt(dir) == .dir;
 }
 
@@ -1045,10 +1045,10 @@ test "inspect: a clone and its linked worktree share the clone's key; a clone ou
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
-    const code = try std.fs.path.join(a, &.{ sb.root, "code" });
-    const clone_path = try std.fs.path.join(a, &.{ code, "github.com", "acme", "widget" });
+    const code = try std.Io.Dir.path.join(a, &.{ sb.root, "code" });
+    const clone_path = try std.Io.Dir.path.join(a, &.{ code, "github.com", "acme", "widget" });
     try testutil.runGit(&sb, null, &.{ "clone", "-q", bare, clone_path });
-    const wt = try std.fs.path.join(a, &.{ code, "github.com", "acme", "widget@worktrees", "feature" });
+    const wt = try std.Io.Dir.path.join(a, &.{ code, "github.com", "acme", "widget@worktrees", "feature" });
     try testutil.runGit(&sb, clone_path, &.{ "worktree", "add", "-q", "-b", "feature", wt });
 
     const c = try inspect(a, clone_path, code);
@@ -1081,20 +1081,20 @@ test "worktrees: read from the common directory, a record's relative path resolv
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
     for ([_][]const u8{ "one", "two" }) |name| {
-        try testutil.runGit(&sb, work, &.{ "worktree", "add", "-q", "-b", name, try std.fs.path.join(a, &.{ sb.root, name }) });
+        try testutil.runGit(&sb, work, &.{ "worktree", "add", "-q", "-b", name, try std.Io.Dir.path.join(a, &.{ sb.root, name }) });
     }
     const c = try inspect(a, work, sb.root);
-    const records = try std.fs.path.join(a, &.{ c.common_dir, "worktrees" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ records, "one", "gitdir" }), .data = "../../../../one/.git\n" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ records, "two", "gitdir" }), .data = "\n" });
+    const records = try std.Io.Dir.path.join(a, &.{ c.common_dir, "worktrees" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ records, "one", "gitdir" }), .data = "../../../../one/.git\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ records, "two", "gitdir" }), .data = "\n" });
 
     const got = try worktrees(a, c);
     try testing.expectEqual(@as(usize, 3), got.len);
     try testing.expectEqualStrings(c.worktree, got[0].path);
     try testing.expect(got[0].readable());
-    try testing.expectEqualStrings(try fsutil.realPathOrSelf(a, try std.fs.path.join(a, &.{ sb.root, "one" })), got[1].path);
+    try testing.expectEqualStrings(try fsutil.realPathOrSelf(a, try std.Io.Dir.path.join(a, &.{ sb.root, "one" })), got[1].path);
     try testing.expect(got[1].readable());
-    try testing.expectEqualStrings(try std.fs.path.join(a, &.{ records, "two" }), got[2].path);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(a, &.{ records, "two" }), got[2].path);
     try testing.expectEqual(@as(?TreeProblem, .record_unreadable), got[2].problem);
 }
 
@@ -1111,12 +1111,12 @@ test "worktrees and unlistedRecords: a record whose gitdir holt is denied, or is
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
     for ([_][]const u8{ "denied", "loop" }) |name| {
-        try testutil.runGit(&sb, work, &.{ "worktree", "add", "-q", "-b", name, try std.fs.path.join(a, &.{ sb.root, name }) });
+        try testutil.runGit(&sb, work, &.{ "worktree", "add", "-q", "-b", name, try std.Io.Dir.path.join(a, &.{ sb.root, name }) });
     }
     const c = try inspect(a, work, sb.root);
-    const records = try std.fs.path.join(a, &.{ c.common_dir, "worktrees" });
-    const denied = try std.fs.path.join(a, &.{ records, "denied", "gitdir" });
-    const loop = try std.fs.path.join(a, &.{ records, "loop", "gitdir" });
+    const records = try std.Io.Dir.path.join(a, &.{ c.common_dir, "worktrees" });
+    const denied = try std.Io.Dir.path.join(a, &.{ records, "denied", "gitdir" });
+    const loop = try std.Io.Dir.path.join(a, &.{ records, "loop", "gitdir" });
     try fsutil.removePath(loop);
     try content.createLink(loop, loop, .file);
     const proc = @import("../proc.zig");
@@ -1127,13 +1127,13 @@ test "worktrees and unlistedRecords: a record whose gitdir holt is denied, or is
     const got = try worktrees(a, c);
     try testing.expectEqual(@as(usize, 3), got.len);
     for (got[1..], [_][]const u8{ "denied", "loop" }) |t, name| {
-        try testing.expectEqualStrings(try std.fs.path.join(a, &.{ records, name }), t.path);
+        try testing.expectEqualStrings(try std.Io.Dir.path.join(a, &.{ records, name }), t.path);
         try testing.expectEqual(@as(?TreeProblem, .record_unreadable), t.problem);
     }
     const unlisted = try unlistedRecords(a, c.common_dir);
     try testing.expectEqual(@as(usize, 2), unlisted.len);
     for (unlisted, [_][]const u8{ "denied", "loop" }) |u, name| {
-        try testing.expectEqualStrings(try std.fs.path.join(a, &.{ records, name }), u.record);
+        try testing.expectEqualStrings(try std.Io.Dir.path.join(a, &.{ records, name }), u.record);
         try testing.expect(u.why == .unreadable);
     }
 }
@@ -1150,12 +1150,12 @@ test "worktrees: a file among the records and a record with no gitdir name no wo
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
     const c = try inspect(a, work, sb.root);
-    const records = try std.fs.path.join(a, &.{ c.common_dir, "worktrees" });
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ records, "half" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ records, "stray" }), .data = "not a record" });
+    const records = try std.Io.Dir.path.join(a, &.{ c.common_dir, "worktrees" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ records, "half" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ records, "stray" }), .data = "not a record" });
     const other = if (builtin.os.tag == .windows) "/mnt/c/Users/me/wt" else "C:/Users/me/wt";
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ records, "wsl" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ records, "wsl", "gitdir" }), .data = other ++ "/.git\n" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ records, "wsl" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ records, "wsl", "gitdir" }), .data = other ++ "/.git\n" });
 
     const got = try worktrees(a, c);
     try testing.expectEqual(@as(usize, 2), got.len);
@@ -1165,7 +1165,7 @@ test "worktrees: a file among the records and a record with no gitdir name no wo
     try testing.expectEqual(@as(?TreeProblem, .other_side), got[1].problem);
     const half = try halfCreated(a, c);
     try testing.expectEqual(@as(usize, 1), half.len);
-    try testing.expectEqualStrings(try std.fs.path.join(a, &.{ records, "half" }), half[0]);
+    try testing.expectEqualStrings(try std.Io.Dir.path.join(a, &.{ records, "half" }), half[0]);
 }
 
 test "tracked, rootCommits, defaultRoot: read from git" {
@@ -1180,9 +1180,9 @@ test "tracked, rootCommits, defaultRoot: read from git" {
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
 
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ work, "dir" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, "dir", "t" }), .data = "t" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, "staged" }), .data = "s" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ work, "dir" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, "dir", "t" }), .data = "t" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, "staged" }), .data = "s" });
     try testutil.runGit(&sb, work, &.{ "add", "dir/t" });
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "-m", "dir" });
     try testutil.runGit(&sb, work, &.{ "add", "staged" });
@@ -1208,9 +1208,9 @@ test "tracked: a path equal under case folding or normalization is tracked when 
     defer testing.allocator.free(bare);
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, "caf\u{e9}.txt" }), .data = "c" });
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ work, "Docs" }));
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, "Docs", "a" }), .data = "a" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, "caf\u{e9}.txt" }), .data = "c" });
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ work, "Docs" }));
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, "Docs", "a" }), .data = "a" });
     try testutil.runGit(&sb, work, &.{ "add", "." });
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "-m", "names" });
 
@@ -1228,7 +1228,7 @@ test "tracked: a path equal under case folding or normalization is tracked when 
         try testing.expectEqual(same, try t.isTracked(a, work, rel, fold));
     }
     if (!sensitive) return;
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, "readme" }), .data = "a different file" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, "readme" }), .data = "a different file" });
     try testing.expect(!try got[0].isTracked(a, work, "readme", fold));
 }
 
@@ -1286,14 +1286,14 @@ test "tracked: when git cannot list it fails; an unborn HEAD lists only the inde
     var sb = try testutil.Sandbox.init(testing.allocator);
     defer sb.deinit();
 
-    const not_repo = try std.fs.path.join(a, &.{ sb.root, "plain" });
+    const not_repo = try std.Io.Dir.path.join(a, &.{ sb.root, "plain" });
     try fsutil.ensureDir(not_repo);
     try testing.expectError(error.GitFailed, tracked(a, not_repo, &.{ "a", "b" }));
 
-    const unborn = try std.fs.path.join(a, &.{ sb.root, "unborn" });
+    const unborn = try std.Io.Dir.path.join(a, &.{ sb.root, "unborn" });
     try fsutil.ensureDir(unborn);
     try testutil.runGit(&sb, unborn, &.{ "init", "-q" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ unborn, "staged" }), .data = "s" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ unborn, "staged" }), .data = "s" });
     try testutil.runGit(&sb, unborn, &.{ "add", "staged" });
     const got = try tracked(a, unborn, &.{ "staged", "other" });
     try testing.expect(got[0] == .exact and got[1] == .none);
@@ -1312,10 +1312,10 @@ test "notIgnored: one query returns the paths git would show" {
     defer testing.allocator.free(bare);
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
-    const target = try std.fs.path.join(a, &.{ sb.root, "elsewhere" });
+    const target = try std.Io.Dir.path.join(a, &.{ sb.root, "elsewhere" });
     try fsutil.ensureDir(target);
     for ([_][]const u8{ ".clasp.json", ".superpowers", "shown", "shown-dir" }) |name| {
-        try content.createLink(target, try std.fs.path.join(a, &.{ work, name }), if (std.mem.endsWith(u8, name, "dir") or std.mem.eql(u8, name, ".superpowers")) .dir else .file);
+        try content.createLink(target, try std.Io.Dir.path.join(a, &.{ work, name }), if (std.mem.endsWith(u8, name, "dir") or std.mem.eql(u8, name, ".superpowers")) .dir else .file);
     }
     const c = try inspect(a, work, sb.root);
     _ = try @import("block.zig").write(a, c.common_dir, &.{ ".clasp.json", ".superpowers" });
@@ -1361,8 +1361,8 @@ test "defaultRoot: a shallow clone has none" {
 
     const bare = try testutil.makeBareRepo(&sb, "origin.git");
     defer testing.allocator.free(bare);
-    const shallow = try std.fs.path.join(a, &.{ sb.root, "shallow" });
-    try testutil.runGit(&sb, null, &.{ "clone", "-q", "--depth", "1", try std.fmt.allocPrint(a, "file://{s}", .{bare}), shallow });
+    const shallow = try std.Io.Dir.path.join(a, &.{ sb.root, "shallow" });
+    try testutil.runGit(&sb, null, &.{ "clone", "-q", "--depth", "1", try a.print("file://{s}", .{bare}), shallow });
     try testing.expect((try defaultRoot(a, shallow)) == null);
     try testing.expectEqual(@as(usize, 1), (try rootCommits(a, shallow)).len);
 }
@@ -1402,13 +1402,13 @@ test "sparse: a non-cone checkout includes only paths whose directory git materi
     const work = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(work);
     for ([_][]const u8{ "in", "out" }) |d| {
-        try fsutil.ensureDir(try std.fs.path.join(a, &.{ work, d }));
-        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, d, "f" }), .data = d });
+        try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ work, d }));
+        try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, d, "f" }), .data = d });
     }
     try testutil.runGit(&sb, work, &.{ "add", "." });
     try testutil.runGit(&sb, work, &.{ "commit", "-q", "-m", "dirs" });
     try testutil.runGit(&sb, work, &.{ "config", "core.sparseCheckout", "true" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, ".git", "info", "sparse-checkout" }), .data = "/README\n/in/\n" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, ".git", "info", "sparse-checkout" }), .data = "/README\n/in/\n" });
     try testutil.runGit(&sb, work, &.{ "read-tree", "-mu", "HEAD" });
 
     const sp = try sparse(a, work);
@@ -1446,7 +1446,7 @@ test "pending: add replaces a working tree's record for a path, clear removes on
     try testing.expect(findPending(try readPending(a, common), ".", ".env") != null);
 
     const file = try pendingPath(a, common);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = file, .data = try std.fmt.allocPrint(a, "{s}not json\n", .{try content.readSmall(a, file)}) });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = file, .data = try a.print("{s}not json\n", .{try content.readSmall(a, file)}) });
     try testing.expectError(error.MalformedPending, readPending(a, common));
     try testing.expectError(error.MalformedPending, addPending(a, common, .{ .tree = ".", .rel = "x", .op = .keep }));
 }
@@ -1464,18 +1464,18 @@ test "every query reads the clone it is given, whatever repository, working tree
     defer testing.allocator.free(work);
     const other = try testutil.makeWorkClone(&sb, bare);
     defer testing.allocator.free(other);
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ other, "only-there" }), .data = "o" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ other, "only-there" }), .data = "o" });
     try testutil.runGit(&sb, other, &.{ "add", "only-there" });
-    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.fs.path.join(a, &.{ work, ".env" }), .data = "e" });
+    try std.Io.Dir.cwd().writeFile(fsutil.io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ work, ".env" }), .data = "e" });
     const want = try inspect(a, work, sb.root);
 
-    const other_git = try std.fs.path.join(a, &.{ other, ".git" });
+    const other_git = try std.Io.Dir.path.join(a, &.{ other, ".git" });
     const pointers = [_][2][]const u8{
         .{ "GIT_DIR", other_git },
         .{ "GIT_WORK_TREE", other },
-        .{ "GIT_INDEX_FILE", try std.fs.path.join(a, &.{ other_git, "index" }) },
+        .{ "GIT_INDEX_FILE", try std.Io.Dir.path.join(a, &.{ other_git, "index" }) },
         .{ "GIT_COMMON_DIR", other_git },
-        .{ "GIT_OBJECT_DIRECTORY", try std.fs.path.join(a, &.{ other_git, "objects" }) },
+        .{ "GIT_OBJECT_DIRECTORY", try std.Io.Dir.path.join(a, &.{ other_git, "objects" }) },
         .{ "GIT_NAMESPACE", "elsewhere" },
     };
     var overrides: [pointers.len]testutil.EnvOverride = undefined;
@@ -1567,21 +1567,21 @@ test "blockHides leaves no file behind when git fails, and clearStaleExcludes re
     const gone_pid = 0x7ffffffe;
     const host = "this.host";
     const me = machine.processId();
-    const live = try std.fmt.allocPrint(a, "state/exclude-{s}-{s}-{d}-00000000000000aa", .{ mine, host, me });
-    const busy = try std.fmt.allocPrint(a, "state/exclude-{s}-{s}-{d}-00000000000000ab", .{ mine, host, me });
+    const live = try a.print("state/exclude-{s}-{s}-{d}-00000000000000aa", .{ mine, host, me });
+    const busy = try a.print("state/exclude-{s}-{s}-{d}-00000000000000ab", .{ mine, host, me });
     const kept = [_][]const u8{
         live,
         busy,
-        try std.fmt.allocPrint(a, "state/exclude-fedcba9876543210-{s}-{d}-00000000000000bb", .{ host, gone_pid }),
-        try std.fmt.allocPrint(a, "state/exclude-{s}-a_container-{d}-00000000000000bc", .{ mine, gone_pid }),
+        try a.print("state/exclude-fedcba9876543210-{s}-{d}-00000000000000bb", .{ host, gone_pid }),
+        try a.print("state/exclude-{s}-a_container-{d}-00000000000000bc", .{ mine, gone_pid }),
         "state/exclude-0123456789abcdef",
         "state/pending",
     };
     const removed = [_][]const u8{
-        try std.fmt.allocPrint(a, "state/exclude-{s}-{s}-{d}-00000000000000cc", .{ mine, host, gone_pid }),
-        try std.fmt.allocPrint(a, "state/exclude-fedcba9876543210-{s}-{d}-00000000000000dd", .{ host, gone_pid }),
-        try std.fmt.allocPrint(a, "state/exclude-{s}-{s}-{d}-00000000000000ee", .{ mine, host, me }),
-        try std.fmt.allocPrint(a, "state/exclude-{s}-a_container-{d}-00000000000000ef", .{ mine, me }),
+        try a.print("state/exclude-{s}-{s}-{d}-00000000000000cc", .{ mine, host, gone_pid }),
+        try a.print("state/exclude-fedcba9876543210-{s}-{d}-00000000000000dd", .{ host, gone_pid }),
+        try a.print("state/exclude-{s}-{s}-{d}-00000000000000ee", .{ mine, host, me }),
+        try a.print("state/exclude-{s}-a_container-{d}-00000000000000ef", .{ mine, me }),
         "state/exclude-00000000000000ff",
     };
     for (kept ++ removed) |rel| _ = try f.write(rel, "/x\n");

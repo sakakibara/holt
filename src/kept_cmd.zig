@@ -32,7 +32,7 @@ pub fn setup(alloc: std.mem.Allocator, synced_root: []const u8) !Setup {
     if (!try fsutil.isDirFollowing(alloc, synced_root)) return .no_synced_root;
     const layout: store.Layout = .{ .synced_root = synced_root };
     if (try kept.content.entryAt(try layout.keptDir(alloc)) != .absent) return .present;
-    const off = try std.fs.path.join(alloc, &.{ synced_root, off_basename });
+    const off = try std.Io.Dir.path.join(alloc, &.{ synced_root, off_basename });
     return if (try kept.content.entryAt(off) == .absent) .absent else .off;
 }
 
@@ -70,12 +70,12 @@ pub fn reportCtx(alloc: std.mem.Allocator, ws: *const workspace.Workspace, scrat
 /// looked at, and a clone whose `info/exclude` holds no block costs no git
 /// call.
 pub fn oldRoot(alloc: std.mem.Allocator, synced_root: []const u8, code_root: []const u8, worktree: []const u8) !?[]const u8 {
-    const dot_git = try std.fs.path.join(alloc, &.{ worktree, ".git" });
+    const dot_git = try std.Io.Dir.path.join(alloc, &.{ worktree, ".git" });
     switch (try kept.content.entryAt(dot_git)) {
         .dir => {
-            const exclude = try std.fs.path.join(alloc, &.{ dot_git, "info", "exclude" });
+            const exclude = try std.Io.Dir.path.join(alloc, &.{ dot_git, "info", "exclude" });
             const text = kept.content.readSmall(alloc, exclude) catch return null;
-            if (std.mem.indexOf(u8, text, kept.block.begin_line) == null) return null;
+            if (std.mem.find(u8, text, kept.block.begin_line) == null) return null;
         },
         .file => {},
         else => return null,
@@ -250,24 +250,24 @@ pub const TestWorld = struct {
     pub const url = "https://holt-test.invalid/acme/widget";
 
     pub fn init(a: std.mem.Allocator, sb: *testutil.Sandbox, with_store: bool) !TestWorld {
-        const tmp = try std.fs.path.join(a, &.{ sb.root, "tmp" });
+        const tmp = try std.Io.Dir.path.join(a, &.{ sb.root, "tmp" });
         try fsutil.ensureDir(tmp);
         const scope = try testutil.EnvScope.install(a, &.{
-            .{ "XDG_STATE_HOME", try std.fs.path.join(a, &.{ sb.root, "state" }) },
+            .{ "XDG_STATE_HOME", try std.Io.Dir.path.join(a, &.{ sb.root, "state" }) },
             .{ "TMPDIR", tmp },
             .{ "TEMP", tmp },
         });
         errdefer scope.restore();
         const ws = try testutil.testWorkspace(a, sb.root);
         try fsutil.ensureDir(ws.cfg.synced_root);
-        var repos: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        var repos: std.array_hash_map.String([]const u8) = .empty;
         try repos.put(a, "widget", url);
         try testutil.writeMarker(a, try ws.projectsRoot(a), "acme", "proj", repos, .empty);
         const bare_owned = try testutil.makeBareRepo(sb, "widget.git");
         defer sb.alloc.free(bare_owned);
-        const clone_path = try std.fs.path.join(a, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
+        const clone_path = try std.Io.Dir.path.join(a, &.{ ws.cfg.code_root, "holt-test.invalid", "acme", "widget" });
         try testutil.runGit(sb, null, &.{ "clone", "-q", bare_owned, clone_path });
-        const hub = try std.fs.path.join(a, &.{ ws.cfg.hub_root, "acme", "proj" });
+        const hub = try std.Io.Dir.path.join(a, &.{ ws.cfg.hub_root, "acme", "proj" });
         try fsutil.ensureDir(hub);
         if (with_store) _ = try kept.patterns.createStore(a, .{ .synced_root = ws.cfg.synced_root });
         return .{ .scope = scope, .ws = ws, .bare = try a.dupe(u8, bare_owned), .clone = clone_path, .hub = hub, .key = "holt-test.invalid/acme/widget" };
@@ -284,7 +284,7 @@ pub const TestWorld = struct {
     /// Writes `data` at `rel` in the clone, creating parents.
     pub fn write(w: *const TestWorld, a: std.mem.Allocator, rel: []const u8, data: []const u8) ![]const u8 {
         const p = try fsutil.joinSlashy(a, w.clone, rel);
-        try fsutil.ensureDir(std.fs.path.dirname(p).?);
+        try fsutil.ensureDir(std.Io.Dir.path.dirname(p).?);
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = p, .data = data });
         return p;
     }
@@ -326,11 +326,11 @@ test "setup: absent, declined, present, and a synced root that is not there" {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const root = try a.dupe(u8, buf[0..try tmp.dir.realPath(testing.io, &buf)]);
 
-    try testing.expectEqual(Setup.no_synced_root, try setup(a, try std.fs.path.join(a, &.{ root, "gone" })));
+    try testing.expectEqual(Setup.no_synced_root, try setup(a, try std.Io.Dir.path.join(a, &.{ root, "gone" })));
     try testing.expectEqual(Setup.absent, try setup(a, root));
-    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.fs.path.join(a, &.{ root, off_basename }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = try std.Io.Dir.path.join(a, &.{ root, off_basename }), .data = "" });
     try testing.expectEqual(Setup.off, try setup(a, root));
-    try fsutil.ensureDir(try std.fs.path.join(a, &.{ root, "kept" }));
+    try fsutil.ensureDir(try std.Io.Dir.path.join(a, &.{ root, "kept" }));
     try testing.expectEqual(Setup.present, try setup(a, root));
 }
 
@@ -340,7 +340,7 @@ test "oldRoot: a clone with no block costs no git call and names no root" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
-    const clone_path = try std.fs.path.join(a, &.{ sb.root, "code", "github.com", "acme", "w" });
+    const clone_path = try std.Io.Dir.path.join(a, &.{ sb.root, "code", "github.com", "acme", "w" });
     try testutil.seedMinimalGitClone(a, &sb.git_env, clone_path);
-    try testing.expect(try oldRoot(a, try std.fs.path.join(a, &.{ sb.root, "synced" }), try std.fs.path.join(a, &.{ sb.root, "code" }), clone_path) == null);
+    try testing.expect(try oldRoot(a, try std.Io.Dir.path.join(a, &.{ sb.root, "synced" }), try std.Io.Dir.path.join(a, &.{ sb.root, "code" }), clone_path) == null);
 }
