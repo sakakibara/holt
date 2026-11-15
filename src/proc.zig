@@ -719,13 +719,31 @@ test "runEnvLimited: setup errors are returned" {
 test "runEnvLimited: continuous output does not bypass the deadline" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     const started = std.Io.Clock.awake.now(testing.io);
-    const result = try runEnvLimited(testing.allocator, &.{ "sh", "-c", "i=0; while [ $i -lt 1000000 ]; do echo output; i=$((i+1)); done" }, null, null, .fromMilliseconds(100), null);
+    const result = try runEnvLimited(testing.allocator, &.{ "sh", "-c", "end=$(($(date +%s) + 60)); while [ \"$(date +%s)\" -lt \"$end\" ]; do i=0; while [ $i -lt 1000 ]; do echo output; i=$((i+1)); done; done" }, null, null, .fromSeconds(5), null);
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
     try testing.expect(result.timed_out);
     try testing.expect(result.stdout.len > 0);
-    try testing.expect(started.durationTo(std.Io.Clock.awake.now(testing.io)).nanoseconds < 2 * std.time.ns_per_s);
+    try testing.expect(started.durationTo(std.Io.Clock.awake.now(testing.io)).nanoseconds < 30 * std.time.ns_per_s);
 }
+
+/// A writer that fails once the child has written its pid to `pid` in
+/// `dir`, so the notice fails while the child is known to be running.
+const PidGate = struct {
+    dir: std.Io.Dir,
+    w: std.Io.Writer = .{ .vtable = &.{ .drain = drain }, .buffer = &.{} },
+
+    fn drain(w: *std.Io.Writer, _: []const []const u8, _: usize) std.Io.Writer.Error!usize {
+        const gate: *PidGate = @alignCast(@fieldParentPtr("w", w));
+        var buffer: [32]u8 = undefined;
+        for (0..3000) |_| {
+            const text = gate.dir.readFile(testing.io, "pid", &buffer) catch "";
+            if (std.mem.endsWith(u8, text, "\n")) break;
+            std.Io.sleep(testing.io, .fromMilliseconds(10), .awake) catch {};
+        }
+        return error.WriteFailed;
+    }
+};
 
 test "runEnvLimited: notice failure cleans up the child" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
@@ -733,8 +751,8 @@ test "runEnvLimited: notice failure cleans up the child" {
     defer tmp.cleanup();
     var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = path_buffer[0..try tmp.dir.realPath(testing.io, &path_buffer)];
-    var writer = std.Io.Writer.fixed(&.{});
-    try testing.expectError(error.WriteFailed, runEnvLimited(testing.allocator, &.{ "sh", "-c", "echo $$ > pid; sleep 3" }, dir, null, .fromSeconds(2), .{ .after = .fromMilliseconds(100), .w = &writer, .line = "waiting" }));
+    var gate: PidGate = .{ .dir = tmp.dir };
+    try testing.expectError(error.WriteFailed, runEnvLimited(testing.allocator, &.{ "sh", "-c", "echo $$ > pid; sleep 30" }, dir, null, .fromSeconds(60), .{ .after = .fromMilliseconds(100), .w = &gate.w, .line = "waiting" }));
     const pid_text = try tmp.dir.readFileAlloc(testing.io, "pid", testing.allocator, .limited(100));
     defer testing.allocator.free(pid_text);
     const pid = try std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, pid_text, " \n"), 10);
