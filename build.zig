@@ -70,4 +70,6 @@ pub fn build(b: *std.Build) void {
     const run_bench = b.addRunArtifact(bench_exe);
     const bench_step = b.step("bench", "Run the performance harness (synthetic workspace + timing baseline)");
     bench_step.dependOn(&run_bench.step);
+    const bench_bin_step = b.step("bench-bin", "Build the performance harness into zig-out/bin without running it");
+    bench_bin_step.dependOn(&b.addInstallArtifact(bench_exe, .{}).step);
 }
