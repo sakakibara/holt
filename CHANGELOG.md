@@ -6,10 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-16
+
 ### Changed
 
 - **Breaking, for building from source.** holt builds with Zig 0.17.0. On
-  Zig 0.16, build 0.10.x.
+  Zig 0.16, build 0.10.x, which takes security and data-loss fixes; the
+  README's Compatibility section gives the date. Release binaries are
+  unaffected.
 
 ## [0.10.2] - 2026-10-08
 
@@ -817,7 +821,8 @@ Initial release.
   except by that explicit, safety-gated prune; and destructive moves are gated
   on a recoverability check.
 
-[Unreleased]: https://github.com/sakakibara/holt/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/sakakibara/holt/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/sakakibara/holt/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/sakakibara/holt/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/sakakibara/holt/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/sakakibara/holt/compare/v0.9.2...v0.10.0

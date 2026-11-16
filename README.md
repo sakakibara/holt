@@ -763,6 +763,26 @@ user `PATH`. Pin a version or change the location by setting `$env:HOLT_VERSION`
 / `$env:HOLT_INSTALL_DIR` before the pipe. The manual download is
 `holt-windows-{aarch64,x86_64}.zip` from the latest release.
 
+## Compatibility
+
+- **Zig:** holt builds with Zig 0.17 (`minimum_zig_version = 0.17.0`), and
+  release binaries are built with Zig 0.17.0.
+- **0.10.x:** the last series that builds with Zig 0.16, from v0.10.2. It
+  takes security and data-loss fixes through 2027-02-16, released as
+  patches from a `v0.10.x` branch. That date moves earlier only with 90
+  days' notice in this section.
+- **Pull requests:** against `main`.
+- **Pins:**
+
+  | Building with Zig | Use |
+  | --- | --- |
+  | 0.16 | `v0.10.2` |
+
+- **Versioning:** semantic versioning. Before 1.0, a minor release (0.y.0)
+  may break and a patch (0.y.z) never does. Breaking changes are marked
+  **Breaking** in the [CHANGELOG](CHANGELOG.md), and their commits are
+  marked with `!` in the subject.
+
 ## Quick start
 
 ```sh
