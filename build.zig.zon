@@ -17,8 +17,8 @@
             .hash = "env-0.3.0-sTEXskSTAADfNfqIW4xy9teqxpMqGfF3_-rMbt2PH389",
         },
         .cli = .{
-            .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.4.0.tar.gz",
-            .hash = "cli-0.4.0-xmo03-H_BACDPbF9VusTGeo1lyKKIz48_sHOhmBd_oFb",
+            .url = "https://github.com/sakakibara/cli-zig/archive/refs/tags/v0.4.1.tar.gz",
+            .hash = "cli-0.4.1-xmo03379BADpsgujAxU97HBkiWpdMrlAy3B5X_GqVxnw",
         },
     },
     .paths = .{
