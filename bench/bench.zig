@@ -176,7 +176,7 @@ fn completeOp(alloc: std.mem.Allocator, ws: workspace.Workspace) !void {
     var ctx: app.Ctx = .{
         .alloc = alloc,
         .io = fsutil.io(),
-        .context = .{ .ws = ws, .color = false },
+        .context = .{ .ws = ws, .color = false, .env = app.envOf_current() },
         .out = &out.writer,
         .err = &err_w.writer,
     };
@@ -193,7 +193,7 @@ fn runCmd(alloc: std.mem.Allocator, run_fn: *const fn (ctx: *app.Ctx) anyerror!u
     var ctx: app.Ctx = .{
         .alloc = alloc,
         .io = fsutil.io(),
-        .context = .{ .ws = ws, .color = false },
+        .context = .{ .ws = ws, .color = false, .env = app.envOf_current() },
         .out = &out.writer,
         .err = &err_w.writer,
         .argv = argv,
